@@ -6,13 +6,15 @@
    ============================================================ */
 
 /* ── Status pills (document_status vocabulary) ────────────────── */
-.pill.pending-clearance { background: #fee2e2; color: #dc2626; }
-.pill.awaiting-payment  { background: #fef3c7; color: #b45309; }
+/* Walk-in lifecycle: Filed → Processing → Ready → Claimed.
+   Shipped and Awaiting_Payment are retired: there is no courier leg
+   and no pay-before-prepare step. */
+.pill.pending-clearance { background: #fee2e2; color: #b91c1c; }
+.pill.filed             { background: #fef3c7; color: #b45309; }
 .pill.processing        { background: #dbeafe; color: #2563eb; }
-.pill.ready             { background: #dcfce7; color: #16a34a; }
-.pill.shipped           { background: #ede9fe; color: #6d28d9; }
+.pill.ready             { background: #dcfce7; color: #15803d; }
 .pill.claimed           { background: #ccfbf1; color: #0f766e; }
-.pill.rejected          { background: #fef2f2; color: #dc2626; }
+.pill.rejected          { background: #f1f5f9; color: #475569; }
 
 /* Request type / fulfillment chips */
 .chip.express  { background: #dbeafe; color: #1d4ed8; }

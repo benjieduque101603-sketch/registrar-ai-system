@@ -9,9 +9,8 @@
 //    * validate the catalog item + workflow fields
 //    * compute the fee (flat / per_page / per_syllabus)
 //    * generate request_id (DOC-YYYY-NNNN) + qr_hash
-//    * clearance gate: finance.balance > 0 → Pending_Clearance
-//    * seed 3 exit_clearances (Alumni/Dean/Property) for
-//      exit-clearance documents
+//    * an outstanding finance balance holds the request
+//    * record WHY the request is blocked, if it is
 //    * persist requirement upload + status event + audit log
 // ============================================================
 
@@ -28,6 +27,7 @@ require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/functions.php';
+require_once __DIR__ . '/../shared/document_process.php';
 
 if (!isLoggedIn()) {
     echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
@@ -68,7 +68,21 @@ $quantity     = max(1, (int) ($input['quantity'] ?? 1));
 $requestType  = trim($input['request_type'] ?? 'Regular');
 $fulfillment  = trim($input['fulfillment_type'] ?? 'Pickup');
 $purpose      = trim($input['purpose'] ?? '');
+// Recipient is no longer collected by the desk. A walk-in document is
+// always picked up by the student it was filed for, so the field had one
+// possible answer. The column stays in the schema and student intake
+// still writes it; the registrar's form no longer sends it, so it lands
+// as NULL here.
 $recipient    = trim($input['recipient'] ?? '');
+// What the clerk knows that no query can derive: the Dean's office has
+// the affidavit, the ID is being reprinted, Guidance owes a signature.
+// Optional, and empty means "nothing is holding this" — the common case,
+// and the one that leaves the request fully actionable.
+$waitingOn    = trim((string) ($input['waiting_on'] ?? ''));
+if (mb_strlen($waitingOn) > 160) {
+    echo json_encode(['success' => false, 'message' => 'The waiting-on note is too long (160 characters max).']);
+    exit;
+}
 $address      = ''; // no courier — pick-up only
 // Payment method: Online (mock GCash/Maya gateway) or Cash on Delivery.
 // Keep the canonical DB casing ('Cash_on_Delivery') — do not uppercase, the
@@ -116,14 +130,17 @@ try {
 
     $qrHash = hash('sha256', $requestId . '|' . random_bytes(16));
 
-    // ── Clearance gate (spec: SELECT balance FROM finance WHERE student_id = …) ──
+    // ── Balance gate (spec: SELECT balance FROM finance WHERE student_id = …) ──
+    // A walk-in request is Filed. The fee is settled at the counter when
+    // the document is collected, so there is no "awaiting payment" stage
+    // to wait in — it blocked every request indefinitely.
+    //
+    // Pending_Clearance is reserved for a balance that genuinely blocks
+    // issue, and it is only a LABEL: the authoritative reason lives in
+    // blocked_reason and is re-derived on every desk load, so paying the
+    // balance releases the request instead of stranding it here.
     $balance = (float) ($db->fetchColumn('SELECT balance FROM finance WHERE student_id = ?', [$studentId]) ?? 0.00);
-    if ($balance > 0) {
-        // Financial block — nothing proceeds until the balance is settled.
-        $status = 'Pending_Clearance';
-    } else {
-        $status = 'Awaiting_Payment';
-    }
+    $status = $balance > 0 ? 'Pending_Clearance' : 'Filed';
 
     // Legacy document_type vocabulary, kept for the old column.
     $legacyTypeMap = [
@@ -189,28 +206,88 @@ try {
             'document_status'       => $status,
             'qr_hash'               => $qrHash,
             'requirement_file_path' => $reqFilePath,
+            // The fee is taken at the counter when the request is filed, so
+            // this is the moment payment happens. It used to be stamped when
+            // the student claimed the document, which meant every revenue
+            // figure was really measuring how quickly people collected
+            // their paperwork. Stamping it here keeps "when were fees
+            // collected" meaning what the reports say it means.
+            'paid_at'               => $now,
         ];
 
         $id = $db->insert('document_requests', $data);
+
+        // Record the blockage up front so the desk can see WHY a request
+        // is held rather than having to infer it from a status label.
+        // Derived from the same helper the desk reads, so the two agree.
+        //
+        // A waiting-on note from the clerk is checked BEFORE the derived
+        // blocker and kept in preference to it, because it is the only one
+        // of the two that is an actual decision rather than an inference.
+        // It is also written under blocked_source='registrar' so a later
+        // Re-check — which only knows how to recompute the balance — leaves
+        // it alone instead of overwriting the clerk's judgment with NULL.
+        $blocker = doc_blocker([
+            'document_status'       => $status,
+            'sku'                   => $catalog['sku'],
+            'requirement'           => $catalog['requirement'],
+            'requirement_file_path' => $reqFilePath,
+            'balance'               => $balance,
+            'request_date'          => $now,
+            'blocked_source'        => $waitingOn !== '' ? 'registrar' : null,
+            'blocked_reason'        => $waitingOn !== '' ? $waitingOn : null,
+        ]);
+        $blockedReason = $blocker['reason'] ?? null;
+        $blockedSince  = $blocker ? (string) ($blocker['since'] ?: $now) : null;
+        $blockedSource = $blockedReason !== null
+            ? ($waitingOn !== '' ? 'registrar' : 'balance')
+            : null;
+
+        $holdData = [
+            'blocked_reason' => $blockedReason,
+            'blocked_since'  => $blockedSince,
+        ];
+        $holdCols = array_column($db->fetchAll('SHOW COLUMNS FROM document_requests'), 'Field');
+        if (in_array('blocked_source', $holdCols, true)) $holdData['blocked_source'] = $blockedSource;
+        $db->update('document_requests', $holdData, 'id = ?', [$id]);
 
         // Cash on Delivery — record the amount owed up front so there is a
         // payment trail; it is marked completed when the document is claimed.
         
 
-        // Initial status event.
+        // Initial status event. Say plainly what this request is waiting
+        // on, if anything — an event log that records only the label
+        // leaves the next person to guess why it stalled.
+        //
+        // A named requirement is asked for, not held on. The old wording
+        // read "held: Awaiting: Scanned copy of valid ID", which claimed a
+        // decision nobody had made, doubled the word up, and dated the
+        // hold from filing so it read as stalled on arrival.
+        $needsNote = doc_requirement_note([
+            'document_status'       => $status,
+            'requirement'           => $catalog['requirement'],
+            'requirement_file_path' => $reqFilePath,
+        ]);
+        $filedNote = 'Request filed at the counter (' . $requestId . ') — fee ₱'
+            . number_format($fee, 2) . ', paid now';
+        if ($blockedReason) {
+            // Distinguish the two in the log too. "held: <reason>" is
+            // accurate for a balance, but for a registrar's own note it
+            // reads as an automatic system state that will clear itself.
+            $filedNote .= $blockedSource === 'registrar'
+                ? ' — held at the clerk\'s discretion: ' . $blockedReason
+                : ' — held: ' . $blockedReason;
+        }
+        if ($needsNote) {
+            $filedNote .= ' — ask the student to bring: ' . $needsNote;
+        }
         $db->insert('document_request_events', [
             'request_id' => $id,
             'status'     => $status,
-            'note'       => $status === 'Pending_Clearance'
-                ? 'Request submitted (' . $requestId . ') — held pending clearance'
-                : ($paymentMethod === 'Cash_on_Delivery'
-                    ? 'Request submitted (' . $requestId . ') — cash on delivery, pay courier on receipt'
-                    : 'Request submitted (' . $requestId . ') — awaiting payment'),
+            'note'       => $filedNote,
             'created_by' => $_SESSION['user_id'] ?? null,
             'created_at' => $now,
         ]);
-
-        // (Coordinator offices Dean / Alumni / Property no longer approve requests.)
 
         $conn->commit();
     } catch (Throwable $e) {

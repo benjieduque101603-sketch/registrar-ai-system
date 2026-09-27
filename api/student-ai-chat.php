@@ -69,7 +69,7 @@ $intents = [
     ],
     'transcript' => [
         ['transcript', 'tor', 'record of grades'],
-        'A Transcript of Records (TOR) is ₱250.00 per page. Submit it under Document Requests → New Request. Note: a final TOR is held as "Pending Clearance" until exit clearance is complete (Alumni, Dean, Property).',
+        'A Transcript of Records (TOR) is ₱250.00 per page. Submit it under Document Requests → New Request, then track it from the desk until it is ready to collect.',
     ],
     'form137' => [
         ['form 137', 'form137', 'sf10', 'school form'],
@@ -101,15 +101,11 @@ $intents = [
     ],
     'documents' => [
         ['document', 'form request', 'request doc', 'get a copy', 'apply for', 'request a copy', 'diploma', 'course description', 'certified true copy', 'ctc', 'honorable dismissal', 'catalog', 'price', 'cost', 'how much'],
-        'Document Requests covers the priced catalog: TOR ₱250/page, Certificate of Enrollment ₱100, Good Moral ₱150, Diploma Replacement ₱1,000, Certified True Copy ₱50/page, Honorable Dismissal ₱300, Course Description ₱100/syllabus. Pick Pickup, Digital, or Courier, then track: clearance gate → payment → processing → ready/shipped/claimed.',
+        'Document Requests covers the priced catalog: TOR ₱250/page, Certificate of Enrollment ₱100, Good Moral ₱150, Diploma Replacement ₱1,000, Certified True Copy ₱50/page, Honorable Dismissal ₱300, Course Description ₱100/syllabus. Pick Pickup, Digital, or Courier, then track it from filing through to collection.',
     ],
     'digital_document' => [
         ['digital', 'pdf', 'download pdf', 'encrypted', 'password for pdf'],
         'Digital documents are released as encrypted PDFs — the PDF password is your birthdate (YYYY-MM-DD). Each PDF carries a QR code linking to the public verification portal.',
-    ],
-    'exit_clearance' => [
-        ['exit clearance', 'honorable dismissal', 'clearance', 'alumni', 'dean', 'property office', 'clearance to graduate', 'final tor'],
-        'Exit clearance is required for Honorable Dismissal (₱300.00) and a final TOR. The Alumni, Dean, and Property offices must all be CLEARED before the Registrar can approve the document; your request shows "Pending Clearance" until then.',
     ],
     'health' => [
         ['health', 'medical', 'clinic', 'blood type', 'bmi'],
@@ -225,8 +221,8 @@ if ($reply === '') {
             . "Registrar's Office, answering students inside their portal. Answer ONLY about registrar "
             . "matters: documents (priced catalog — TOR ₱250/page, Certificate of Enrollment ₱100, Good Moral ₱150, "
             . "Diploma Replacement ₱1,000, Certified True Copy ₱50/page, Honorable Dismissal ₱300, Course Description ₱100/syllabus; "
-            . "workflow clearance gate → mock online payment → processing → ready/shipped/claimed; digital PDFs are encrypted "
-            . "with the birthdate password and verified via QR), exit clearance (Alumni/Dean/Property must all be CLEARED), "
+            . "workflow: filed at the desk → being prepared → ready to collect → collected, with any fee paid at the counter; digital PDFs are encrypted "
+            . "with the birthdate password and verified via QR, "
             . "queue tickets, enrollment, student status, grades, IDs, RFIDs, and general school record procedures.\n"
             . "Rules:\n"
             . "- Be concise and helpful, 2-4 short sentences.\n"

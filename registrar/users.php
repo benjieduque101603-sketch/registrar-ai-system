@@ -335,8 +335,13 @@ function resetPassword(id, name) {
     openModal('passwordModal');
 }
 
-function toggleUser(id, name, action) {
-    if (!confirm((action === 'disable' ? 'Disable' : 'Enable') + ' user ' + name + '?')) return;
+async function toggleUser(id, name, action) {
+    if (!await confirmAction({
+        title: action === 'disable' ? 'Disable user' : 'Enable user',
+        body: (action === 'disable' ? 'Disable' : 'Enable') + ' <strong>' + escText(name) + '</strong>?',
+        confirmLabel: action === 'disable' ? 'Disable' : 'Enable',
+        tone: action === 'disable' ? 'danger' : 'primary'
+    })) return;
     fetch('../api/users.php?id=' + id + (action === 'enable' ? '&action=enable' : ''), {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action })

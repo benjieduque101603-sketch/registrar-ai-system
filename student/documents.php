@@ -28,7 +28,7 @@ $balance = (float) ($db->fetchColumn('SELECT balance FROM finance WHERE student_
 
 // ── Student requests
 $requests = $db->fetchAll(
-    "SELECT dr.*, c.name AS catalog_name, c.sku, c.fee_type, c.base_fee, c.requirement, c.triggers_exit_clearance
+    "SELECT dr.*, c.name AS catalog_name, c.sku, c.fee_type, c.base_fee, c.requirement
        FROM document_requests dr
        LEFT JOIN document_catalog c ON c.id = dr.catalog_id
       WHERE dr.student_id = ?
@@ -49,20 +49,18 @@ if ($requests) {
 // ── Display maps
 $statusPill = [
     'Pending_Clearance' => ['pending-clearance', 'fa-triangle-exclamation'],
-    'Awaiting_Payment'  => ['awaiting-payment',  'fa-credit-card'],
+    'Filed'             => ['filed',             'fa-folder-open'],
     'Processing'        => ['processing',        'fa-gear'],
     'Ready'             => ['ready',             'fa-circle-check'],
-    'Shipped'           => ['shipped',           'fa-truck-fast'],
     'Claimed'           => ['claimed',           'fa-box-check'],
     'Rejected'          => ['rejected',          'fa-xmark'],
 ];
 $statusLabel = [
     'Pending_Clearance' => 'Pending Clearance',
-    'Awaiting_Payment'  => 'Awaiting Payment',
-    'Processing'        => 'Processing',
-    'Ready'             => 'Ready for Release',
-    'Shipped'           => 'Shipped',
-    'Claimed'           => 'Claimed',
+    'Filed'             => 'Filed',
+    'Processing'        => 'Being prepared',
+    'Ready'             => 'Ready for collection',
+    'Claimed'           => 'Collected',
     'Rejected'          => 'Rejected',
 ];
 $catIcon = [
@@ -79,16 +77,23 @@ function feeLabel($c) {
     return $p . ' one-time';
 }
 
-function renderStepper(string $status, bool $hasClearanceStep): string {
+/**
+ * The four steps a student watches, in order.
+ *
+ * There was once a fifth "Clearance" step prepended for exit-clearance
+ * documents, so a student could see three offices signing off. Exit
+ * clearance has been removed, and with it any step the desk cannot
+ * itself move — a student watching a step that no one at the counter
+ * controls was told to wait for something the desk had no way to
+ * report on.
+ */
+function renderStepper(string $status): string {
     $steps = [
-        ['key' => 'Payment',    'label' => 'Payment',    'icon' => 'fa-credit-card'],
-        ['key' => 'Processing', 'label' => 'Processing', 'icon' => 'fa-gear'],
+        ['key' => 'Filed',      'label' => 'Filed',      'icon' => 'fa-file-signature'],
+        ['key' => 'Processing', 'label' => 'In progress','icon' => 'fa-gear'],
         ['key' => 'Ready',      'label' => 'Ready',      'icon' => 'fa-circle-check'],
-        ['key' => 'Claimed',    'label' => 'Claimed',    'icon' => 'fa-box-check'],
+        ['key' => 'Claimed',    'label' => 'Collected',  'icon' => 'fa-box-check'],
     ];
-    if ($hasClearanceStep) {
-        array_unshift($steps, ['key' => 'Clearance', 'label' => 'Clearance', 'icon' => 'fa-shield-halved']);
-    }
     $statusKey = $status === 'Shipped' ? 'Ready' : $status;
     $activeIdx = null;
     foreach ($steps as $i => $s) {
@@ -153,15 +158,15 @@ $claimed     = $counts['Claimed'];
             <div class="banner-icon"><i class="fa-solid fa-circle-exclamation"></i></div>
             <div>
                 <div class="banner-title">Action required &mdash; outstanding balance of &#8369;<?= number_format($balance, 2) ?></div>
-                <div class="banner-text">Your account has a balance due on record. New document requests are held at the <strong>Clearance</strong> step until the Registrar's Office clears your account.</div>
+                <div class="banner-text">Your account has a balance due on record. A request is held at the desk until the Registrar's Office settles the balance.</div>
             </div>
         </div>
         <?php elseif ($hasHeld): ?>
         <div class="block-banner">
-            <div class="banner-icon"><i class="fa-solid fa-shield-halved"></i></div>
+            <div class="banner-icon"><i class="fa-solid fa-hourglass-half"></i></div>
             <div>
-                <div class="banner-title">Request pending clearance</div>
-                <div class="banner-text">One or more of your requests is held at the Clearance step. The Registrar's Office will clear your account. No action needed from you right now.</div>
+                <div class="banner-title">Request on hold</div>
+                <div class="banner-text">One or more of your requests is waiting on an outstanding balance. The Registrar's Office will release it once the account is settled. No action needed from you right now.</div>
             </div>
         </div>
         <?php endif; ?>
@@ -258,9 +263,6 @@ $claimed     = $counts['Claimed'];
                         $label = $statusLabel[$r['document_status']] ?? str_replace('_', ' ', $r['document_status']);
                         $ci = $catIcon[$r['sku']] ?? ['linear-gradient(135deg,#64748b,#475569)', 'fa-file-lines'];
                         $reqEvents = $eventsByRequest[(int) $r['id']] ?? [];
-                        $needsClearance = $r['document_status'] === 'Pending_Clearance'
-                            || (int) ($r['triggers_exit_clearance'] ?? 0) === 1
-                            || in_array('Pending_Clearance', array_column($reqEvents, 'status'), true);
                         $isRejected = $r['document_status'] === 'Rejected';
                         $payable = $r['document_status'] === 'Awaiting_Payment'
                             && (float) $r['fee_amount'] > 0
@@ -310,7 +312,7 @@ $claimed     = $counts['Claimed'];
                                             </div>
                                         </div>
                                     <?php else: ?>
-                                        <?= renderStepper((string) $r['document_status'], $needsClearance) ?>
+                                        <?= renderStepper((string) $r['document_status']) ?>
                                     <?php endif; ?>
                                     <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;">
                                         <?php if ($isCod): ?>
@@ -401,8 +403,15 @@ $claimed     = $counts['Claimed'];
                 </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                <div class="form-group"><label>Purpose <span class="required">*</span></label><input type="text" name="purpose" id="reqPurpose" class="form-control" required placeholder="e.g. Job application, Transfer"></div>
-                <div class="form-group"><label>Recipient</label><input type="text" name="recipient" id="reqRecipient" class="form-control" placeholder="e.g. Company / School"></div>
+                <?php // Recipient is gone. A document requested here is
+                      // released to the student who asked for it, at the
+                      // counter, on their student ID — there is no courier
+                      // and no third-party collection, so the field could
+                      // only ever have been filled with the student's own
+                      // name or an office's. The column is still in
+                      // document_requests; nothing writes to it from here
+                      // any more. Purpose now takes the full width. ?>
+                <div class="form-group" style="grid-column:1 / -1;"><label>Purpose <span class="required">*</span></label><input type="text" name="purpose" id="reqPurpose" class="form-control" required placeholder="e.g. Job application, Transfer"></div>
             </div>
             <div class="form-group" id="reqFileGroup" style="display:none;"><label>Requirement File</label><input type="file" name="requirement_file" id="reqFile" class="form-control" accept=".pdf,.jpg,.jpeg,.png"><div class="req-hint" id="reqHint"></div></div>
             <div class="fee-preview"><div><div class="fp-label">Total fee</div><div style="font-size:11px;color:#94a3b8;" id="feeNote">Select a document to see the fee.</div></div><div class="fp-amount" id="feePreview">&mdash;</div></div>

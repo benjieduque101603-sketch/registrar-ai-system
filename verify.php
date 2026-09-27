@@ -72,7 +72,7 @@ if ($qr !== '') {
 
 $statusLabel = [
     'Pending_Clearance' => 'Pending Clearance',
-    'Awaiting_Payment'  => 'Awaiting Payment',
+    'Filed'             => 'Filed',
     'Processing'        => 'Processing',
     'Ready'             => 'Ready for Release',
     'Shipped'           => 'Shipped',

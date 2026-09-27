@@ -1,7 +1,20 @@
 <?php
 // ============================================================
 //  API/DOCUMENTS.PHP
-//  Document management API
+//  Document management API — lifecycle transitions.
+//
+//  Progress and blockage are two independent facts, stored as two
+//  independent fields:
+//
+//    document_status  where the work is: Filed → Processing →
+//                     Ready → Claimed, plus Rejected.
+//    blocked_reason   what it is waiting on; blocked_since is when
+//                     that started. Both null = nothing blocking it.
+//
+//  A request can sit at Filed AND be blocked on the Dean's clearance
+//  at the same time. Collapsing those into one status is what made
+//  multi-day requests invisible: they looked identical to ones the
+//  clerk simply had not started yet.
 // ============================================================
 
 header('Content-Type: application/json');
@@ -12,6 +25,7 @@ require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/functions.php';
+require_once __DIR__ . '/../shared/document_process.php';
 
 // Require login
 if (!isLoggedIn()) {
@@ -277,7 +291,13 @@ try {
             'status' => 'pending',
             'fee_amount' => $feeAmount,
             'official_receipt' => $officialReceipt !== '' ? $officialReceipt : null,
-            'request_date' => date('Y-m-d H:i:s')
+            'request_date' => date('Y-m-d H:i:s'),
+            // The fee is taken at the counter when the request is filed,
+            // so this is the moment payment happens. It used to be stamped
+            // when the student claimed the document, which made every
+            // revenue figure depend on how quickly people picked up their
+            // paperwork rather than on when they actually paid.
+            'paid_at' => date('Y-m-d H:i:s')
         ];
 
         // Only insert fee/receipt columns if they exist (idempotent migration guard)
@@ -285,6 +305,7 @@ try {
         $colNames = array_column($cols, 'Field');
         if (!in_array('fee_amount', $colNames, true)) unset($data['fee_amount']);
         if (!in_array('official_receipt', $colNames, true)) unset($data['official_receipt']);
+        if (!in_array('paid_at', $colNames, true)) unset($data['paid_at']);
 
         $id = $db->insert('document_requests', $data);
 
@@ -298,11 +319,92 @@ try {
         $v2Action = $input['action'] ?? null;
 
         // ── v2 workflow transitions (document_status) ──────────────
+        if ($v2Action === 'recheck') {
+            // Re-derive the blockage from current data. The old
+            // Pending_Clearance was decided once at intake and never
+            // revisited, so a student who paid their balance the next
+            // day stayed held indefinitely with nobody to notice.
+            // This asks the question again, on demand.
+            //
+            // It only ever recomputes the BALANCE. A hold a person set is
+            // left exactly as they left it — doc_refresh_blocker() returns
+            // early on one — so the message here must not claim the hold
+            // was re-derived. It says what is actually true: still held,
+            // and by whose decision.
+            $before = $db->fetchOne(
+                "SELECT document_status, blocked_reason FROM document_requests WHERE id = ?", [$id]
+            );
+            $wasManual = doc_hold_source((int) $id) === 'registrar';
+            doc_refresh_blocker((int) $id);
+            $after = $db->fetchOne(
+                "SELECT document_status, blocked_reason FROM document_requests WHERE id = ?", [$id]
+            );
+            $isManual = doc_hold_source((int) $id) === 'registrar';
+            $held = ($after['blocked_reason'] ?? null) !== null;
+            $why  = ($isManual ? 'Held at your discretion: ' : 'Still waiting: ') . $after['blocked_reason'];
+            echo json_encode([
+                'success' => true,
+                'message' => !$held
+                    ? 'Nothing is holding this request now.'
+                    : ($isManual ? $why . ' — re-checking will not clear it.' : $why),
+                'data'    => [
+                    'id'              => (int) $id,
+                    'was'             => $before['blocked_reason'] ?? null,
+                    'document_status' => $after['document_status'],
+                    'blocked_reason'  => $after['blocked_reason'],
+                    'manual'          => $isManual,
+                    'changed'         => ($before['blocked_reason'] ?? null) !== ($after['blocked_reason'] ?? null),
+                ],
+            ]);
+            exit;
+        }
+
+        // ── Lift a hold the registrar set ──────────────────────────
+        // The counterpart to the Waiting-on field on the new-request
+        // form. A decision a person made has to be reversible by a
+        // person, and there was no way to undo it: the only controls on
+        // a held row were Re-check (which, correctly, ignores a manual
+        // hold) and the status buttons. A hold set by mistake, or for a
+        // reason that has since been resolved, was permanent.
+        //
+        // Only a 'registrar' hold can be lifted this way. A balance
+        // hold is not the clerk's to clear from the desk; it goes when
+        // the money lands, and doc_set_registrar_hold() refuses it.
+        if ($v2Action === 'lift_hold') {
+            // SELECT * again, for the same reason as doc_set_registrar_hold():
+            // naming blocked_source here would fatal on a server where the
+            // migration has not been applied. The check below uses ?? so a
+            // missing column reads as "not a manual hold" — which is the
+            // correct answer, because without the column no manual hold can
+            // have been recorded.
+            $current = $db->fetchOne('SELECT * FROM document_requests WHERE id = ?', [$id]);
+            if (!$current) {
+                echo json_encode(['success' => false, 'message' => 'Document request not found.']);
+                exit;
+            }
+            if (($current['blocked_source'] ?? null) !== 'registrar') {
+                $balanceHeld = ($current['blocked_reason'] ?? null) !== null;
+                echo json_encode([
+                    'success' => false,
+                    'message' => $balanceHeld
+                        ? 'This is held by the student\'s balance, not by you. It clears itself once the balance is settled.'
+                        : 'Nothing is holding this request.',
+                ]);
+                exit;
+            }
+            $was = $current['blocked_reason'];
+            doc_set_registrar_hold((int) $id, '', $_SESSION['user_id'] ?? null);
+            echo json_encode([
+                'success' => true,
+                'message' => 'Hold lifted. This request is back on your queue.',
+                'data'    => ['id' => (int) $id, 'was' => $was, 'blocked_reason' => null],
+            ]);
+            exit;
+        }
         if (in_array($v2Action, ['process', 'ready', 'reject', 'claim'], true)) {
             $req = $db->fetchOne(
-                "SELECT dr.*, c.triggers_exit_clearance
+                "SELECT dr.*
                    FROM document_requests dr
-                   LEFT JOIN document_catalog c ON c.id = dr.catalog_id
                   WHERE dr.id = ?",
                 [$id]
             );
@@ -314,18 +416,22 @@ try {
             $now = date('Y-m-d H:i:s');
             $userId = $_SESSION['user_id'];
 
-            $newStatus = null; $legacy = null; $note = null; $reason = null; $approvalReason = null; $releaseDate = null;
+            $newStatus = null; $legacy = null; $note = null; $reason = null;
+            $approvalReason = null; $releaseDate = null; $receipt = null;
             switch ($v2Action) {
                 case 'process':
-                    if (!in_array($cur, ['Awaiting_Payment', 'Pending_Clearance', 'Processing'], true)) {
-                        echo json_encode(['success' => false, 'message' => 'Only Awaiting Payment / Pending Clearance requests can be processed.']);
+                    // Filed and Pending_Clearance are both actionable by the
+                    // registrar: the first has no block, the second has been
+                    // cleared of its balance since it was filed.
+                    if (!in_array($cur, ['Filed', 'Pending_Clearance', 'Processing'], true)) {
+                        echo json_encode(['success' => false, 'message' => 'Only Filed or Pending Clearance requests can be started.']);
                         exit;
                     }
-                    $newStatus = 'Processing'; $legacy = 'processing'; $note = 'Started processing';
+                    $newStatus = 'Processing'; $legacy = 'processing'; $note = 'Started preparing the document';
                     break;
                 case 'ready':
                     if ($cur !== 'Processing') {
-                        echo json_encode(['success' => false, 'message' => 'Only Processing requests can be approved for release.']);
+                        echo json_encode(['success' => false, 'message' => 'Only requests being prepared can be marked ready.']);
                         exit;
                     }
                     $approvalReason = trim($input['approval_reason'] ?? '');
@@ -339,7 +445,7 @@ try {
                         exit;
                     }
                     $newStatus = 'Ready'; $legacy = 'approved';
-                    $note = 'Approved for release (' . $releaseDate . ') — ' . $approvalReason;
+                    $note = 'Signed and ready for collection (' . $releaseDate . ') — ' . $approvalReason;
                     break;
                 case 'reject':
                     $reason = trim($input['rejection_reason'] ?? '');
@@ -350,11 +456,20 @@ try {
                     $newStatus = 'Rejected'; $legacy = 'denied'; $note = 'Rejected — ' . $reason;
                     break;
                 case 'claim':
-                    if (!in_array($cur, ['Ready', 'Shipped'], true)) {
-                        echo json_encode(['success' => false, 'message' => 'Only Ready / Shipped requests can be marked claimed.']);
+                    // Payment is taken when the request is filed, so by the
+                    // time a document is claimed the money is already in.
+                    // Claiming records the hand-over and the receipt that
+                    // identifies it; it does not settle anything, and saying
+                    // it does would put a second, later charge in front of a
+                    // student who has already paid.
+                    if ($cur !== 'Ready') {
+                        echo json_encode(['success' => false, 'message' => 'Only requests marked ready can be claimed.']);
                         exit;
                     }
-                    $newStatus = 'Claimed'; $legacy = 'released'; $note = 'Released / claimed';
+                    $receipt = trim($input['official_receipt'] ?? '');
+                    $newStatus = 'Claimed'; $legacy = 'released';
+                    $note = 'Claimed by the student'
+                          . ($receipt !== '' ? ' — OR ' . $receipt : '');
                     break;
             }
 
@@ -364,11 +479,24 @@ try {
                 $data['approval_reason'] = $approvalReason;
                 $data['release_date']    = $releaseDate;
             }
-            if ($v2Action === 'claim')  $data['claimed_at'] = $now;
+            if ($v2Action === 'claim') {
+                $data['claimed_at'] = $now;
+                // paid_at is deliberately NOT set here. It is stamped when
+                // the request is filed, because that is when the fee is
+                // taken. Writing it again here would overwrite the real
+                // payment time with the hand-over time, and a report on
+                // "when are fees collected" would then be measuring the
+                // wrong moment.
+                if ($receipt !== '') {
+                    $data['official_receipt'] = $receipt;
+                }
+            }
             if ($v2Action === 'reject') $data['rejection_reason'] = $reason;
             if (in_array($v2Action, ['ready', 'reject', 'claim'], true)) {
                 $data['processed_date'] = $now;
                 $data['processed_by']   = $userId;
+                $data['released_by']    = $userId;
+                $data['counter']        = (int) ($input['counter'] ?? ($req['counter'] ?? 1));
             }
             if ($v2Action === 'claim') {
                 $data['completed_date'] = $now;
@@ -382,6 +510,20 @@ try {
             }
 
             $db->update('document_requests', $data, 'id = ?', [$id]);
+
+            // Moving the work forward resolves whatever was holding it:
+            // a started document is no longer "awaiting" its requirement,
+            // and a collected one is waiting on nobody. Without this the
+            // blockage outlives the fact that caused it.
+            if (in_array($v2Action, ['process', 'ready', 'claim', 'reject'], true)
+                && in_array('blocked_reason', $colNames, true)) {
+                $clearAt = $v2Action === 'process' ? $now : null;
+                $db->update('document_requests', [
+                    'blocked_reason' => null,
+                    'blocked_since'  => $clearAt,
+                ], 'id = ?', [$id]);
+            }
+
             $db->insert('document_request_events', [
                 'request_id' => $id,
                 'status'     => $newStatus,

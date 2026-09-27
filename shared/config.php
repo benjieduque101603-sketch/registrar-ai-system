@@ -72,7 +72,12 @@ function app_base_path(): string {
         return $base;
     }
     // Fallback: strip the leading filename component off SCRIPT_NAME.
-    if ($script !== '' && $script !== '/') {
+    // Only trust it when it really is a root-relative web path. Under
+    // the CLI (PHPUnit, scripts) SCRIPT_NAME is the executed file's
+    // FILESYSTEM path — e.g. "C:/xampp/htdocs/app/vendor/bin/phpunit" —
+    // which would otherwise leak an absolute disk path into every
+    // generated URL, including the verification QR.
+    if ($script !== '' && $script[0] === '/') {
         $pos = strrpos($script, '/');
         $base = ($pos !== false && $pos > 0) ? substr($script, 0, $pos) : '';
         return $base;

@@ -268,8 +268,13 @@ include '../includes/sidebar.php';
     };
 
     /* ── Delete ──────────────────────────────── */
-    window.deleteSupply=function(id){
-        if(!confirm('Delete this supply? This action cannot be undone.')) return;
+    window.deleteSupply=async function(id){
+        if(!await confirmAction({
+            title:'Delete supply',
+            body:'Delete this supply? <strong>This action cannot be undone.</strong>',
+            confirmLabel:'Delete',
+            tone:'danger'
+        })) return;
         fetch(API+'?id='+id,{method:'DELETE',headers:{'X-CSRF-Token':CSRF}})
         .then(function(r){return r.json();}).then(function(d){
             if(d.success){toast('Deleted.',true);loadSupplies();}

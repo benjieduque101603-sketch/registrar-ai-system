@@ -40,6 +40,11 @@ require_once __DIR__ . '/_guard.php';
     </div>
 </main>
 
+<!-- This page builds its own shell rather than using includes/header.php,
+     so the shared confirm dialog is loaded here explicitly. It must come
+     before the script below, which calls confirmAction(). -->
+<script src="<?= $APP_ROOT ?>js/confirm.js?v=<?= is_file(__DIR__ . '/../js/confirm.js') ? filemtime(__DIR__ . '/../js/confirm.js') : time() ?>"></script>
+
 <script>
 const queuePanel = document.getElementById('queuePanel');
 const STATUS_META = {
@@ -132,8 +137,13 @@ function render(d) {
         '</div>';
 }
 
-function cancelTicket() {
-    if (!confirm('Cancel your current queue ticket?')) return;
+async function cancelTicket() {
+    if (!await confirmAction({
+        title: 'Cancel queue ticket',
+        body: 'Cancel your current queue ticket? You will lose your place in line.',
+        confirmLabel: 'Cancel ticket',
+        tone: 'danger'
+    })) return;
     fetch('../api/student-queue.php?action=cancel', { method: 'POST' })
         .then(r => r.json())
         .then(d => {

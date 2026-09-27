@@ -997,3 +997,44 @@ textarea.form-control {
     padding: 1px 10px;
   }
 }
+
+/* -------- Confirm dialog (js/confirm.js) --------
+   Replaces native confirm(). The native box is drawn by the OS,
+   cannot be themed, blocks the whole tab, and reads as an error
+   state rather than a question — on Chrome it arrives as
+   "localhost says". This is the same modal the rest of the app
+   already uses, so a confirmation looks like part of the product. */
+.ca-shell{max-width:420px}
+.ca-body{font-size:13.5px;line-height:1.55;color:var(--text-body,#475569);margin:0}
+.ca-body strong{color:var(--text-strong,#0f172a);font-weight:600}
+/* Footers on confirmations hold two buttons and nothing else, so they
+   sit tighter than a form footer and align right. */
+.ca-foot{display:flex;justify-content:flex-end;gap:8px;padding:16px 32px 0;margin:0}
+.ca-foot .btn{min-width:104px}
+
+
+/* Motion here is decoration on top of a fully legible static rail: the
+   dots already sit in their final positions and the lines already carry
+   their final ink. So honouring the preference costs nothing and hides
+   nothing - a visitor who asks for less motion sees the same fact, just
+   without the line drawing itself. */
+@media (prefers-reduced-motion: reduce) {
+  .dq-station::before,
+  .dq-station.is-now .dq-dot,
+  .dq-station.is-held .dq-dot {
+    animation: none !important;
+  }
+  .dq-station.is-done::before,
+  .dq-station.is-now::before,
+  .dq-station.is-held::before,
+  .dq-station.is-stopped::before { transform: scaleX(1) !important; }
+  .dq-station.is-now .dq-dot,
+  .dq-station.is-held .dq-dot { transform: scale(1) !important; }
+  /* The pulse is the one infinite loop on the page, so it goes first
+     and goes entirely rather than being slowed down. */
+  .dq-station.is-now .dq-dot::after,
+  .dq-station.is-held .dq-dot::after { animation: none !important; opacity: 0 !important; }
+}
+
+
+

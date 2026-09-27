@@ -163,9 +163,9 @@ function aiInsightDocBucket(?string $sku, ?string $name, ?string $type): string 
 /** Workflow statuses collapsed into the stacked series of the document chart. */
 function aiInsightDocStatusGroups(): array {
     return [
-        'Pending'    => ['Pending_Clearance', 'Awaiting_Payment'],
+        'Pending'    => ['Filed', 'Pending_Clearance'],
         'Processing' => ['Processing'],
-        'Ready'      => ['Ready', 'Shipped'],
+        'Ready'      => ['Ready'],
         'Claimed'    => ['Claimed'],
         'Rejected'   => ['Rejected'],
     ];

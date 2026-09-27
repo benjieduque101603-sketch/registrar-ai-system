@@ -647,9 +647,14 @@ function submitEdit() {
     .catch(() => showToast('Network error.', 'error'));
 }
 
-function deleteId(btn) {
+async function deleteId(btn) {
     const d = btn.closest('tr').dataset;
-    if (!confirm('Delete ID ' + d.idnumber + ' for ' + d.name + '?')) return;
+    if (!await confirmAction({
+        title: 'Delete ID',
+        body: 'Delete ID <strong>' + escText(d.idnumber) + '</strong> for ' + escText(d.name) + '? This cannot be undone.',
+        confirmLabel: 'Delete',
+        tone: 'danger'
+    })) return;
     fetch('../api/student-ids.php?action=delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

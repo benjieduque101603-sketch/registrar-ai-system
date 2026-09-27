@@ -60,6 +60,10 @@ $__csrfToken = htmlspecialchars(csrfToken(), ENT_QUOTES, 'UTF-8');
     <link rel="stylesheet" href="<?= $APP_ROOT ?>css/registrar-premium.css" />
     <link rel="stylesheet" href="<?= $APP_ROOT ?>css/dashboard.css" />
 
+    <!-- Confirmation dialog (replaces native confirm) - MUST come before
+         any page script that might call confirmAction() -->
+    <script src="<?= $APP_ROOT ?>js/confirm.js?v=<?= is_file(__DIR__ . '/../js/confirm.js') ? filemtime(__DIR__ . '/../js/confirm.js') : time() ?>"></script>
+
     <!-- Loader Script - MUST BE FIRST -->
     <script src='<?= $APP_ROOT ?>js/csrf.js'></script>
     <script src="<?= $APP_ROOT ?>js/page-loader.js"></script>

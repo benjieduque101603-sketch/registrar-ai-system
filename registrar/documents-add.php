@@ -78,8 +78,7 @@ include '../includes/sidebar.php';
                     <option value="<?= $c['id'] ?>"
                         data-fee="<?= (float) $c['base_fee'] ?>"
                         data-fee-type="<?= htmlspecialchars($c['fee_type']) ?>"
-                        data-req="<?= htmlspecialchars((string) $c['requirement'], ENT_QUOTES) ?>"
-                        data-clear="<?= (int) $c['triggers_exit_clearance'] ?>">
+                        data-req="<?= htmlspecialchars((string) $c['requirement'], ENT_QUOTES) ?>">
                         <?= htmlspecialchars($c['name']) ?> (<?= $feeTxt ?>)
                     </option>
                 <?php endforeach; ?>

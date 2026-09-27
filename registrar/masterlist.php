@@ -562,7 +562,13 @@ const ASSIGNABLE_STUDENTS = <?= json_encode($assignableStudents) ?>;
 
 // ─── AUTO-ASSIGN ─────────────────────────────────────────────
 document.getElementById('btnAutoAssign')?.addEventListener('click', async function () {
-    if (!confirm('Assign section codes (11001, 12001, 21001…) by course, year, and semester? Each section will have at most ' + MAX_PER_SECTION + ' students.')) return;
+    const ok = await confirmAction({
+        title: 'Assign section codes',
+        body: 'Assign section codes (11001, 12001, 21001…) by course, year, and semester? ' +
+              'Each section will have at most <strong>' + MAX_PER_SECTION + '</strong> students.',
+        confirmLabel: 'Assign codes'
+    });
+    if (!ok) return;
     const btn = this;
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Assigning…';
@@ -676,10 +682,15 @@ function selectedRows() {
 }
 function exportSelectedCSV() { exportCSV(selectedRows()); }
 function printSelected() { printRows(selectedRows()); }
-function bulkArchive() {
+async function bulkArchive() {
     const rows = selectedRows();
     if (!rows.length) return;
-    if (!confirm('Archive ' + rows.length + ' selected student(s)? This can be undone by restoring.')) return;
+    if (!await confirmAction({
+        title: 'Archive students',
+        body: 'Archive <strong>' + rows.length + '</strong> selected student' + (rows.length === 1 ? '' : 's') +
+              '? This can be undone by restoring.',
+        confirmLabel: 'Archive'
+    })) return;
     const ids = rows.map(r => r.dataset.studentId);
     fetch('../api/students.php?action=bulk-status', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -965,7 +976,12 @@ async function saveEditSection() {
         errEl.style.display = 'block';
         return;
     }
-    if (!confirm('Update section ' + ctx.section + ' to ' + newSection + '? This changes all students in the section.')) return;
+    if (!await confirmAction({
+        title: 'Update section',
+        body: 'Update section <strong>' + escText(ctx.section) + '</strong> to <strong>' + escText(newSection) +
+              '</strong>? This changes all students in the section.',
+        confirmLabel: 'Update section'
+    })) return;
 
     const btn = event.target;
     btn.disabled = true;
@@ -1060,7 +1076,13 @@ async function assignSelectedToSection() {
         school_year: wsContext.school_year || '',
         adviser_id: wsContext.adviser_id || ''
     };
-    if (!confirm('Assign ' + ids.length + ' student(s) to section ' + section + '? Students will be moved to ' + (ctx.course || 'the section\'s course') + ' / Year ' + (ctx.year_level || '?') + '.')) return;
+    if (!await confirmAction({
+        title: 'Assign to section',
+        body: 'Assign <strong>' + ids.length + '</strong> student' + (ids.length === 1 ? '' : 's') +
+              ' to section <strong>' + escText(section) + '</strong>? They will be moved to ' +
+              escText(ctx.course || "the section's course") + ' / Year ' + escText(ctx.year_level || '?') + '.',
+        confirmLabel: 'Assign'
+    })) return;
     const btn = event.target;
     btn.disabled = true;
     try {
@@ -1166,14 +1188,22 @@ function handoffApi(payload) {
         body: JSON.stringify(payload)
     }).then(r => r.json());
 }
-function sendList() {
-    if (!confirm('Send the masterlist to the Academic Strand / Course Assignment module (CMS)?')) return;
+async function sendList() {
+    if (!await confirmAction({
+        title: 'Send to CMS',
+        body: 'Send the masterlist to the <strong>Academic Strand / Course Assignment</strong> module?',
+        confirmLabel: 'Send'
+    })) return;
     handoffApi({ program: '' }).then(d => {
         showToast(d.message || (d.success ? 'Sent.' : 'Failed.'), d.success ? 'success' : 'error');
     }).catch(() => { showToast('Network error.', 'error'); });
 }
-function handoffGroup(label) {
-    if (!confirm('Hand off this section to the CMS?\n\n' + label)) return;
+async function handoffGroup(label) {
+    if (!await confirmAction({
+        title: 'Hand off section',
+        body: 'Hand off this section to the CMS?<br><br>' + escText(label),
+        confirmLabel: 'Hand off'
+    })) return;
     handoffApi({ program: label }).then(d => {
         showToast(d.message || (d.success ? 'Handed off.' : 'Failed.'), d.success ? 'success' : 'error');
     }).catch(() => { showToast('Network error.', 'error'); });

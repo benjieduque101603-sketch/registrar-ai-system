@@ -598,8 +598,14 @@ function previewFile(el) {
 }
 
 // ─── DELETE ──────────────────────────────────────────────
-function deleteFile(el) {
-    if (!confirm('Delete "' + el.dataset.name + '" for ' + el.dataset.student + '? This cannot be undone.')) return;
+async function deleteFile(el) {
+    if (!await confirmAction({
+        title: 'Delete file',
+        body: 'Delete <strong>' + escText(el.dataset.name) + '</strong> for ' + escText(el.dataset.student) +
+              '? This cannot be undone.',
+        confirmLabel: 'Delete file',
+        tone: 'danger'
+    })) return;
     fetch('../api/documents.php?section=files&action=delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -147,13 +147,24 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ─── 2. DAILY QUEUE VOLUME — Express vs Regular (grouped bar) ─
+    // ─── 2. DAILY INTAKE — settled vs still open (stacked) ────
+    // Replaces an Express/Regular split that could no longer vary: Express
+    // is out of the product, so that chart carried a permanent empty series
+    // and answered nothing. This stacks the day's settled work under the
+    // work still open, so the height is intake and the amber cap is the
+    // backlog — the number a counter desk acts on.
     const volumeEl = document.getElementById('volumeChart');
     if (volumeEl) {
         const days = getData(volumeEl, 'labels');
-        const express = getData(volumeEl, 'express');
-        const regular = getData(volumeEl, 'regular');
-        const has = hasData(express) || hasData(regular);
+        const settled = getData(volumeEl, 'settled');
+        const outstanding = getData(volumeEl, 'outstanding');
+        const has = hasData(settled) || hasData(outstanding);
+        const today = days.length ? days[days.length - 1] : null;
+        // Today is still accumulating, so it is drawn lighter — a column
+        // that looks final when the day is not yet over is a small lie.
+        const isToday = i => has && days[i] === today;
+        const settledFill = ctx => isToday(ctx.dataIndex) ? '#93b4f7' : c.blue;
+        const openFill = ctx => isToday(ctx.dataIndex) ? '#f0c98a' : c.amber;
 
         new Chart(volumeEl.getContext('2d'), {
             type: 'bar',
@@ -161,22 +172,27 @@ document.addEventListener('DOMContentLoaded', function () {
                 labels: days.length ? days : ['—'],
                 datasets: [
                     {
-                        label: 'Express',
-                        data: has ? express : [0],
-                        backgroundColor: c.blue,
+                        label: 'Settled',
+                        data: has ? settled : [0],
+                        backgroundColor: settledFill,
                         hoverBackgroundColor: '#1d4ed8',
-                        borderRadius: 5,
+                        borderRadius: 0,
                         borderSkipped: false,
-                        maxBarThickness: 16,
+                        maxBarThickness: 34,
+                        stack: 'intake',
                     },
                     {
-                        label: 'Regular',
-                        data: has ? regular : [0],
-                        backgroundColor: c.slate,
-                        hoverBackgroundColor: '#64748b',
-                        borderRadius: 5,
+                        label: 'Still open',
+                        data: has ? outstanding : [0],
+                        backgroundColor: openFill,
+                        hoverBackgroundColor: '#92400e',
+                        // Only the top of the stack gets the round cap; the
+                        // segment below it must stay square or the join
+                        // shows a notch wherever both series are non-zero.
+                        borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
                         borderSkipped: false,
-                        maxBarThickness: 16,
+                        maxBarThickness: 34,
+                        stack: 'intake',
                     }
                 ]
             },
@@ -200,9 +216,24 @@ document.addEventListener('DOMContentLoaded', function () {
                     },
                     tooltip: Object.assign({}, tooltipStyle, {
                         callbacks: {
-                            title: items => items[0].label,
-                            label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y + ' request' + (ctx.parsed.y === 1 ? '' : 's')
-                        }
+                            title: items => items[0].label + (items[0].label === today ? ' (today)' : ''),
+                            label: ctx => {
+                                if (!has) return 'No data available';
+                                const n = ctx.parsed.y;
+                                if (!n) return null;
+                                return ctx.dataset.label + ': ' + n + ' request' + (n === 1 ? '' : 's');
+                            },
+                            // The sum is the point of a stacked column, and
+                            // Chart.js will not print it for us.
+                            footer: items => {
+                                if (!has) return '';
+                                const n = items.reduce((a, b) => a + b.parsed.y, 0);
+                                return 'Total: ' + n;
+                            }
+                        },
+                        footerColor: 'rgba(255,255,255,0.55)',
+                        footerFont: { size: 11, weight: '600' },
+                        footerMarginTop: 6,
                     })
                 },
                 scales: {
@@ -214,15 +245,21 @@ document.addEventListener('DOMContentLoaded', function () {
                             font: { size: 11, weight: '500' },
                             color: '#a8b3c4',
                             padding: 10,
+                            // Request counts are whole numbers; a "2.5
+                            // requests" tick is noise on a seven-day strip.
+                            precision: 0,
                         }
                     },
                     x: {
                         border: { display: false },
                         grid: { display: false },
+                        stacked: true,
                         ticks: {
                             font: { size: 10.5, weight: '600' },
-                            color: '#a8b3c4',
                             padding: 6,
+                            // Today is inked darker so the eye lands on the
+                            // live day without needing a marker under it.
+                            color: ctx => (has && ctx.tick.label === today) ? '#334155' : '#a8b3c4',
                         }
                     }
                 }

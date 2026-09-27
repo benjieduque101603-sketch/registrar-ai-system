@@ -156,7 +156,12 @@ async function applySelectedQualityRepairs() {
         const repair = (report.safe_repairs || []).find(item => item.field === field);
         return repair ? { field: repair.field, expected_value: repair.current_value, suggested_value: repair.suggested_value } : null;
     }).filter(Boolean);
-    if (!window.confirm(`Apply ${repairs.length} verified correction${repairs.length === 1 ? '' : 's'}?`)) return;
+    const ok = await window.confirmAction({
+        title: 'Apply corrections',
+        body: `Apply ${repairs.length} verified correction${repairs.length === 1 ? '' : 's'}?`,
+        confirmLabel: 'Apply'
+    });
+    if (!ok) return;
     const button = document.getElementById('qualityApplyBtn');
     if (button) { button.disabled = true; button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying…'; }
     try {

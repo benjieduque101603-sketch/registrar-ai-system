@@ -1008,7 +1008,13 @@ function applyBulkAction() {
     if (!action) { showToast('Select an action first.', 'warning'); return; }
     const ids = Array.from(document.querySelectorAll('.student-cb:checked')).map(cb => cb.value);
     if (!ids.length) return;
-    if (!confirm('Change status of ' + ids.length + ' student(s) to "' + action + '"?')) return;
+    if (!await confirmAction({
+        title: 'Change status',
+        body: 'Change the status of <strong>' + ids.length + ' student' + (ids.length === 1 ? '' : 's') +
+              '</strong> to "' + escText(action) + '"?',
+        confirmLabel: 'Change status',
+        tone: action === 'inactive' || action === 'archived' ? 'danger' : 'primary'
+    })) return;
     fetch('../api/students.php?action=bulk-status', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, status: action })
@@ -1153,7 +1159,11 @@ function uploadPhoto() {
 async function resendWelcomeEmail() {
     if (!currentViewId) return;
     const btn = document.getElementById('resendWelcomeBtn');
-    if (!confirm('Resend the portal welcome email? This resets the temporary password.')) return;
+    if (!await confirmAction({
+        title: 'Resend welcome email',
+        body: 'Resend the portal welcome email? <strong>This resets the temporary password.</strong>',
+        confirmLabel: 'Resend email'
+    })) return;
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...'; }
     try {
         const res = await fetch('../api/students.php?action=resend_welcome_email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ student_id: currentViewId }) });
@@ -1573,14 +1583,21 @@ function checkDuplicateHint() {
     const bd = document.getElementById('addBirthDate').value;
     if (!fn || !ln) return;
     aiPost('check_duplicate', { first_name: fn, last_name: ln, birth_date: bd })
-    .then(d => {
+    .then(async d => {
         if (d.success && d.data && d.data.length) {
             const hit = d.data[0];
             let msg = 'Possible duplicate: ' + hit.name + ' (' + (hit.student_number||'') + '). Enroll anyway?';
+            let title = 'Possible duplicate';
             if (hit.score >= 0.9 && hit.birth_date === bd) {
                 msg = 'Likely duplicate of ' + hit.name + ' (' + hit.student_number + ').';
+                title = 'Likely duplicate';
             }
-            if (!confirm(msg)) return;
+            await confirmAction({
+                title: title,
+                body: escText(msg),
+                confirmLabel: 'Enroll anyway',
+                tone: 'danger'
+            });
         }
     }).catch(() => {});
 }
@@ -1595,9 +1612,14 @@ function standardizeCourse() {
     fetch('../api/ai-assist.php?action=suggest_field', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ field: 'course', value: val, context: 'student enrollment' })
-    }).then(r => r.json()).then(d => {
+    }).then(r => r.json()).then(async d => {
         if (d.success && d.data && d.data.suggested && d.data.suggested !== val) {
-            if (confirm('Standardize course to "' + d.data.suggested + '"?')) {
+            const ok = await confirmAction({
+                title: 'Standardize course',
+                body: 'Standardize course to <strong>' + escText(d.data.suggested) + '</strong>?',
+                confirmLabel: 'Standardize'
+            });
+            if (ok) {
                 el.value = d.data.suggested;
                 refreshMajorOptions('add');
             }
@@ -1661,8 +1683,12 @@ function quickStatus(id, status) {
 }
 
 // ─── RESTORE ─────────────────────────────────────────────────
-function restoreStudent(id, name) {
-    if (!confirm('Restore ' + name + '?')) return;
+async function restoreStudent(id, name) {
+    if (!await confirmAction({
+        title: 'Restore student',
+        body: 'Restore <strong>' + escText(name) + '</strong> to the active list?',
+        confirmLabel: 'Restore'
+    })) return;
     fetch('../api/students.php?id=' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'active' }) })
     .then(r => r.json()).then(d => { if (d.success) window.location.reload(); else showToast(d.message || 'Failed.', 'error'); }).catch(() => showToast('Error.', 'error'));
 }
@@ -1801,7 +1827,11 @@ async function checkDuplicate(id) {
 }
 
 async function acceptEnrollment(id) {
-    if (!confirm('Accept this student into the registrar records?')) return;
+    if (!await confirmAction({
+        title: 'Accept enrollment',
+        body: 'Accept this student into the registrar records?',
+        confirmLabel: 'Accept'
+    })) return;
     try {
         const d = await enrollApi('accept', { enrollment_id: id });
         if (!d.success) { showToast(d.message || 'Failed.', 'error'); return; }
@@ -1817,7 +1847,11 @@ async function reenrollEnrollment(id) {
     const st = dupState[id] && dupState[id].student;
     const studentId = st && st.id;
     if (!studentId) { showToast('No existing record selected. Run Duplicate Check first.', 'error'); return; }
-    if (!confirm('Re-enroll this student with their existing student number?')) return;
+    if (!await confirmAction({
+        title: 'Re-enroll student',
+        body: 'Re-enroll this student with their existing student number? Their record will be updated rather than duplicated.',
+        confirmLabel: 'Re-enroll'
+    })) return;
     try {
         const d = await enrollApi('re-enroll', { enrollment_id: id, student_id: studentId });
         if (!d.success) { showToast(d.message || 'Failed.', 'error'); return; }
