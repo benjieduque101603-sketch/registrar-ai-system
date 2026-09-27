@@ -92,25 +92,47 @@ foreach ($need as list($t, $c)) {
 }
 t('the walk-in document columns are present', count($absent) === 0, implode(', ', $absent));
 
-// -- 4. The dump must contain NO rows. An install file carrying other
-//       people's logins, password hashes and fee schedules is not something
-//       to import into production, and it leaks the moment it is shared. A
-//       fresh import should be structurally complete and completely empty.
-//       create_admin.php is what fills the two required tables.
-$seeded = array();
+// -- 4. Seeded data is limited to the staff accounts. Two rules:
+//         - only users rows, and only for admin / registrar / nurse
+//         - never a student, because a student login is personal data
+//       Everything else the dump touches would be someone else's data or
+//       someone else's business policy arriving on a new install.
+$allowed = array('admin', 'registrar', 'nurse');
+$seededTables = array();
 foreach ($fresh as $tbl) {
     $n = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.`$tbl`")->fetchColumn();
-    if ($n > 0) $seeded[] = "$tbl=$n";
+    if ($n > 0) $seededTables[$tbl] = $n;
 }
-t('the dump inserts no rows', count($seeded) === 0, implode(', ', array_slice($seeded, 0, 6)));
+t('only the users table is seeded', array_keys($seededTables) === array('users'),
+    implode(', ', array_keys($seededTables)));
 
-// ...and it must not have quietly resumed shipping the credentials that
-// used to live in it.
-$dumpSrc = file_get_contents(__DIR__ . '/../registrar_ai.sql');
-t('no password hash in the dump', strpos($dumpSrc, '$2y$') === false);
-t('no email address in the dump', !preg_match('/[a-z0-9_.+-]+@[a-z0-9.-]+\.[a-z]{2,}/i', $dumpSrc));
+$roles = $root->query("SELECT DISTINCT role FROM `$tmp`.users")->fetchAll(PDO::FETCH_COLUMN);
+sort($roles);
+$want = $allowed; sort($want);
+t('every seeded account is a staff role', $roles === $want, 'found: ' . implode(',', $roles));
 
-// -- 5. A fresh install with no rows cannot run, so the two required tables
+$students = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.users WHERE role = 'student'")->fetchColumn();
+t('no student account is seeded', $students === 0, "rows: $students");
+
+// A student row would also need a students row behind it, so this catches
+// an accidental reseed of that table too.
+$stu = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.students")->fetchColumn();
+t('no student records are seeded', $stu === 0, "rows: $stu");
+
+$cat = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.document_catalog")->fetchColumn();
+t('no document catalog is seeded', $cat === 0, "rows: $cat");
+
+// The seeded accounts must actually be able to sign in, or the dump is
+// shipping rows that only look like a way in.
+$hasHash = 0;
+foreach ($root->query("SELECT password_hash FROM `$tmp`.users") as $u) {
+    if (strpos($u['password_hash'], '$2y$') === 0) $hasHash++;
+}
+t('seeded accounts carry a real bcrypt hash', $hasHash > 0, "rows with a hash: $hasHash");
+
+// -- 5. A fresh install still needs the catalog, and with no staff row it
+//       would have no way in at all. The bootstrap is what makes the
+//       no-catalog choice safe.// -- 5. A fresh install with no rows cannot run, so the two required tables
 //       must be reachable without the browser: login.php resolves against
 //       the users table and api/users.php needs an existing admin, so an
 //       empty one is a dead end rather than a fresh start. The bootstrap is

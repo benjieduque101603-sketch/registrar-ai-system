@@ -930,24 +930,33 @@ CREATE TABLE `users` (
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 -- ---------------------------------------------------------------------------
--- No seed data. This file creates the schema and nothing else.
+-- Staff accounts.
 --
--- Two things must exist before the application is usable, and neither is
--- data this file should be carrying:
+-- The four staff logins are seeded so a fresh install can be signed into.
+-- They are the same accounts this system has always used; change their
+-- passwords before the host goes live, because the hashes below are in the
+-- repository and therefore known to anyone who has read it.
 --
---   users             at least one account, or there is no way to sign in.
---                    There is no first-run wizard -- login.php resolves
---                    against the users table, and api/users.php requires an
---                    existing admin session, so an empty table is a dead end.
---                    Create one with:  php create_admin.php
+-- No student accounts and no document catalog are seeded. A student login
+-- is personal data and a fresh install has no students, and the catalog is
+-- per-school business policy -- fees and turnaround targets differ. Add
+-- both from inside the application once you are in:
 --
---   document_catalog  the document types the desk offers. Without rows the
---                    desk lists nothing and no request can be filed. These
---                    are per-school business decisions -- fees, turnaround
---                    targets, which documents exist at all -- so they belong
---                    to whoever runs the office, not in a dump.
---                    Create them with:  php create_admin.php --catalog
+--   php create_admin.php --catalog    document types the desk will offer
 --
+-- Students are enrolled through the registrar's own screens, and each one
+-- gets its portal account automatically (shared/functions.php creates the
+-- matching users row with role='student').
+--
+-- The student_id column is NULL for every row above, so this INSERT does
+-- not depend on any student existing.
+-- ---------------------------------------------------------------------------
+INSERT INTO `users` (`id`, `email`, `password_hash`, `full_name`, `role`, `rfid_uid`, `is_active`, `created_at`, `updated_at`, `student_id`, `username`, `login_attempts`, `locked_until`) VALUES
+(1,'admin@gmail.com','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','System Administrator','admin',NULL,1,'2026-07-07 06:42:45','2026-09-23 12:57:09',NULL,'ADM-001',0,NULL),
+(2,'registrar@gmail.com','$2y$10$zj33OjRB93RcPZWd2/f4VudcEqzDCfZdLAajEcZQ7LABuuEKeqFyu','Registrar Staff','registrar',NULL,1,'2026-07-07 06:42:45','2026-09-23 12:57:10',NULL,'RGS-001',0,NULL),
+(3,'roldantiu89@gmail.com','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','Roldan Tiu','admin',NULL,1,'2026-08-11 07:40:30','2026-08-24 00:47:37',NULL,'ADM-002',0,NULL),
+(7,'norse@gmail.com','$2y$10$mg/TmAFfYjwZNW34o6IGHedMnnZ04hUmYgm5iGy7OvGAxtDEoGWee','norse','nurse',NULL,1,'2026-09-02 18:16:15','2026-09-02 18:17:05',NULL,NULL,0,NULL);
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- End of registrar_ai.sql
