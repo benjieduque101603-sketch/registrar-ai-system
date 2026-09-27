@@ -92,16 +92,41 @@ foreach ($need as list($t, $c)) {
 }
 t('the walk-in document columns are present', count($absent) === 0, implode(', ', $absent));
 
-// -- 4. Seed data arrived, because an empty document_catalog means an
-//       empty desk and no document can be requested at all.
-$cat = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.document_catalog")->fetchColumn();
-t('document_catalog is seeded', $cat > 0, "rows: $cat");
-$sla = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.document_catalog WHERE sla_days IS NOT NULL")->fetchColumn();
-t('the seeded catalog has turnaround targets', $cat > 0 && $sla === $cat, "$sla of $cat");
-$usr = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.users")->fetchColumn();
-t('there is at least one account to log in with', $usr > 0, "rows: $usr");
+// -- 4. The dump must contain NO rows. An install file carrying other
+//       people's logins, password hashes and fee schedules is not something
+//       to import into production, and it leaks the moment it is shared. A
+//       fresh import should be structurally complete and completely empty.
+//       create_admin.php is what fills the two required tables.
+$seeded = array();
+foreach ($fresh as $tbl) {
+    $n = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.`$tbl`")->fetchColumn();
+    if ($n > 0) $seeded[] = "$tbl=$n";
+}
+t('the dump inserts no rows', count($seeded) === 0, implode(', ', array_slice($seeded, 0, 6)));
 
-// -- 5. The migrations must be no-ops here. If one of them still finds
+// ...and it must not have quietly resumed shipping the credentials that
+// used to live in it.
+$dumpSrc = file_get_contents(__DIR__ . '/../registrar_ai.sql');
+t('no password hash in the dump', strpos($dumpSrc, '$2y$') === false);
+t('no email address in the dump', !preg_match('/[a-z0-9_.+-]+@[a-z0-9.-]+\.[a-z]{2,}/i', $dumpSrc));
+
+// -- 5. A fresh install with no rows cannot run, so the two required tables
+//       must be reachable without the browser: login.php resolves against
+//       the users table and api/users.php needs an existing admin, so an
+//       empty one is a dead end rather than a fresh start. The bootstrap is
+//       what makes "no seed data" safe to choose.
+$bootPath = __DIR__ . '/../create_admin.php';
+$boot = is_file($bootPath) ? file_get_contents($bootPath) : '';
+t('create_admin.php exists', $boot !== '');
+t('the bootstrap is CLI only', strpos($boot, "php_sapi_name() !== 'cli'") !== false);
+t('the bootstrap can create an account', strpos($boot, "'users'") !== false);
+t('the bootstrap can load a document catalog', strpos($boot, 'document_catalog') !== false);
+t('the bootstrap enforces the app password policy', strpos($boot, 'checkPasswordPolicy') !== false);
+t('the bootstrap defaults to creating no catalog', strpos($boot, "'N'") !== false);
+
+// -- 6. The migrations must be no-ops here. If one of them still finds
+//       work to do, the dump is not the whole story and a single-file
+//       install would be a lie. If one of them still finds
 //       work to do, the dump is not the whole story and a single-file
 //       install would be a lie.
 foreach (glob(__DIR__ . '/../migrations/*.sql') as $m) {

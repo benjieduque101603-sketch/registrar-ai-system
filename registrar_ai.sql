@@ -929,27 +929,25 @@ CREATE TABLE `users` (
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
-/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-
-
 -- ---------------------------------------------------------------------------
--- Seed data. document_catalog is what the document desk lists; without it
--- the desk renders empty and no document can be requested. The users rows
--- are the initial accounts; rotate these passwords before going live.
--- ---------------------------------------------------------------------------
-
-INSERT INTO `document_catalog` (`id`, `sku`, `name`, `description`, `base_fee`, `sla_days`, `fee_type`, `requirement`, `is_active`, `created_at`) VALUES
-(1,'DOC-TOR','Transcript of Records','Complete academic record (TOR)','250.00',3,'per_page','Scanned copy of valid ID',1,'2026-08-26 11:26:51'),
-(2,'DOC-COE','Certificate of Enrollment','Proof of current enrollment','100.00',1,'flat',NULL,1,'2026-08-26 11:26:51'),
-(3,'DOC-GM','Certificate of Good Moral','Good moral character certificate','150.00',3,'flat','No pending disciplinary cases',1,'2026-08-26 11:26:51'),
-(4,'DOC-DIPLOMA','Diploma Replacement','Replacement of lost diploma','1000.00',5,'flat','Notarized Affidavit of Loss',1,'2026-08-26 11:26:51'),
-(5,'DOC-CTC','Certified True Copy','Certified true copy of a record','50.00',2,'per_page',NULL,1,'2026-08-26 11:26:51'),
-(6,'DOC-HD','Honorable Dismissal','Transfer / honorable dismissal','300.00',10,'flat',NULL,1,'2026-08-26 11:26:51'),
-(7,'DOC-CD','Course Description','Subject syllabus / course description','100.00',1,'per_syllabus',NULL,1,'2026-08-26 11:26:51');
-
-INSERT INTO `users` (`id`, `email`, `password_hash`, `full_name`, `role`, `rfid_uid`, `is_active`, `created_at`, `updated_at`, `student_id`, `username`, `login_attempts`, `locked_until`) VALUES (1,'admin@bestlink.edu.ph','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','System Administrator','admin',NULL,1,'2026-07-07 10:42:45','2026-08-24 04:47:37',NULL,'ADM-001',0,NULL),(2,'registrar@bestlink.edu.ph','$2y$10$zj33OjRB93RcPZWd2/f4VudcEqzDCfZdLAajEcZQ7LABuuEKeqFyu','Registrar Staff','registrar',NULL,1,'2026-07-07 10:42:45','2026-08-26 16:02:51',NULL,'RGS-001',0,NULL),(3,'roldantiu89@gmail.com','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','Roldan Tiu','admin',NULL,1,'2026-08-11 11:40:30','2026-08-24 04:47:37',NULL,'ADM-002',0,NULL),(7,'norse@gmail.com','$2y$10$mg/TmAFfYjwZNW34o6IGHedMnnZ04hUmYgm5iGy7OvGAxtDEoGWee','norse','nurse',NULL,1,'2026-09-02 22:16:15','2026-09-02 22:17:05',NULL,NULL,0,NULL);
-
-
+-- No seed data. This file creates the schema and nothing else.
+--
+-- Two things must exist before the application is usable, and neither is
+-- data this file should be carrying:
+--
+--   users             at least one account, or there is no way to sign in.
+--                    There is no first-run wizard -- login.php resolves
+--                    against the users table, and api/users.php requires an
+--                    existing admin session, so an empty table is a dead end.
+--                    Create one with:  php create_admin.php
+--
+--   document_catalog  the document types the desk offers. Without rows the
+--                    desk lists nothing and no request can be filed. These
+--                    are per-school business decisions -- fees, turnaround
+--                    targets, which documents exist at all -- so they belong
+--                    to whoever runs the office, not in a dump.
+--                    Create them with:  php create_admin.php --catalog
+--
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- End of registrar_ai.sql
