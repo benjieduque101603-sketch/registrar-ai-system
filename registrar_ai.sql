@@ -1,31 +1,30 @@
--- ============================================================
---  REGISTRAR_AI.SQL  --  full schema + seed snapshot
--- ============================================================
---  Database:       registrar_ai
---  Server version: 10.4.32-MariaDB
---  Generated:      Sep 23, 2026
---  Updated:        Sep 23, 2026 — consolidated all migrations
+-- registrar_ai.sql -- full schema and seed data for a fresh install.
 --
---  Import with:  mysql -u root registrar_ai < registrar_ai.sql
---  Each table is dropped before it is recreated, so importing
---  over an existing registrar_ai REPLACES it. Foreign key checks
---  are disabled for the duration of the import.
+-- Importing THIS file is sufficient. Everything the application reads is
+-- defined here, including the walk-in document-request work:
 --
---  39 tables. 10 structure-only (security/cache/log):
---    otp_codes, login_attempts, ai_cache, masterlist_cache,
---    audit_logs, rfid_scan_logs, mock_lalamove_orders,
---    mock_payment_transactions, queue_tickets, document_request_events
+--   document_catalog.sla_days          per-SKU turnaround target
+--   document_requests.blocked_reason    what a request is waiting on
+--   document_requests.blocked_since     when the hold started
+--   document_requests.blocked_source    balance | registrar | NULL
+--   document_requests.source/counter/   walk-in provenance
+--   walkin_at/walkin_by/...
 --
---  Includes all migrations from database/migrations/ and
---  database/*.sql (document AI, student notifications,
---  RFID inventory, queue events).
--- ============================================================
+-- The migrations in migrations/ are for databases that ALREADY exist.
+-- They are guarded and idempotent, so running one against a database
+-- created from this file is harmless but unnecessary.
+--
+-- Generated from the live schema, so it cannot drift from the code the way
+-- a hand-edited dump does. See tests/dump_freshness.php.
+--
+-- Safe to import into an empty database only. It creates tables; it does
+-- not drop existing ones.
 
--- MariaDB dump 10.19  Distrib 10.4.32-MariaDB, for Win64 (AMD64)
---
--- Host: localhost    Database: registrar_ai
--- ------------------------------------------------------
--- Server version	10.4.32-MariaDB
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';
+SET time_zone = '+00:00';
+
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -37,12 +36,6 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-
---
--- Table structure for table `academic_grades`
---
-
-DROP TABLE IF EXISTS `academic_grades`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `academic_grades` (
@@ -69,21 +62,6 @@ CREATE TABLE `academic_grades` (
   CONSTRAINT `fk_grade_academy` FOREIGN KEY (`academic_history_id`) REFERENCES `academic_history` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `academic_grades`
---
-
-LOCK TABLES `academic_grades` WRITE;
-/*!40000 ALTER TABLE `academic_grades` DISABLE KEYS */;
-/*!40000 ALTER TABLE `academic_grades` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `academic_history`
---
-
-DROP TABLE IF EXISTS `academic_history`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `academic_history` (
@@ -103,21 +81,6 @@ CREATE TABLE `academic_history` (
   CONSTRAINT `academic_history_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `academic_history`
---
-
-LOCK TABLES `academic_history` WRITE;
-/*!40000 ALTER TABLE `academic_history` DISABLE KEYS */;
-/*!40000 ALTER TABLE `academic_history` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `ai_cache`
---
-
-DROP TABLE IF EXISTS `ai_cache`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `ai_cache` (
@@ -131,24 +94,8 @@ CREATE TABLE `ai_cache` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `prompt_hash` (`prompt_hash`),
   KEY `idx_prompt_hash` (`prompt_hash`)
-) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=55 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `ai_cache`
---
-
-LOCK TABLES `ai_cache` WRITE;
-/*!40000 ALTER TABLE `ai_cache` DISABLE KEYS */;
--- [structure-only] ai_cache data omitted
-/*!40000 ALTER TABLE `ai_cache` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `announcements`
---
-
-DROP TABLE IF EXISTS `announcements`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `announcements` (
@@ -165,21 +112,6 @@ CREATE TABLE `announcements` (
   CONSTRAINT `fk_announcement_author` FOREIGN KEY (`author_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `announcements`
---
-
-LOCK TABLES `announcements` WRITE;
-/*!40000 ALTER TABLE `announcements` DISABLE KEYS */;
-/*!40000 ALTER TABLE `announcements` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `audit_logs`
---
-
-DROP TABLE IF EXISTS `audit_logs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `audit_logs` (
@@ -198,24 +130,8 @@ CREATE TABLE `audit_logs` (
   KEY `idx_action` (`action`),
   KEY `idx_created_at` (`created_at`),
   CONSTRAINT `audit_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=255 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=362 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `audit_logs`
---
-
-LOCK TABLES `audit_logs` WRITE;
-/*!40000 ALTER TABLE `audit_logs` DISABLE KEYS */;
--- [structure-only] audit_logs data omitted
-/*!40000 ALTER TABLE `audit_logs` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `authorized_cards`
---
-
-DROP TABLE IF EXISTS `authorized_cards`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `authorized_cards` (
@@ -229,55 +145,6 @@ CREATE TABLE `authorized_cards` (
   UNIQUE KEY `card_uid` (`card_uid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `authorized_cards`
---
-
-LOCK TABLES `authorized_cards` WRITE;
-/*!40000 ALTER TABLE `authorized_cards` DISABLE KEYS */;
-/*!40000 ALTER TABLE `authorized_cards` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `clearances`
---
-
-DROP TABLE IF EXISTS `clearances`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
-CREATE TABLE `clearances` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `student_id` int(11) NOT NULL,
-  `status` enum('pending','partial','cleared') NOT NULL DEFAULT 'pending',
-  `issued_by` int(11) DEFAULT NULL,
-  `issued_at` timestamp NULL DEFAULT NULL,
-  `notes` text DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_clearance_student` (`student_id`),
-  KEY `idx_clearance_status` (`status`),
-  KEY `fk_clearance_issued_by` (`issued_by`),
-  CONSTRAINT `fk_clearance_issued_by` FOREIGN KEY (`issued_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_clearance_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `clearances`
---
-
-LOCK TABLES `clearances` WRITE;
-/*!40000 ALTER TABLE `clearances` DISABLE KEYS */;
-/*!40000 ALTER TABLE `clearances` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `clinic_incidents`
---
-
-DROP TABLE IF EXISTS `clinic_incidents`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `clinic_incidents` (
@@ -300,21 +167,6 @@ CREATE TABLE `clinic_incidents` (
   KEY `idx_ci_date` (`incident_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `clinic_incidents`
---
-
-LOCK TABLES `clinic_incidents` WRITE;
-/*!40000 ALTER TABLE `clinic_incidents` DISABLE KEYS */;
-/*!40000 ALTER TABLE `clinic_incidents` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `clinic_supplies`
---
-
-DROP TABLE IF EXISTS `clinic_supplies`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `clinic_supplies` (
@@ -331,21 +183,6 @@ CREATE TABLE `clinic_supplies` (
   KEY `idx_cs_category` (`category`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `clinic_supplies`
---
-
-LOCK TABLES `clinic_supplies` WRITE;
-/*!40000 ALTER TABLE `clinic_supplies` DISABLE KEYS */;
-/*!40000 ALTER TABLE `clinic_supplies` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `clinic_supply_usage`
---
-
-DROP TABLE IF EXISTS `clinic_supply_usage`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `clinic_supply_usage` (
@@ -362,21 +199,6 @@ CREATE TABLE `clinic_supply_usage` (
   CONSTRAINT `fk_csu_supply` FOREIGN KEY (`supply_id`) REFERENCES `clinic_supplies` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `clinic_supply_usage`
---
-
-LOCK TABLES `clinic_supply_usage` WRITE;
-/*!40000 ALTER TABLE `clinic_supply_usage` DISABLE KEYS */;
-/*!40000 ALTER TABLE `clinic_supply_usage` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `communication_log`
---
-
-DROP TABLE IF EXISTS `communication_log`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `communication_log` (
@@ -396,24 +218,8 @@ CREATE TABLE `communication_log` (
   KEY `idx_student` (`student_id`),
   KEY `idx_type_status` (`message_type`,`status`),
   KEY `idx_created` (`created_at`)
-) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `communication_log`
---
-
-LOCK TABLES `communication_log` WRITE;
-/*!40000 ALTER TABLE `communication_log` DISABLE KEYS */;
--- [no seed data] communication_log is student-linked
-/*!40000 ALTER TABLE `communication_log` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `contact_change_requests`
---
-
-DROP TABLE IF EXISTS `contact_change_requests`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `contact_change_requests` (
@@ -435,21 +241,6 @@ CREATE TABLE `contact_change_requests` (
   CONSTRAINT `fk_ccr_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `contact_change_requests`
---
-
-LOCK TABLES `contact_change_requests` WRITE;
-/*!40000 ALTER TABLE `contact_change_requests` DISABLE KEYS */;
-/*!40000 ALTER TABLE `contact_change_requests` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `contact_recipients`
---
-
-DROP TABLE IF EXISTS `contact_recipients`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `contact_recipients` (
@@ -474,22 +265,43 @@ CREATE TABLE `contact_recipients` (
   CONSTRAINT `fk_contact_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `contact_recipients`
---
-
-LOCK TABLES `contact_recipients` WRITE;
-/*!40000 ALTER TABLE `contact_recipients` DISABLE KEYS */;
--- [no seed data] contact_recipients is student-linked
-/*!40000 ALTER TABLE `contact_recipients` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `document_catalog`
---
-
-DROP TABLE IF EXISTS `document_catalog`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `discipline_records` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `student_id` int(11) NOT NULL,
+  `recorded_at` date DEFAULT NULL COMMENT 'Date the case was filed',
+  `nature` varchar(255) DEFAULT NULL COMMENT 'Nature of the case',
+  `resolution` varchar(100) DEFAULT NULL COMMENT 'Penalty imposed, if any',
+  `status` enum('pending','resolved','dismissed') NOT NULL DEFAULT 'pending',
+  `remarks` text DEFAULT NULL,
+  `recorded_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_discipline_student` (`student_id`,`status`),
+  KEY `fk_discipline_by` (`recorded_by`),
+  CONSTRAINT `fk_discipline_by` FOREIGN KEY (`recorded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_discipline_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `document_ai_audit` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) DEFAULT NULL,
+  `student_id` int(11) DEFAULT NULL,
+  `action` varchar(50) NOT NULL,
+  `input_summary` text DEFAULT NULL,
+  `result` text DEFAULT NULL,
+  `confidence` decimal(3,2) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_daa_document` (`document_id`),
+  KEY `idx_daa_student` (`student_id`),
+  KEY `idx_daa_action` (`action`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `document_catalog` (
@@ -501,29 +313,12 @@ CREATE TABLE `document_catalog` (
   `sla_days` int(11) DEFAULT NULL COMMENT 'Target turnaround in days for this document',
   `fee_type` enum('flat','per_page','per_syllabus') NOT NULL DEFAULT 'flat',
   `requirement` text DEFAULT NULL,
-  `triggers_exit_clearance` tinyint(1) NOT NULL DEFAULT 0,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_sku` (`sku`)
 ) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `document_catalog`
---
-
-LOCK TABLES `document_catalog` WRITE;
-/*!40000 ALTER TABLE `document_catalog` DISABLE KEYS */;
-INSERT INTO `document_catalog` (`id`, `sku`, `name`, `description`, `base_fee`, `fee_type`, `requirement`, `triggers_exit_clearance`, `is_active`, `created_at`) VALUES (1,'DOC-TOR','Transcript of Records','Complete academic record (TOR)',250.00,'per_page','Scanned copy of valid ID',1,1,'2026-08-26 15:26:51'),(2,'DOC-COE','Certificate of Enrollment','Proof of current enrollment',100.00,'flat',NULL,0,1,'2026-08-26 15:26:51'),(3,'DOC-GM','Certificate of Good Moral','Good moral character certificate',150.00,'flat','No pending disciplinary cases',0,1,'2026-08-26 15:26:51'),(4,'DOC-DIPLOMA','Diploma Replacement','Replacement of lost diploma',1000.00,'flat','Notarized Affidavit of Loss',0,1,'2026-08-26 15:26:51'),(5,'DOC-CTC','Certified True Copy','Certified true copy of a record',50.00,'per_page',NULL,0,1,'2026-08-26 15:26:51'),(6,'DOC-HD','Honorable Dismissal','Transfer / honorable dismissal',300.00,'flat','Completed Exit Clearance',1,1,'2026-08-26 15:26:51'),(7,'DOC-CD','Course Description','Subject syllabus / course description',100.00,'per_syllabus',NULL,0,1,'2026-08-26 15:26:51');
-/*!40000 ALTER TABLE `document_catalog` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `document_request_events`
---
-
-DROP TABLE IF EXISTS `document_request_events`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `document_request_events` (
@@ -536,28 +331,22 @@ CREATE TABLE `document_request_events` (
   PRIMARY KEY (`id`),
   KEY `idx_events_request` (`request_id`),
   CONSTRAINT `fk_events_request` FOREIGN KEY (`request_id`) REFERENCES `document_requests` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=102 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `document_request_events`
---
-
-LOCK TABLES `document_request_events` WRITE;
-/*!40000 ALTER TABLE `document_request_events` DISABLE KEYS */;
-/*!40000 ALTER TABLE `document_request_events` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `document_requests`
---
-
-DROP TABLE IF EXISTS `document_requests`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `document_requests` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `request_id` varchar(24) DEFAULT NULL,
+  `source` enum('walk_in') NOT NULL DEFAULT 'walk_in' COMMENT 'All requests are counter walk-ins',
+  `walkin_at` datetime DEFAULT NULL COMMENT 'Walked in at the counter',
+  `walkin_by` int(11) DEFAULT NULL COMMENT 'Registrar who took the request',
+  `counter` tinyint(3) NOT NULL DEFAULT 1 COMMENT 'Releasing counter (1-3)',
+  `released_by` int(11) DEFAULT NULL COMMENT 'Registrar who released the document',
+  `record_file_path` varchar(255) DEFAULT NULL COMMENT 'Retained signed record copy',
+  `record_file_sha256` varchar(64) DEFAULT NULL,
+  `record_file_generated_at` datetime DEFAULT NULL,
+  `record_copies_issued` int(11) NOT NULL DEFAULT 0,
   `student_id` int(11) NOT NULL,
   `document_type` enum('form137','good_moral','transcript','certificate','clearance') NOT NULL,
   `catalog_id` int(11) DEFAULT NULL,
@@ -565,14 +354,14 @@ CREATE TABLE `document_requests` (
   `request_type` enum('Express','Regular') NOT NULL DEFAULT 'Regular',
   `fulfillment_type` enum('Pickup','Digital') NOT NULL DEFAULT 'Pickup',
   `delivery_address` text DEFAULT NULL,
-  `payment_method` enum('Online') NOT NULL DEFAULT 'Online',
+  `payment_method` enum('Online','Cash_on_Delivery','Counter') NOT NULL DEFAULT 'Counter',
   `purpose` varchar(255) DEFAULT NULL,
   `recipient` varchar(255) DEFAULT NULL,
   `status` enum('pending','processing','approved','denied','completed','released') DEFAULT 'pending',
   `document_status` enum('Filed','Pending_Clearance','Processing','Ready','Claimed','Rejected') NOT NULL DEFAULT 'Filed',
-  `blocked_reason` varchar(160) DEFAULT NULL,
-  `blocked_since` datetime DEFAULT NULL,
-  `blocked_source` varchar(16) DEFAULT NULL COMMENT 'balance = derived from finance, registrar = a decision by a person, NULL = not held',
+  `blocked_reason` varchar(160) DEFAULT NULL COMMENT 'What this request is waiting on, if anything',
+  `blocked_since` datetime DEFAULT NULL COMMENT 'When the current blockage began',
+  `blocked_source` varchar(16) DEFAULT NULL,
   `rejection_reason` varchar(255) DEFAULT NULL,
   `approval_reason` varchar(255) DEFAULT NULL,
   `qr_hash` varchar(64) DEFAULT NULL,
@@ -606,26 +395,15 @@ CREATE TABLE `document_requests` (
   KEY `idx_document_status` (`document_status`),
   KEY `idx_request_type` (`request_type`),
   KEY `idx_fulfillment_type` (`fulfillment_type`),
+  KEY `fk_document_requests_walkin_by` (`walkin_by`),
+  KEY `fk_document_requests_released_by` (`released_by`),
   CONSTRAINT `document_requests_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE,
   CONSTRAINT `document_requests_ibfk_2` FOREIGN KEY (`processed_by`) REFERENCES `users` (`id`),
-  CONSTRAINT `fk_document_requests_catalog` FOREIGN KEY (`catalog_id`) REFERENCES `document_catalog` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+  CONSTRAINT `fk_document_requests_catalog` FOREIGN KEY (`catalog_id`) REFERENCES `document_catalog` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_document_requests_released_by` FOREIGN KEY (`released_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_document_requests_walkin_by` FOREIGN KEY (`walkin_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB AUTO_INCREMENT=25 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `document_requests`
---
-
-LOCK TABLES `document_requests` WRITE;
-/*!40000 ALTER TABLE `document_requests` DISABLE KEYS */;
-/*!40000 ALTER TABLE `document_requests` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `documents`
---
-
-DROP TABLE IF EXISTS `documents`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `documents` (
@@ -638,6 +416,7 @@ CREATE TABLE `documents` (
   `file_path` varchar(500) NOT NULL,
   `file_size` bigint(20) DEFAULT NULL,
   `file_type` varchar(50) DEFAULT NULL,
+  `file_sha256` varchar(64) DEFAULT NULL COMMENT 'SHA-256 of the stored file, printed on a CTC',
   `description` text DEFAULT NULL,
   `uploaded_by` int(11) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -657,23 +436,8 @@ CREATE TABLE `documents` (
   KEY `idx_documents_file_hash` (`file_hash`),
   CONSTRAINT `documents_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE,
   CONSTRAINT `documents_ibfk_2` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `documents`
---
-
-LOCK TABLES `documents` WRITE;
-/*!40000 ALTER TABLE `documents` DISABLE KEYS */;
-/*!40000 ALTER TABLE `documents` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `emergency_contacts`
---
-
-DROP TABLE IF EXISTS `emergency_contacts`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `emergency_contacts` (
@@ -691,21 +455,6 @@ CREATE TABLE `emergency_contacts` (
   CONSTRAINT `fk_emergency_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `emergency_contacts`
---
-
-LOCK TABLES `emergency_contacts` WRITE;
-/*!40000 ALTER TABLE `emergency_contacts` DISABLE KEYS */;
-/*!40000 ALTER TABLE `emergency_contacts` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `enrollment_history`
---
-
-DROP TABLE IF EXISTS `enrollment_history`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `enrollment_history` (
@@ -725,21 +474,6 @@ CREATE TABLE `enrollment_history` (
   CONSTRAINT `fk_eh_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `enrollment_history`
---
-
-LOCK TABLES `enrollment_history` WRITE;
-/*!40000 ALTER TABLE `enrollment_history` DISABLE KEYS */;
-/*!40000 ALTER TABLE `enrollment_history` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `enrollments`
---
-
-DROP TABLE IF EXISTS `enrollments`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `enrollments` (
@@ -781,54 +515,6 @@ CREATE TABLE `enrollments` (
   KEY `idx_enrollments_student_number` (`student_number`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `enrollments`
---
-
-LOCK TABLES `enrollments` WRITE;
-/*!40000 ALTER TABLE `enrollments` DISABLE KEYS */;
--- [no seed data] enrollments is student-linked
-/*!40000 ALTER TABLE `enrollments` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `exit_clearances`
---
-
-DROP TABLE IF EXISTS `exit_clearances`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
-CREATE TABLE `exit_clearances` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `request_id` int(11) NOT NULL,
-  `office` enum('Alumni','Dean','Property') NOT NULL,
-  `status` enum('PENDING','CLEARED') NOT NULL DEFAULT 'PENDING',
-  `cleared_by` int(11) DEFAULT NULL,
-  `cleared_at` datetime DEFAULT NULL,
-  `notes` varchar(255) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_exit_req_office` (`request_id`,`office`),
-  KEY `idx_exit_status` (`status`),
-  CONSTRAINT `fk_exit_request` FOREIGN KEY (`request_id`) REFERENCES `document_requests` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `exit_clearances`
---
-
-LOCK TABLES `exit_clearances` WRITE;
-/*!40000 ALTER TABLE `exit_clearances` DISABLE KEYS */;
-/*!40000 ALTER TABLE `exit_clearances` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `finance`
---
-
-DROP TABLE IF EXISTS `finance`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `finance` (
@@ -839,24 +525,8 @@ CREATE TABLE `finance` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_finance_student` (`student_id`),
   CONSTRAINT `fk_finance_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `finance`
---
-
-LOCK TABLES `finance` WRITE;
-/*!40000 ALTER TABLE `finance` DISABLE KEYS */;
--- [no seed data] finance is student-linked
-/*!40000 ALTER TABLE `finance` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `guardians`
---
-
-DROP TABLE IF EXISTS `guardians`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `guardians` (
@@ -874,24 +544,8 @@ CREATE TABLE `guardians` (
   KEY `idx_student_id` (`student_id`),
   KEY `idx_contact` (`contact_number`),
   CONSTRAINT `guardians_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `guardians`
---
-
-LOCK TABLES `guardians` WRITE;
-/*!40000 ALTER TABLE `guardians` DISABLE KEYS */;
--- [no seed data] guardians is student-linked
-/*!40000 ALTER TABLE `guardians` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `health_records`
---
-
-DROP TABLE IF EXISTS `health_records`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `health_records` (
@@ -916,21 +570,6 @@ CREATE TABLE `health_records` (
   CONSTRAINT `health_records_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `health_records`
---
-
-LOCK TABLES `health_records` WRITE;
-/*!40000 ALTER TABLE `health_records` DISABLE KEYS */;
-/*!40000 ALTER TABLE `health_records` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `health_visits`
---
-
-DROP TABLE IF EXISTS `health_visits`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `health_visits` (
@@ -951,7 +590,7 @@ CREATE TABLE `health_visits` (
   `assessment` varchar(255) DEFAULT NULL,
   `action_taken` varchar(255) DEFAULT NULL,
   `nurse_notes` text DEFAULT NULL,
-  `record_status` enum('Recorded','Pending','Cancelled') NOT NULL DEFAULT 'Recorded',
+  `record_status` enum('Recorded','Draft','Pending','Cancelled') NOT NULL DEFAULT 'Recorded',
   `recorded_by` int(11) DEFAULT NULL,
   `blood_type` varchar(5) DEFAULT NULL,
   `allergies` text DEFAULT NULL,
@@ -959,45 +598,25 @@ CREATE TABLE `health_visits` (
   `weight` decimal(5,2) DEFAULT NULL,
   `pre_existing_conditions` text DEFAULT NULL,
   `immunization_records` text DEFAULT NULL,
+  `visit_type` varchar(32) DEFAULT NULL,
+  `onset_at` datetime DEFAULT NULL,
+  `incident_details` text DEFAULT NULL,
+  `symptoms` text DEFAULT NULL,
+  `pain_score` tinyint(3) DEFAULT NULL,
+  `red_flags` text DEFAULT NULL,
+  `pulse` smallint(6) DEFAULT NULL,
+  `respiratory_rate` smallint(6) DEFAULT NULL,
+  `oxygen_saturation` decimal(5,2) DEFAULT NULL,
+  `current_medications` text DEFAULT NULL,
+  `disposition` varchar(64) DEFAULT NULL,
+  `return_precautions` text DEFAULT NULL,
+  `follow_up_plan` text DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_student_id` (`student_id`),
   KEY `idx_recorded_by` (`recorded_by`),
   CONSTRAINT `fk_visit_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
--- Run this migration on existing installations after backing up the database.
--- It adds the structured Nurse Clinic intake fields without changing existing visit data.
-ALTER TABLE `health_visits`
-  ADD COLUMN `visit_type` varchar(32) DEFAULT NULL,
-  ADD COLUMN `onset_at` datetime DEFAULT NULL,
-  ADD COLUMN `incident_details` text DEFAULT NULL,
-  ADD COLUMN `symptoms` text DEFAULT NULL,
-  ADD COLUMN `pain_score` tinyint(3) DEFAULT NULL,
-  ADD COLUMN `red_flags` text DEFAULT NULL,
-  ADD COLUMN `pulse` smallint(6) DEFAULT NULL,
-  ADD COLUMN `respiratory_rate` smallint(6) DEFAULT NULL,
-  ADD COLUMN `oxygen_saturation` decimal(5,2) DEFAULT NULL,
-  ADD COLUMN `current_medications` text DEFAULT NULL,
-  ADD COLUMN `disposition` varchar(64) DEFAULT NULL,
-  ADD COLUMN `return_precautions` text DEFAULT NULL,
-  ADD COLUMN `follow_up_plan` text DEFAULT NULL,
-  MODIFY COLUMN `record_status` enum('Recorded','Draft','Pending','Cancelled') NOT NULL DEFAULT 'Recorded';
-
+) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `health_visits`
---
-
-LOCK TABLES `health_visits` WRITE;
-/*!40000 ALTER TABLE `health_visits` DISABLE KEYS */;
-/*!40000 ALTER TABLE `health_visits` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `login_attempts`
---
-
-DROP TABLE IF EXISTS `login_attempts`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `login_attempts` (
@@ -1011,22 +630,6 @@ CREATE TABLE `login_attempts` (
   KEY `idx_ip_time` (`ip_address`,`attempted_at`)
 ) ENGINE=InnoDB AUTO_INCREMENT=11 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `login_attempts`
---
-
-LOCK TABLES `login_attempts` WRITE;
-/*!40000 ALTER TABLE `login_attempts` DISABLE KEYS */;
--- [structure-only] login_attempts data omitted
-/*!40000 ALTER TABLE `login_attempts` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `masterlist_cache`
---
-
-DROP TABLE IF EXISTS `masterlist_cache`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `masterlist_cache` (
@@ -1044,21 +647,6 @@ CREATE TABLE `masterlist_cache` (
   CONSTRAINT `masterlist_cache_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `masterlist_cache`
---
-
-LOCK TABLES `masterlist_cache` WRITE;
-/*!40000 ALTER TABLE `masterlist_cache` DISABLE KEYS */;
-/*!40000 ALTER TABLE `masterlist_cache` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `mock_lalamove_orders`
---
-
-DROP TABLE IF EXISTS `mock_lalamove_orders`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `mock_lalamove_orders` (
@@ -1082,21 +670,6 @@ CREATE TABLE `mock_lalamove_orders` (
   CONSTRAINT `fk_lala_request` FOREIGN KEY (`request_id`) REFERENCES `document_requests` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `mock_lalamove_orders`
---
-
-LOCK TABLES `mock_lalamove_orders` WRITE;
-/*!40000 ALTER TABLE `mock_lalamove_orders` DISABLE KEYS */;
-/*!40000 ALTER TABLE `mock_lalamove_orders` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `mock_payment_transactions`
---
-
-DROP TABLE IF EXISTS `mock_payment_transactions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `mock_payment_transactions` (
@@ -1127,21 +700,6 @@ CREATE TABLE `mock_payment_transactions` (
   CONSTRAINT `fk_txn_request` FOREIGN KEY (`request_id`) REFERENCES `document_requests` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `mock_payment_transactions`
---
-
-LOCK TABLES `mock_payment_transactions` WRITE;
-/*!40000 ALTER TABLE `mock_payment_transactions` DISABLE KEYS */;
-/*!40000 ALTER TABLE `mock_payment_transactions` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `otp_codes`
---
-
-DROP TABLE IF EXISTS `otp_codes`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `otp_codes` (
@@ -1158,22 +716,6 @@ CREATE TABLE `otp_codes` (
   CONSTRAINT `fk_otp_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=11 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `otp_codes`
---
-
-LOCK TABLES `otp_codes` WRITE;
-/*!40000 ALTER TABLE `otp_codes` DISABLE KEYS */;
--- [structure-only] otp_codes data omitted
-/*!40000 ALTER TABLE `otp_codes` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `queue_tickets`
---
-
-DROP TABLE IF EXISTS `queue_tickets`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `queue_tickets` (
@@ -1186,6 +728,8 @@ CREATE TABLE `queue_tickets` (
   `course` varchar(100) DEFAULT NULL,
   `status` enum('waiting','serving','completed','no-show','removed','cancelled') NOT NULL DEFAULT 'waiting',
   `counter` int(10) unsigned NOT NULL DEFAULT 1,
+  `purpose` enum('general','document_request','payment','enrollment') NOT NULL DEFAULT 'general',
+  `document_request_id` int(11) DEFAULT NULL COMMENT 'Document request this visit relates to',
   `card_uid` varchar(50) DEFAULT NULL,
   `joined_at` datetime NOT NULL DEFAULT current_timestamp(),
   `called_at` datetime DEFAULT NULL,
@@ -1195,40 +739,27 @@ CREATE TABLE `queue_tickets` (
   KEY `idx_queue_date_status` (`queue_date`,`status`),
   KEY `idx_student` (`student_id`),
   KEY `idx_joined_at` (`joined_at`),
+  KEY `idx_queue_purpose` (`queue_date`,`purpose`),
+  KEY `fk_queue_document_request` (`document_request_id`),
+  CONSTRAINT `fk_queue_document_request` FOREIGN KEY (`document_request_id`) REFERENCES `document_requests` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_queue_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=23 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `queue_tickets`
---
-
-LOCK TABLES `queue_tickets` WRITE;
-/*!40000 ALTER TABLE `queue_tickets` DISABLE KEYS */;
--- [structure-only] queue_tickets data omitted
-/*!40000 ALTER TABLE `queue_tickets` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `rfid_cards`
---
-
-DROP TABLE IF EXISTS `rfid_cards`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `rfid_cards` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
-  `student_id` int(11) NULL DEFAULT NULL,
+  `student_id` int(11) DEFAULT NULL,
   `card_uid` varchar(50) NOT NULL,
   `card_type` enum('rfid','qrcode') DEFAULT 'rfid',
   `status` enum('active','inactive','lost','expired','available','archived') DEFAULT 'available',
   `issued_date` date DEFAULT NULL,
   `expiry_date` date DEFAULT NULL,
   `notes` text DEFAULT NULL,
-  `registered_at` timestamp NULL DEFAULT NULL,
-  `assigned_at` timestamp NULL DEFAULT NULL,
   `archive_reason` varchar(255) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `registered_at` timestamp NULL DEFAULT NULL,
+  `assigned_at` timestamp NULL DEFAULT NULL,
   `qr_code_path` varchar(255) DEFAULT NULL,
   `issued_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
@@ -1237,26 +768,10 @@ CREATE TABLE `rfid_cards` (
   KEY `idx_card_uid` (`card_uid`),
   KEY `idx_status` (`status`),
   KEY `idx_student_id` (`student_id`),
-  KEY `idx_available` (`status`, `student_id`),
+  KEY `idx_available` (`status`,`student_id`),
   CONSTRAINT `rfid_cards_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `rfid_cards`
---
-
-LOCK TABLES `rfid_cards` WRITE;
-/*!40000 ALTER TABLE `rfid_cards` DISABLE KEYS */;
--- [no seed data] rfid_cards is student-linked
-/*!40000 ALTER TABLE `rfid_cards` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `rfid_scan_logs`
---
-
-DROP TABLE IF EXISTS `rfid_scan_logs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `rfid_scan_logs` (
@@ -1277,22 +792,6 @@ CREATE TABLE `rfid_scan_logs` (
   KEY `idx_location` (`location`)
 ) ENGINE=InnoDB AUTO_INCREMENT=35 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `rfid_scan_logs`
---
-
-LOCK TABLES `rfid_scan_logs` WRITE;
-/*!40000 ALTER TABLE `rfid_scan_logs` DISABLE KEYS */;
--- [structure-only] rfid_scan_logs data omitted
-/*!40000 ALTER TABLE `rfid_scan_logs` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `status_tracker`
---
-
-DROP TABLE IF EXISTS `status_tracker`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `status_tracker` (
@@ -1313,22 +812,6 @@ CREATE TABLE `status_tracker` (
   CONSTRAINT `status_tracker_ibfk_2` FOREIGN KEY (`changed_by`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `status_tracker`
---
-
-LOCK TABLES `status_tracker` WRITE;
-/*!40000 ALTER TABLE `status_tracker` DISABLE KEYS */;
--- [no seed data] status_tracker is student-linked
-/*!40000 ALTER TABLE `status_tracker` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `student_ids`
---
-
-DROP TABLE IF EXISTS `student_ids`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `student_ids` (
@@ -1353,29 +836,32 @@ CREATE TABLE `student_ids` (
   KEY `idx_student_ids_rfid_card_id` (`rfid_card_id`),
   CONSTRAINT `fk_student_ids_rfid_card` FOREIGN KEY (`rfid_card_id`) REFERENCES `rfid_cards` (`id`) ON DELETE SET NULL,
   CONSTRAINT `student_ids_ibfk_1` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `student_ids`
---
-
-LOCK TABLES `student_ids` WRITE;
-/*!40000 ALTER TABLE `student_ids` DISABLE KEYS */;
--- [no seed data] student_ids is student-linked
-/*!40000 ALTER TABLE `student_ids` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `students`
---
-
-DROP TABLE IF EXISTS `students`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `student_notifications` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `student_id` int(11) NOT NULL,
+  `title` varchar(200) NOT NULL,
+  `message` text NOT NULL,
+  `type` varchar(50) DEFAULT 'info',
+  `is_read` tinyint(1) DEFAULT 0,
+  `related_doc_id` int(11) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `read_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_sn_student` (`student_id`),
+  KEY `idx_sn_read` (`is_read`),
+  CONSTRAINT `fk_sn_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `students` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
-  `student_number` varchar(20) DEFAULT '' COMMENT 'Enrollment department ID — assigned later',
+  `student_number` varchar(20) DEFAULT '' COMMENT 'Enrollment department ID -- assigned later',
   `first_name` varchar(50) NOT NULL,
   `middle_name` varchar(50) DEFAULT NULL,
   `last_name` varchar(50) NOT NULL,
@@ -1404,30 +890,13 @@ CREATE TABLE `students` (
   `mother_name` varchar(100) DEFAULT NULL,
   `father_name` varchar(100) DEFAULT NULL,
   `birth_country` varchar(60) DEFAULT NULL,
-  `previous_school` varchar(150) DEFAULT NULL COMMENT 'Name of previous school',
-  `school_year_graduated` varchar(20) DEFAULT NULL COMMENT 'School year graduated from previous school',
-  `last_year_level_completed` varchar(30) DEFAULT NULL COMMENT 'Last year level completed in previous school',
+  `graduation_date` date DEFAULT NULL COMMENT 'Date the degree was conferred',
   PRIMARY KEY (`id`),
   KEY `idx_student_number` (`student_number`),
   KEY `idx_status` (`status`),
   KEY `idx_course` (`course`)
-) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `students`
---
-
-LOCK TABLES `students` WRITE;
-/*!40000 ALTER TABLE `students` DISABLE KEYS */;
-/*!40000 ALTER TABLE `students` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `users`
---
-
-DROP TABLE IF EXISTS `users`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `users` (
@@ -1435,7 +904,7 @@ CREATE TABLE `users` (
   `email` varchar(100) NOT NULL,
   `password_hash` varchar(255) NOT NULL,
   `full_name` varchar(100) NOT NULL,
-  `role` enum('admin','registrar','staff','student','nurse') NOT NULL DEFAULT 'staff',
+  `role` enum('admin','registrar','staff','teacher','student','nurse') NOT NULL DEFAULT 'staff',
   `rfid_uid` varchar(20) DEFAULT NULL,
   `is_active` tinyint(1) DEFAULT 1,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -1450,71 +919,8 @@ CREATE TABLE `users` (
   KEY `idx_email` (`email`),
   KEY `idx_student_id` (`student_id`),
   CONSTRAINT `fk_users_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `users`
---
-
-LOCK TABLES `users` WRITE;
-/*!40000 ALTER TABLE `users` DISABLE KEYS */;
-INSERT INTO `users` (`id`, `email`, `password_hash`, `full_name`, `role`, `rfid_uid`, `is_active`, `created_at`, `updated_at`, `student_id`, `username`, `login_attempts`, `locked_until`) VALUES (1,'admin@bestlink.edu.ph','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','System Administrator','admin',NULL,1,'2026-07-07 10:42:45','2026-08-24 04:47:37',NULL,'ADM-001',0,NULL),(2,'registrar@bestlink.edu.ph','$2y$10$zj33OjRB93RcPZWd2/f4VudcEqzDCfZdLAajEcZQ7LABuuEKeqFyu','Registrar Staff','registrar',NULL,1,'2026-07-07 10:42:45','2026-08-26 16:02:51',NULL,'RGS-001',0,NULL),(3,'roldantiu89@gmail.com','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','Roldan Tiu','admin',NULL,1,'2026-08-11 11:40:30','2026-08-24 04:47:37',NULL,'ADM-002',0,NULL),(7,'norse@gmail.com','$2y$10$mg/TmAFfYjwZNW34o6IGHedMnnZ04hUmYgm5iGy7OvGAxtDEoGWee','norse','nurse',NULL,1,'2026-09-02 22:16:15','2026-09-02 22:17:05',NULL,NULL,0,NULL);
-/*!40000 ALTER TABLE `users` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
--- Table structure for table `student_notifications`
---
-
-DROP TABLE IF EXISTS `student_notifications`;
-CREATE TABLE `student_notifications` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `student_id` int(11) NOT NULL,
-  `title` varchar(200) NOT NULL,
-  `message` text NOT NULL,
-  `type` varchar(50) DEFAULT 'info',
-  `is_read` tinyint(1) DEFAULT 0,
-  `related_doc_id` int(11) DEFAULT NULL,
-  `created_by` int(11) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `read_at` timestamp NULL DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `idx_sn_student` (`student_id`),
-  KEY `idx_sn_read` (`is_read`),
-  CONSTRAINT `fk_sn_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
-LOCK TABLES `student_notifications` WRITE;
-UNLOCK TABLES;
-
---
--- Table structure for table `document_ai_audit`
---
-
-DROP TABLE IF EXISTS `document_ai_audit`;
-CREATE TABLE `document_ai_audit` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `document_id` int(11) DEFAULT NULL,
-  `student_id` int(11) DEFAULT NULL,
-  `action` varchar(50) NOT NULL,
-  `input_summary` text DEFAULT NULL,
-  `result` text DEFAULT NULL,
-  `confidence` decimal(3,2) DEFAULT NULL,
-  `created_by` int(11) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `idx_daa_document` (`document_id`),
-  KEY `idx_daa_student` (`student_id`),
-  KEY `idx_daa_action` (`action`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
-LOCK TABLES `document_ai_audit` WRITE;
-UNLOCK TABLES;
-
---
--- Dumping routines for database 'registrar_ai'
---
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -1525,4 +931,25 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-09-22 11:18:12
+
+-- ---------------------------------------------------------------------------
+-- Seed data. document_catalog is what the document desk lists; without it
+-- the desk renders empty and no document can be requested. The users rows
+-- are the initial accounts; rotate these passwords before going live.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO `document_catalog` (`id`, `sku`, `name`, `description`, `base_fee`, `sla_days`, `fee_type`, `requirement`, `is_active`, `created_at`) VALUES
+(1,'DOC-TOR','Transcript of Records','Complete academic record (TOR)','250.00',3,'per_page','Scanned copy of valid ID',1,'2026-08-26 11:26:51'),
+(2,'DOC-COE','Certificate of Enrollment','Proof of current enrollment','100.00',1,'flat',NULL,1,'2026-08-26 11:26:51'),
+(3,'DOC-GM','Certificate of Good Moral','Good moral character certificate','150.00',3,'flat','No pending disciplinary cases',1,'2026-08-26 11:26:51'),
+(4,'DOC-DIPLOMA','Diploma Replacement','Replacement of lost diploma','1000.00',5,'flat','Notarized Affidavit of Loss',1,'2026-08-26 11:26:51'),
+(5,'DOC-CTC','Certified True Copy','Certified true copy of a record','50.00',2,'per_page',NULL,1,'2026-08-26 11:26:51'),
+(6,'DOC-HD','Honorable Dismissal','Transfer / honorable dismissal','300.00',10,'flat',NULL,1,'2026-08-26 11:26:51'),
+(7,'DOC-CD','Course Description','Subject syllabus / course description','100.00',1,'per_syllabus',NULL,1,'2026-08-26 11:26:51');
+
+INSERT INTO `users` (`id`, `email`, `password_hash`, `full_name`, `role`, `rfid_uid`, `is_active`, `created_at`, `updated_at`, `student_id`, `username`, `login_attempts`, `locked_until`) VALUES (1,'admin@bestlink.edu.ph','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','System Administrator','admin',NULL,1,'2026-07-07 10:42:45','2026-08-24 04:47:37',NULL,'ADM-001',0,NULL),(2,'registrar@bestlink.edu.ph','$2y$10$zj33OjRB93RcPZWd2/f4VudcEqzDCfZdLAajEcZQ7LABuuEKeqFyu','Registrar Staff','registrar',NULL,1,'2026-07-07 10:42:45','2026-08-26 16:02:51',NULL,'RGS-001',0,NULL),(3,'roldantiu89@gmail.com','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','Roldan Tiu','admin',NULL,1,'2026-08-11 11:40:30','2026-08-24 04:47:37',NULL,'ADM-002',0,NULL),(7,'norse@gmail.com','$2y$10$mg/TmAFfYjwZNW34o6IGHedMnnZ04hUmYgm5iGy7OvGAxtDEoGWee','norse','nurse',NULL,1,'2026-09-02 22:16:15','2026-09-02 22:17:05',NULL,NULL,0,NULL);
+
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- End of registrar_ai.sql
