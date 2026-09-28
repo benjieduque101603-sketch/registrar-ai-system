@@ -1178,7 +1178,7 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 /* Edit: the card itself, as a record. Read-only, so it is visually separate
    from the fields below — you can tell at a glance what you cannot change. */
 #editModal .rc-record{
-    margin:0 0 18px;padding:14px 16px 12px;border:1px solid #dbeafe;border-radius:13px;
+    margin:0 0 16px;padding:14px 16px 12px;border:1px solid #dbeafe;border-radius:13px;
     background:linear-gradient(150deg,#eff6ff,#fff 78%);
 }
 #editModal .rc-record-top{display:flex;align-items:center;gap:12px}
@@ -1221,12 +1221,16 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
    let a card be saved as status=active with reason=graduated — two controls
    describing the same fact, with no stated relationship. Each tile writes
    BOTH fields, so the pair cannot disagree. */
-#editModal .rc-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+#editModal .rc-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
 #editModal .rc-choice{position:relative;display:block;margin:0;cursor:pointer}
+/* Seven tiles in three columns leaves an orphan in the last row with two empty
+   cells beside it. Letting the final "Something else" tile span the row closes
+   the hole and reads correctly as the catch-all it is. */
+#editModal .rc-choice:last-child{grid-column:1/-1}
 /* Kept focusable (not display:none) so the group is keyboard-navigable. */
 #editModal .rc-choice-input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
 #editModal .rc-choice-body{
-    display:flex;flex-direction:column;gap:2px;height:100%;padding:11px 12px;
+    display:flex;flex-direction:column;gap:3px;height:100%;padding:12px 13px;
     border:1.5px solid #e2e8f0;border-radius:11px;background:#fff;
     transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;
 }
@@ -1246,7 +1250,7 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 
 /* Consequence: states what saving will actually do, before saving. */
 #editModal .rc-effect{
-    display:flex;align-items:flex-start;gap:8px;margin:11px 0 0;padding:10px 12px;
+    display:flex;align-items:flex-start;gap:8px;margin:14px 0 0;padding:10px 12px;
     border:1px solid #e2e8f0;border-radius:10px;background:#f8faff;
     font-size:12px;line-height:1.5;color:#475569;
 }
@@ -1270,9 +1274,11 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 #editModal .rc-previous b{font-weight:700;color:#334155}
 #editModal .rc-previous[hidden]{display:none}
 
-/* Fields that only make sense for some outcomes. */
+/* Fields that only make sense for some outcomes. The rhythm matches the gap
+   above (14px) rather than living as an inline style, which could not be
+   overridden and drifted out of step with the rest of the modal. */
 #editModal .rc-conditional[hidden]{display:none}
-#editModal .rc-conditional{animation:rcFade .16s ease}
+#editModal .rc-conditional{animation:rcFade .16s ease;margin:14px 0 0 !important}
 @keyframes rcFade{from{opacity:0}to{opacity:1}}
 #editModal .rc-required{color:#dc2626;font-weight:700}
 @media(max-width:560px){#editModal .rc-choices{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -1826,12 +1832,12 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
                      really happen. -->
                 <div class="rc-effect" id="editEffect" role="status" aria-live="polite"></div>
 
-                <div class="form-group rc-conditional" id="editExpiryWrap" hidden style="margin-top:12px">
+                <div class="form-group rc-conditional" id="editExpiryWrap" hidden>
                     <label for="editExpiryDate">Expiry date</label>
                     <input type="date" id="editExpiryDate" class="form-control" />
                 </div>
 
-                <div class="form-group rc-conditional" id="editNotesWrap" style="margin-top:12px">
+                <div class="form-group rc-conditional" id="editNotesWrap">
                     <label for="editNotes">Notes <span class="rc-required" id="editNotesRequired" hidden>*</span></label>
                     <textarea id="editNotes" class="form-control" rows="3" placeholder="Anything the next person should know about this card."></textarea>
                 </div>
