@@ -40,9 +40,20 @@ $_SESSION['full_name']     = (string) $u['full_name'];
 $_SESSION['email']         = '';
 $_SESSION['last_activity'] = time();
 
+// A web request runs with the CWD set to the directory holding the entry
+// script, so '../includes/sidebar.php' resolves. The CLI does not, so
+// without this the relative includes fail, the page renders with no
+// header and no sidebar, and every assertion about chrome passes
+// vacuously. The includes are warnings, not fatal errors, which is why
+// this went unnoticed.
+$cwd = getcwd();
+chdir(__DIR__ . '/../registrar');
+
 ob_start();
 include __DIR__ . '/../registrar/status-tracker.php';
 $html = ob_get_clean();
+
+chdir($cwd);
 
 $out = __DIR__ . '/../st_render.html';
 file_put_contents($out, $html);
@@ -60,6 +71,20 @@ $expect = [
     'change form'     => 'Record a status change',
     'reason field'    => 'chReason',
     'attention label' => 'Activity check',
+    // The footer is what loads the sidebar's behaviour. Its collapse
+    // button and mobile drawer are rendered by includes/sidebar.php,
+    // so a page that renders the sidebar but not the footer looks
+    // complete and does nothing when the button is pressed - which is
+    // exactly the bug this page shipped for a long time.
+    //
+    // Matched on the src attribute, not the bare filename. The comment
+    // above the include in this page names each script it was missing,
+    // and a bare-name search finds its own explanation and passes.
+    'collapse button' => 'id="sidebarCollapse"',
+    'sidebar script'  => 'src="../js/sidebar.js"',
+    'logout confirm'  => 'src="../js/logout.js"',
+    'idle timeout'    => 'src="../js/session-warning.js"',
+    'document closed' => '</html>',
 ];
 // Checked as markup, not as bare text. The explanatory comments in this
 // file quote the old button labels on purpose, so a substring search

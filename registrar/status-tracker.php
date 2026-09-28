@@ -1113,3 +1113,24 @@ window.submitStatusChange=submitStatusChange;
 })();
 </script>
 
+<?php
+// The shared footer. This page was ending here, which left the whole
+// bottom of the app missing with it:
+//
+//   js/sidebar.js         the collapse button and the mobile drawer were
+//                         rendered by includes/sidebar.php but had nothing
+//                         listening to them, so they did nothing
+//   js/session-warning.js the idle auto-logout, so a left-open session
+//                         never timed itself out on this page alone
+//   js/logout.js          the logout confirmation every other page asks
+//                         for (the link still navigated; it just stopped
+//                         asking first)
+//   js/auth.js            the auth checks
+//   </body></html>        the document was never closed
+//
+// Only this page and the two standalone ones - rfid-kiosk.php and
+// smtp-debug.php, which have no sidebar and want no chrome - were
+// missing it.
+include '../includes/footer.php';
+?>
+
