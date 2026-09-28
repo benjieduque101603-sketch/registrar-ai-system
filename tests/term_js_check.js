@@ -37,6 +37,7 @@ try {
 const required = [
     'openGrades', 'closeGrades', 'addGradeRow', 'removeGradeRow',
     'updatePreview', 'saveGrades', 'openAudit', 'closeAudit',
+    'openView', 'closeView', 'viewRowHtml', 'viewStateLabel', 'ratingBand',
     'previewGwa', 'readGrid', 'gradeRowHtml', 'findingHtml', 'esc', 'band',
 ];
 for (const fn of required) {

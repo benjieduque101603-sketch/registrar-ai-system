@@ -54,6 +54,15 @@ foreach ($sample as $i => $s) {
         ];
     }
     $computed = termGwa($subjects);
+    // The unit count is summed from the subjects rather than hardcoded
+    // beside them. The page's own roster sums it, so a sample that
+    // carried a literal would put a figure on the screenshot that the
+    // page would never produce for that subject list.
+    $summedUnits = 0.0;
+    foreach ($subjects as $sub) {
+        $summedUnits += max(0.0, (float) $sub['units']);
+    }
+    $units = $summedUnits;
     $state === 'complete' ? $termComplete++ : $termMissing++;
     $termUnits += $units;
 
@@ -156,6 +165,7 @@ window.addEventListener('load', function () {
     if (open) {
       try {
         if (open === 'grades') { openGrades(AH.rows[0].id); }
+        if (open === 'view')   { openView(AH.rows[0].id); }
         if (open === 'audit')  { openAudit(); }
       } catch (e) {
         var err = document.createElement('pre');
@@ -166,6 +176,73 @@ window.addEventListener('load', function () {
       }
     }
     var out = [];
+    // The dialogs claimed aria-modal="true" while moving no focus at all,
+    // so this is measured rather than read from the CSS: open from a real
+    // button, check where focus landed, close, check it came back. A
+    // headless DOM assertion is not available here - no jsdom in the
+    // project - so the browser itself is the instrument.
+    function focusReport() {
+      var lines = [];
+      var opener = document.createElement('button');
+      opener.id = 'focus-probe-opener';
+      opener.textContent = 'probe';
+      document.body.appendChild(opener);
+      opener.focus();
+      var before = document.activeElement === opener;
+      openAudit();
+      var inDialog = document.getElementById('auditModal').contains(document.activeElement);
+      var landed = document.activeElement.id || document.activeElement.tagName;
+      closeAudit();
+      var restored = document.activeElement === opener;
+      opener.remove();
+      lines.push('  focus before open: ' + (before ? 'on opener' : 'NOT on opener'));
+      lines.push('  focus after open : ' + landed + (inDialog ? ' (inside dialog)' : ' ESCAPED'));
+      lines.push('  focus after close: ' + (restored ? 'returned to opener' : 'NOT restored'));
+      return lines;
+    }
+    try { out = out.concat(focusReport()); } catch (e) {
+      out.push('  FOCUS PROBE FAILED: ' + e.message);
+    }
+
+    // Search and the unreadable-term warning, driven for real. The term
+    // box is free text, so the two things worth proving are that a
+    // query narrows the roster and that a term the page cannot read
+    // says so instead of quietly showing a different one.
+    function searchReport() {
+      var lines = [];
+      var box = document.getElementById('rosterSearch');
+      var clear = document.getElementById('ahSearchClear');
+      var rows = document.querySelectorAll('tbody tr[data-ah-search]');
+      var readout = document.getElementById('ahCountReadout');
+      if (!box || !rows.length) return ['  SEARCH PROBE: no search box or rows'];
+
+      lines.push('  clear button hidden when empty: ' + (clear && clear.hidden));
+      lines.push('  readout at rest: "' + (readout ? readout.textContent.trim() : '?') + '"');
+
+      box.value = 'mendoza';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      var shown = Array.prototype.filter.call(rows, function (r) { return !r.hidden; }).length;
+      lines.push('  "mendoza" -> ' + shown + ' of ' + rows.length + ' rows, readout "'
+        + (readout ? readout.textContent.trim() : '?') + '"');
+      lines.push('  clear button appears: ' + (clear && !clear.hidden));
+
+      box.value = 'zzzz';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      var empty = document.getElementById('ahSearchEmpty');
+      lines.push('  "zzzz" -> 0 rows, empty state shown: ' + (empty && !empty.hidden));
+      if (empty && !empty.hidden) {
+        lines.push('  empty state says: "' + empty.textContent.replace(/\s+/g, ' ').trim() + '"');
+      }
+
+      clear.click();
+      lines.push('  after clear -> ' +
+        Array.prototype.filter.call(rows, function (r) { return !r.hidden; }).length +
+        ' of ' + rows.length + ' rows');
+      return lines;
+    }
+    try { out = out.concat(searchReport()); } catch (e) {
+      out.push('  SEARCH PROBE FAILED: ' + e.message);
+    }
     function box(sel) {
       var el = document.querySelector(sel);
       if (!el) { out.push(sel + ': MISSING'); return; }

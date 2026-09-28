@@ -83,31 +83,149 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
     white-space: nowrap;
 }
 
-/* ── Filter bar ─────────────────────────────────────────────
-   A grid, not a flex row, so the four controls line up on one
-   baseline and stay aligned as the viewport narrows. */
-.ah-filters {
-    display: grid; align-items: end; gap: 12px; margin-bottom: 18px;
-    padding: 17px 19px; border: 1px solid var(--ah-line);
-    border-radius: 15px; background: #fff;
-    box-shadow: 0 7px 24px rgba(15, 23, 42, .04);
-    grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+/* ── Roster controls ────────────────────────────────────────
+   These sit inside the roster panel, not above it. The panel is the
+   one card on the page that the work happens in, so the term that
+   says which term the table holds, and the search that says which
+   rows you are looking at, belong to it rather than floating over
+   the page between the summary and the table. */
+.ah-panel-controls {
+    display: grid; align-items: end; gap: 14px 24px;
+    padding: 14px 18px;
+    /* Tinted, and no rule of its own. The panel head already draws the
+       divider before the table; a second one here would put two hairlines
+       a few pixels apart and read as a mistake. The tint is what marks
+       these as the subject row. */
+    background: linear-gradient(180deg, #f4f8ff, #eef4ff);
+    grid-template-columns: minmax(220px, 290px) 1fr minmax(230px, 320px);
+    /* Named areas, not auto-placement. Auto-placement looks right at
+       full width and then stacks the search under the term box at
+       every narrower one, because the readout spans a row and pushes
+       the third cell into the first column. That was a real bug here,
+       and a wide screenshot does not show it. */
+    grid-template-areas: "term readout search";
 }
-.ah-field { min-width: 0; }
-.ah-field > label {
+.ah-term-field { grid-area: term; min-width: 0; }
+.ah-term-field > label {
     display: block; margin: 0 0 6px; color: var(--ah-copy);
     font-size: 10.5px; font-weight: 800; letter-spacing: .035em;
 }
-.ah-field .form-control { width: 100%; height: 40px; padding: 8px 10px; box-sizing: border-box; }
-.ah-filters .form-control:focus {
+/* The term is the one figure on this page that is a number, so it is
+   set in the roster's tabular figures. Typing "2026-2028 1st" should
+   line up the way a column of years lines up. */
+/* The input and its submit button are one control.
+
+   The button is load-bearing, not decoration. The form holds two
+   fields that block implicit submission - the term box (text) and the
+   search box (search) - and a form with more than one such field and no
+   submit button ignores Enter entirely. So typing a term and pressing
+   Enter did nothing, and there was no way to commit a new term at all
+   except by editing the URL. Giving the form a submit button is what
+   makes Enter work again.
+
+   It sits inside the field rather than beside it so the row keeps one
+   line: a separate button would have made the term cell taller than
+   the other two and undone the baseline alignment. */
+.ah-term-control { position: relative; display: flex; }
+.ah-term-control .form-control {
+    width: 100%; height: 42px; padding: 9px 46px 9px 12px; box-sizing: border-box;
+    font-variant-numeric: tabular-nums; font-weight: 700;
+    letter-spacing: .01em;
+}
+.ah-term-submit {
+    position: absolute; top: 0; right: 0;
+    width: 40px; height: 42px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 0 8px 8px 0;
+    background: transparent; color: var(--ah-quiet);
+    font-size: 12px; cursor: pointer;
+    transition: background .12s, color .12s;
+}
+.ah-term-submit:hover { background: #dbeafe; color: #1d4ed8; }
+.ah-term-submit:focus-visible {
+    outline: 2px solid #2563eb; outline-offset: -3px;
+    border-radius: 0 8px 8px 0; color: #1d4ed8;
+}
+.ah-term-field .form-control:focus {
     border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, .12);
 }
-/* What the current selection adds up to, in the bar's own language. */
-.ah-term-readout { align-self: center; text-align: right; line-height: 1.45; white-space: nowrap; }
-.ah-term-readout strong { display: block; font-size: 14px; color: var(--ah-deep); font-weight: 800; }
-.ah-term-readout span { font-size: 11px; color: var(--ah-quiet); }
-.ah-term-readout a { color: #1d4ed8; font-size: 11px; font-weight: 700; text-decoration: none; }
-.ah-term-readout a:hover { text-decoration: underline; }
+/* Off the page, still read out. The term box needs to say what it
+   accepts, but a third line under one cell is what pushed the search
+   box out of alignment the first time this bar was built. */
+.ah-sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+/* The term, restated by the page once it has resolved what was typed.
+   It sits between the box and the search because it is the answer to
+   the box, not a heading for the table. */
+.ah-term-readout { grid-area: readout; align-self: end; padding-bottom: 2px; line-height: 1.4; }
+.ah-term-readout strong {
+    display: block; font-size: 17px; color: var(--ah-deep);
+    font-weight: 800; letter-spacing: -.01em;
+}
+.ah-term-readout span { font-size: 11.5px; color: var(--ah-quiet); }
+
+/* ── Search ──────────────────────────────────────────────────
+   A ruled input with a leading mark, so it reads as a line of the
+   page rather than another control. */
+.ah-search { grid-area: search; min-width: 0; }
+.ah-search-label {
+    display: block; margin: 0 0 6px; color: var(--ah-copy);
+    font-size: 10.5px; font-weight: 800; letter-spacing: .035em;
+}
+.ah-search-box { position: relative; display: flex; align-items: center; }
+.ah-search-box > i {
+    position: absolute; left: 12px; color: var(--ah-faint);
+    font-size: 12px; pointer-events: none;
+}
+.ah-search-box input {
+    width: 100%; height: 42px; padding: 9px 34px 9px 32px;
+    box-sizing: border-box; border: 1px solid var(--ah-line);
+    border-radius: 10px; background: #fff; color: var(--ah-copy);
+    font-size: 12.5px;
+}
+.ah-search-box input:focus {
+    border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, .12);
+    outline: none;
+}
+.ah-search-clear {
+    position: absolute; right: 7px;
+    display: grid; place-items: center;
+    width: 26px; height: 26px; padding: 0;
+    border: 0; border-radius: 50%; background: transparent;
+    color: var(--ah-faint); font-size: 12px; cursor: pointer;
+}
+.ah-search-clear:hover { background: #eff6ff; color: var(--ah-deep); }
+.ah-search-clear:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+/* display:grid above outranks the user agent's [hidden] { display:none },
+   so the attribute alone would not hide this button. */
+.ah-search-clear[hidden] { display: none; }
+
+/* A term that could not be read. It states what happened and what
+   the page did instead, because the alternative - silently showing
+   a different term - is how grades end up on the wrong record. It
+   sits under the controls and above the table, so it interrupts the
+   one place the reader has to act. */
+.ah-term-warning {
+    display: flex; align-items: flex-start; gap: 8px;
+    margin: 12px 18px 0; padding: 10px 13px;
+    border: 1px solid #fde68a; border-left: 3px solid var(--ah-warn);
+    border-radius: 10px; background: #fffbeb;
+    color: #92400e; font-size: 12px; line-height: 1.5;
+}
+.ah-term-warning i { margin-top: 1px; color: var(--ah-warn); }
+
+/* No match for a search. Distinct from the empty term: the roster is
+   there, the query is what missed. The selector matches the panel's
+   own cell rule on purpose - .ah-panel .table td - so it wins on
+   being later rather than on !important. */
+.ah-panel .table tbody.ah-search-empty td { padding: 34px 16px; text-align: center; }
+.ah-search-empty h3 {
+    margin: 0 0 5px; color: var(--ah-deep); font-size: 14px; font-weight: 800;
+}
+.ah-search-empty p { margin: 0; color: var(--ah-quiet); font-size: 12px; }
 
 /* ── Stat strip ──────────────────────────────────────────────
    One connected panel, hairline dividers, an icon tinted from the
@@ -130,13 +248,49 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
     --accent-bar: linear-gradient(90deg, #2563eb, #60a5fa);
 }
 .ah-stat:last-child { border-right: 0; }
+/* Five figures, five hues. The colour is not decoration here: it is how
+   the row says which number you have to act on. Complete is settled
+   green, Awaiting is the amber one that wants your attention, and the
+   two GWA cards are the cool end because they are outcomes rather than
+   tasks.
+
+   Every card carries an explicit tone. There is no default hue, so a
+   card cannot lose its colour by forgetting an attribute.
+
+   The bars all start at the 600 step and fade to the 400 step. Amber
+   used to start at 700, which is a brown, and read as the one muddy
+   bar in the row. */
+.ah-stat[data-tone="view"] {
+    --accent: #1d4ed8; --accent-rgb: 29, 78, 216;
+    --accent-soft: #dbeafe; --accent-bar: linear-gradient(90deg, #2563eb, #60a5fa);
+}
+.ah-stat[data-tone="done"] {
+    --accent: #15803d; --accent-rgb: 21, 128, 61;
+    --accent-soft: #dcfce7; --accent-bar: linear-gradient(90deg, #16a34a, #4ade80);
+}
+.ah-stat[data-tone="wait"] {
+    --accent: #b45309; --accent-rgb: 180, 83, 9;
+    --accent-soft: #fef3c7; --accent-bar: linear-gradient(90deg, #d97706, #fbbf24);
+}
+.ah-stat[data-tone="mean"] {
+    --accent: #0f766e; --accent-rgb: 15, 118, 110;
+    --accent-soft: #ccfbf1; --accent-bar: linear-gradient(90deg, #0d9488, #5eead4);
+}
+.ah-stat[data-tone="violet"] {
+    --accent: #7c3aed; --accent-rgb: 124, 58, 237;
+    --accent-soft: #ede9fe; --accent-bar: linear-gradient(90deg, #7c3aed, #a78bfa);
+}
 /* Nothing to report: the figure is absent, so the cell steps back
-   rather than showing a confident zero. */
-.ah-stat[data-empty="true"] { --accent: #64748b; --accent-soft: #f1f5f9; --accent-bar: linear-gradient(90deg, #cbd5e1, #e2e8f0); }
+   rather than showing a confident zero. It steps back in weight, not
+   in hue - a card that greys out loses the one signal the row exists
+   to give. The hue survives, the figure and the bar go quiet. */
+.ah-stat[data-empty="true"] .ah-stat-icon {
+    background: rgba(var(--accent-rgb), .12); color: rgba(var(--accent-rgb), .5);
+}
 .ah-stat[data-empty="true"] .ah-stat-value { color: #94a3b8; }
-.ah-stat[data-tone="done"] { --accent: #15803d; --accent-soft: #dcfce7; --accent-bar: linear-gradient(90deg, #16a34a, #4ade80); }
-.ah-stat[data-tone="wait"] { --accent: #b45309; --accent-soft: #fef3c7; --accent-bar: linear-gradient(90deg, #b45309, #fbbf24); }
-.ah-stat[data-tone="violet"] { --accent: #7c3aed; --accent-soft: #ede9fe; --accent-bar: linear-gradient(90deg, #7c3aed, #a78bfa); }
+.ah-stat[data-empty="true"]::after {
+    background: linear-gradient(90deg, rgba(var(--accent-rgb), .22), rgba(var(--accent-rgb), .10));
+}
 .ah-stat::after {
     content: ""; position: absolute; left: 22px; right: 22px; bottom: 0;
     height: 3px; background: var(--accent-bar);
@@ -353,6 +507,71 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
 .ah-col-rating { width: 148px; }
 .ah-col-result { width: 132px; }
 .ah-col-drop { width: 44px; }
+
+/* ── Read-only grade record ─────────────────────────────────────
+   Shaped as a transcript rather than a form. The rows are ruled like
+   a ledger, the figures are tabular, and the record ends in a total
+   under a double rule - the one place this dialog spends any
+   emphasis, because a ledger that does not total is a list.
+
+   There is no .form-control anywhere in this dialog. That is the
+   design: a registrar can tell they cannot type here without reading
+   a single word of copy. */
+.ah-actions { display: flex; gap: 7px; justify-content: flex-end; }
+.ah-view-grid { width: 100%; border-collapse: collapse; margin-top: 14px; min-width: 430px; }
+.ah-view-grid th {
+    text-align: left; padding: 8px 11px;
+    border-bottom: 1px solid var(--ah-line);
+    color: var(--ah-quiet); font-size: 10px; font-weight: 800;
+    letter-spacing: .05em; text-transform: uppercase;
+}
+.ah-view-grid td {
+    padding: 11px; border-bottom: 1px solid #eef1f5;
+    color: var(--ah-copy); font-size: 12.5px; vertical-align: middle;
+}
+.ah-view-grid th.ah-col-units,
+.ah-view-grid th.ah-col-rating,
+.ah-view-grid th.ah-col-result,
+.ah-view-grid td.ah-col-units,
+.ah-view-grid td.ah-col-rating { text-align: center; }
+.ah-view-grid td .ah-num { font-variant-numeric: tabular-nums; }
+.ah-view-code {
+    color: var(--ah-faint); font-size: 10.5px;
+    font-variant-numeric: tabular-nums; letter-spacing: .02em;
+}
+.ah-view-rating {
+    display: inline-block; min-width: 62px; padding: 3px 9px;
+    border: 1px solid transparent; border-radius: 8px;
+    font-size: 12.5px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+/* The same three bands the editor and the roster use, so a rating
+   means one thing everywhere on the page. */
+.ah-view-rating[data-band="good"] { background: var(--ah-good-soft); color: var(--ah-good); }
+.ah-view-rating[data-band="warn"] { background: var(--ah-warn-soft); color: var(--ah-warn); }
+.ah-view-rating[data-band="poor"] { background: var(--ah-poor-soft); color: var(--ah-poor); }
+/* Unrated is a word, not a gap. A blank cell in a ledger reads as
+   "nothing here", which is the opposite of an outstanding rating. */
+.ah-view-rating[data-band="none"] {
+    background: #f1f5f9; color: var(--ah-faint);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .01em;
+}
+.ah-view-result {
+    font-size: 10.5px; font-weight: 800; letter-spacing: .03em;
+    text-transform: capitalize;
+}
+.ah-view-blank, .ah-view-blank-inline { color: var(--ah-faint); font-style: italic; }
+.ah-view-blank { text-align: center; padding: 26px 11px !important; }
+/* The bottom line. A printed transcript closes its total off with a
+   double rule, and this is the one place the dialog spends any
+   emphasis - so it is a real 4px double, not a hairline that reads as
+   an accident. */
+.ah-view-total td {
+    border-bottom: 0; padding-top: 14px; padding-bottom: 14px;
+    border-top: 4px double #b6c2d4;
+    color: var(--ah-deep); font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
 .ah-drop {
     display: grid; place-items: center; width: 30px; height: 30px;
     border: none; border-radius: 8px; background: transparent;
@@ -428,6 +647,10 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
 .ah-empty .btn:focus-visible {
     outline: 2px solid #2563eb; outline-offset: 2px;
 }
+/* The audit heading is focused by script, not by Tab, so :focus-visible
+   is unreliable there - and an element that receives focus silently
+   still needs to show where focus went. */
+.ah-dialog-head h3:focus { outline: 2px solid #2563eb; outline-offset: 3px; border-radius: 6px; }
 
 /* ── Responsive ─────────────────────────────────────────────
    The roster is a wide table, so below the tablet it scrolls
@@ -436,8 +659,16 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
    student would be slower to read down than a table is to scan
    across. */
 @media (max-width: 1100px) {
-    .ah-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .ah-term-readout { grid-column: 1 / -1; text-align: left; }
+    /* Term and search side by side; the readout takes the row under
+       them. It keeps the full width to sit in because it is the
+       statement of which term is loaded, and it must stay readable
+       at every width. */
+    .ah-panel-controls {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas:
+            "term search"
+            "readout readout";
+    }
 }
 @media (max-width: 900px) {
     .ah-header { flex-direction: column; align-items: stretch; }
@@ -449,7 +680,10 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
     .ah-stat-label { margin-top: 0; }
 }
 @media (max-width: 620px) {
-    .ah-filters { grid-template-columns: minmax(0, 1fr); }
+    .ah-panel-controls {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "term" "readout" "search";
+    }
     .ah-stats { grid-template-columns: minmax(0, 1fr); }
     .ah-stat { border-right: 0; }
     .ah-dialog-body { padding: 14px; }

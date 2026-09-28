@@ -58,11 +58,61 @@ foreach ([$thisYear . '-' . $thisYear, $thisYear . '-' . ($thisYear + 1), $thisY
 }
 rsort($years);
 
-$sy  = isset($_GET['sy'])  ? trim((string) $_GET['sy'])  : '';
-$sem = isset($_GET['sem']) ? trim((string) $_GET['sem']) : '1st';
+// ── Which term ──────────────────────────────────────────────────
+// The term is typed, not chosen from a list. A registrar works in
+// terms, and "2026-2028 1st" is how they say one out loud; making
+// them open a dropdown to find the string they already know was the
+// friction.
+//
+// Typing it means it can be wrong, so the parser is written to be
+// forgiving about the shape and strict about the result. "2026-2028",
+// "1st", "2026-2028 1st", "1st 2026-2028" and "2026-2028, 1st" all
+// land on the same term, because a registrar should not have to
+// remember which order the box was in.
+//
+// An unrecognised year is not silently swapped for the newest one.
+// That would show a populated roster for a term nobody asked for,
+// which is the one failure a grading screen must not have: the
+// registrar would enter real grades against the wrong term. It falls
+// back to the newest year and says so.
+$SEMESTERS = ['1st', '2nd', 'Summer'];
+
+$termQuery = isset($_GET['term']) ? trim((string) $_GET['term']) : '';
+$sy  = '';
+$sem = '1st';
+$termProblem = '';
+
+if ($termQuery !== '') {
+    // Pull the year out by pattern, the semester out by its own name.
+    if (preg_match('/(\d{4})\s*[-–—\/]\s*(\d{2,4})/', $termQuery, $m)) {
+        $sy = $m[1] . '-' . $m[2];
+    }
+    foreach ($SEMESTERS as $candidate) {
+        // Case-insensitive so "1ST" and "summer" resolve, and matched
+        // on a boundary so "1st" cannot be found inside a longer word.
+        if (preg_match('/(?<![a-z0-9])' . strtolower($candidate) . '(?![a-z0-9])/i', $termQuery)) {
+            $sem = $candidate;
+            break;
+        }
+    }
+    if ($sy !== '' && !in_array($sy, $years, true)) {
+        $termProblem = 'There are no records for ' . htmlspecialchars($sy)
+            . ' yet. Showing the most recent term instead.';
+        $sy = '';
+    }
+    if ($sy === '' && $termProblem === '') {
+        $termProblem = 'Could not read a school year from "' . htmlspecialchars($termQuery)
+            . '". Try a year like 2026-2028, optionally with 1st, 2nd or Summer.';
+    }
+}
+
 if ($sy === '' && $years) {
     $sy = $years[0];
 }
+
+// The canonical string, so the box always shows a term the page can
+// actually resolve rather than echoing back a typo.
+$termCanonical = $sy . ' ' . $sem;
 
 // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Roster filters ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
 // Grouped by program and year level, with section as an optional filter.
@@ -195,6 +245,39 @@ foreach ($visible as $r) {
     ];
 }
 
+// The screenshot harness stands a sample roster in for the live one.
+//
+// The live database holds a single student, and one row cannot show a
+// broken grid, a ledger with gaps in it, or a term that is half graded
+// - which is the whole reason the harness builds a sample at all. The
+// branch fires only when tests/ah_shot.php defines the constant; with
+// nothing defined this is the database result, unchanged.
+//
+// The career GWA below is still read from the database, because it is
+// computed over every term the filtered students have and a sample
+// roster has no history to compute it from. A screenshot therefore shows
+// a real career figure above a sample roster. That is a property of the
+// harness, not of the page, and it is why these images are for looking
+// at layout and not at data.
+if (defined('AH_SHOT_ROWS')) {
+    $rows           = json_decode(AH_SHOT_ROWS, true);
+    $termComplete   = 0;
+    $termMissing    = 0;
+    $termUnits      = 0.0;
+    $rosterForAudit = [];
+    foreach ($rows as $r) {
+        $r['state'] === 'complete' ? $termComplete++ : $termMissing++;
+        $termUnits += (float) $r['units'];
+        $rosterForAudit[] = [
+            'name'     => $r['name'],
+            'number'   => $r['number'],
+            'gwa'      => $r['stored'],
+            'subjects' => $r['subjects'],
+        ];
+    }
+    $visible = array_map(static fn($r) => ['id' => $r['id']], $rows);
+}
+
 $audit = termAudit($sy, $sem, $rosterForAudit);
 
 // Career GWA across every term on file for the filtered roster, so the
@@ -284,6 +367,14 @@ $payload = json_encode([
         'section'  => $r['section'],
         'record'   => $r['record'],
         'subjects' => $r['subjects'],
+        // The read-only view shows the same figures the roster column
+        // shows, so they travel in the payload rather than being
+        // recomputed in the browser. A modal that disagreed with the
+        // table beside it would be worse than no modal.
+        'gwa'      => $r['gwa'],
+        'units'    => $r['units'],
+        'state'    => $r['state'],
+        'missing'  => $r['missing'],
     ], $rows),
 ], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
 
@@ -324,69 +415,29 @@ include '../includes/sidebar.php';
 </header>
 
 <?php
-// A form that navigates on change. Reloading rather than filtering in
-// place keeps the term in the URL, so one term's view can be shared and
-// the back button returns to the previous term.
+// The term and the search are not a bar of their own. They are the
+// roster's own controls, so they live inside the roster panel: the term
+// says which term this table is, and the search says which rows of it
+// you are looking at. Sitting them between the header and the summary
+// made them read as a separate thing, and it is not one.
+//
+// The term still submits as a GET, so the URL names the term: one
+// term's roster can be shared, and Back returns to the previous one.
 ?>
-<form class="ah-filters" method="get" action="academic-history.php" id="termForm">
-    <div class="ah-field">
-        <label for="fltSy">School year</label>
-        <select class="form-control" name="sy" id="fltSy" onchange="this.form.submit()">
-            <?php foreach ($years as $y): ?>
-                <option value="<?= htmlspecialchars($y) ?>"<?= $y === $sy ? ' selected' : '' ?>>
-                    <?= htmlspecialchars($y) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="ah-field">
-        <label for="fltSem">Semester</label>
-        <select class="form-control" name="sem" id="fltSem" onchange="this.form.submit()">
-            <?php foreach (['1st', '2nd', 'Summer'] as $s): ?>
-                <option value="<?= $s ?>"<?= $s === $sem ? ' selected' : '' ?>><?= $s ?></option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="ah-field">
-        <label for="fltProgram">Program</label>
-        <select class="form-control" name="program" id="fltProgram" onchange="this.form.submit()">
-            <option value="">All programs</option>
-            <?php foreach (array_keys($programs) as $p): ?>
-                <option value="<?= htmlspecialchars($p) ?>"<?= $p === $program ? ' selected' : '' ?>>
-                    <?= htmlspecialchars($p) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="ah-field">
-        <label for="fltSection">Section</label>
-        <select class="form-control" name="section" id="fltSection" onchange="this.form.submit()">
-            <option value="">All sections</option>
-            <?php foreach (array_keys($sections) as $sec): ?>
-                <option value="<?= htmlspecialchars($sec) ?>"<?= $sec === $section ? ' selected' : '' ?>>
-                    <?= htmlspecialchars($sec) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="ah-term-readout">
-        <strong><?= htmlspecialchars(termLabel($sy, $sem)) ?></strong>
-        <span><?= count($visible) ?> student<?= count($visible) === 1 ? '' : 's' ?> in view</span>
-        <?php if ($program !== '' || $section !== ''): ?>
-            &middot;
-            <a href="academic-history.php?sy=<?= urlencode($sy) ?>&amp;sem=<?= urlencode($sem) ?>">clear filters</a>
-        <?php endif; ?>
-    </div>
-</form>
-
-<?php
-// "Awaiting" is the actionable figure, so it is the only cell that does
+<?php // "Awaiting" is the actionable figure, so it is the only cell that does
 // not sit in the default blue. A mean is only shown once there is
 // something to average: the average of nothing is not 0.00, it is
 // absent, and the cell says so rather than reporting a number.
+//
+// Every card keeps its own tone whether or not it currently has something
+// to report. Awaiting used to swap its tone for the neutral empty
+// treatment, which made it the one card in the row that could go grey
+// while the others stayed coloured - and the tone is the whole point of
+// the row, because it is what tells you which figure you must act on. An
+// empty card now steps back in weight instead of stepping out of colour.
 ?>
 <section class="ah-stats" aria-label="Term summary">
-    <div class="ah-stat">
+    <div class="ah-stat" data-tone="view">
         <span class="ah-stat-icon"><i class="fa-solid fa-users"></i></span>
         <div>
             <p class="ah-stat-value"><?= count($visible) ?></p>
@@ -402,7 +453,7 @@ include '../includes/sidebar.php';
             <p class="ah-stat-note"><?= $termComplete === 0 ? 'none graded yet' : 'every subject has a final rating' ?></p>
         </div>
     </div>
-    <div class="ah-stat"<?= $termMissing > 0 ? ' data-tone="wait"' : ' data-empty="true"' ?>>
+    <div class="ah-stat" data-tone="wait"<?= $termMissing === 0 ? ' data-empty="true"' : '' ?>>
         <span class="ah-stat-icon"><i class="fa-solid fa-hourglass-half"></i></span>
         <div>
             <p class="ah-stat-value"><?= $termMissing ?></p>
@@ -410,7 +461,7 @@ include '../includes/sidebar.php';
             <p class="ah-stat-note"><?= $termMissing > 0 ? 'not started or incomplete' : 'nothing outstanding' ?></p>
         </div>
     </div>
-    <div class="ah-stat"<?= $termMeanGwa === null ? ' data-empty="true"' : '' ?>>
+    <div class="ah-stat" data-tone="mean"<?= $termMeanGwa === null ? ' data-empty="true"' : '' ?>>
         <span class="ah-stat-icon"><i class="fa-solid fa-chart-simple"></i></span>
         <div>
             <p class="ah-stat-value"><?= $termMeanGwa === null ? '&mdash;' : number_format($termMeanGwa, 2) ?></p>
@@ -434,6 +485,81 @@ include '../includes/sidebar.php';
 
 <?php // The roster. The GWA shown is the one the server computed and stored, not a figure typed here. ?>
 <section class="ah-panel">
+    <form class="ah-panel-controls" method="get" action="academic-history.php" id="termForm">
+        <div class="ah-term-field">
+            <label for="fltTerm">Term</label>
+            <?php // The input and its submit button share one control. The
+                  // button is inside the form and inside the field, so
+                  // pressing Enter in the box submits, and the grid still
+                  // has three cells and one row. See the note on
+                  // ah-term-control in the stylesheet. ?>
+            <div class="ah-term-control">
+                <input
+                    class="form-control"
+                    type="text"
+                    id="fltTerm"
+                    name="term"
+                    value="<?= htmlspecialchars($termCanonical) ?>"
+                    placeholder="2026-2028 1st"
+                    autocomplete="off"
+                    spellcheck="false"
+                    list="termHints"
+                    aria-describedby="termHelp"
+                >
+                <button class="ah-term-submit" type="submit" aria-label="Load this term">
+                    <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                </button>
+            </div>
+            <?php // Real terms, as suggestions. Not a dropdown: the box
+                  // accepts anything and resolves it, and this only saves
+                  // typing the years that already exist. ?>
+            <datalist id="termHints">
+                <?php foreach ($years as $y): ?>
+                    <?php foreach ($SEMESTERS as $s): ?>
+                        <option value="<?= htmlspecialchars($y . ' ' . $s) ?>"></option>
+                    <?php endforeach; ?>
+                <?php endforeach; ?>
+            </datalist>
+            <?php // Sighted readers get the placeholder and the
+                  // suggestions; this is here so the box is not silent
+                  // about what it accepts. Kept out of the flow: a third
+                  // line under one cell is what broke the row alignment
+                  // the first time round. ?>
+            <span class="ah-sr-only" id="termHelp">
+                School year and semester, in any order. For example 2026-2028 1st.
+            </span>
+        </div>
+
+        <div class="ah-term-readout">
+            <strong><?= htmlspecialchars(termLabel($sy, $sem)) ?></strong>
+            <span id="ahCountReadout"><?= count($visible) ?> student<?= count($visible) === 1 ? '' : 's' ?> in view</span>
+        </div>
+
+        <div class="ah-search">
+            <label class="ah-search-label" for="rosterSearch">Find in this term</label>
+            <div class="ah-search-box">
+                <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                <input
+                    type="search"
+                    id="rosterSearch"
+                    placeholder="Name, number, program, section"
+                    autocomplete="off"
+                    spellcheck="false"
+                >
+                <button class="ah-search-clear" type="button" id="ahSearchClear" hidden aria-label="Clear search">
+                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <?php if ($termProblem !== ''): ?>
+        <p class="ah-term-warning" role="status">
+            <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+            <?= $termProblem ?>
+        </p>
+    <?php endif; ?>
+
     <div class="ah-panel-head">
         <h2>Roster</h2>
         <?php if ($visible): ?>
@@ -456,7 +582,7 @@ include '../includes/sidebar.php';
                     The program and section together match nobody. Clearing them shows the
                     whole roster.
                 </p>
-                <a class="btn btn-light" href="academic-history.php?sy=<?= urlencode($sy) ?>&amp;sem=<?= urlencode($sem) ?>">
+                <a class="btn btn-light" href="academic-history.php?term=<?= urlencode($termCanonical) ?>">
                     <i class="fa-solid fa-filter-circle-xmark"></i> Clear filters
                 </a>
             <?php else: ?>
@@ -497,7 +623,10 @@ include '../includes/sidebar.php';
                     ][$r['state']];
                     $initials = ah_initials($r['name']);
                     ?>
-                    <tr>
+                    <tr data-ah-search="<?= htmlspecialchars(strtolower(implode(' ', [
+                        $r['name'], $r['number'], $r['program'],
+                        $r['level'], $r['section'],
+                    ]))) ?>">
                         <td>
                             <div class="ah-name"><?= htmlspecialchars($r['name']) ?></div>
                             <div class="ah-num"><?= htmlspecialchars($r['number']) ?></div>
@@ -520,12 +649,25 @@ include '../includes/sidebar.php';
                             <span class="badge ah-state" data-state="<?= $r['state'] ?>"><?= $stateLabel ?></span>
                         </td>
                         <td>
-                            <button class="btn btn-light" type="button" onclick="openGrades(<?= (int) $r['id'] ?>)">
-                                <i class="fa-solid fa-pen"></i> Grades
-                            </button>
+                            <div class="ah-actions">
+                                <button class="btn btn-light" type="button" onclick="openView(<?= (int) $r['id'] ?>)">
+                                    <i class="fa-solid fa-eye"></i> View
+                                </button>
+                                <button class="btn btn-light" type="button" onclick="openGrades(<?= (int) $r['id'] ?>)">
+                                    <i class="fa-solid fa-pen"></i> Grades
+                                </button>
+                            </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>
+                </tbody>
+                <tbody class="ah-search-empty" id="ahSearchEmpty" hidden>
+                    <tr>
+                        <td colspan="8">
+                            <h3>No student matches that</h3>
+                            <p id="ahSearchEmptyText">Check the spelling, or clear the search to see the whole term.</p>
+                        </td>
+                    </tr>
                 </tbody>
             </table>
         </div>
@@ -603,6 +745,61 @@ include '../includes/sidebar.php';
 </div>
 
 <?php
+// The read-only view of the same term. It exists because "look at what
+// is recorded" and "change what is recorded" are different jobs, and
+// sharing one dialog makes the first one feel like a draft.
+//
+// It is read-only by construction, not by convention: there is not a
+// single input in here. Nothing to save, no Add subject, no Remove,
+// and the only control is Close. A registrar can open a term to check
+// it without touching it, which is what checking a closed term means.
+//
+// It reads from the same payload the roster and the editor do, so the
+// figures here are the stored ones, not a second computation.
+?>
+<div class="modal-overlay ah-dialog" id="viewModal" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
+    <div class="modal-content">
+        <div class="ah-dialog-head">
+            <div>
+                <div class="ah-dialog-kicker">Recorded</div>
+                <h3 id="viewModalTitle" tabindex="-1">Grade record</h3>
+            </div>
+            <button class="modal-close" type="button" onclick="closeView()" aria-label="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <div class="ah-dialog-body">
+            <div class="ah-who">
+                <span class="ah-who-avatar" id="viewInitials">—</span>
+                <span class="ah-who-copy">
+                    <strong id="viewName">—</strong>
+                    <span id="viewMeta">—</span>
+                </span>
+                <span class="ah-who-term" id="viewTerm">—</span>
+            </div>
+
+            <table class="ah-view-grid">
+                <thead>
+                    <tr>
+                        <th scope="col">Subject</th>
+                        <th scope="col" class="ah-col-units">Units</th>
+                        <th scope="col" class="ah-col-rating">Final rating</th>
+                        <th scope="col" class="ah-col-result">Result</th>
+                    </tr>
+                </thead>
+                <tbody id="viewRows"></tbody>
+            </table>
+        </div>
+
+        <div class="ah-dialog-foot">
+            <div class="spacer"></div>
+            <button class="btn btn-light" type="button" onclick="closeView()">Close</button>
+        </div>
+    </div>
+</div>
+
+<?php
 // The pre-close audit. Read-only: it reports what is missing or
 // inconsistent and stops there. It assigns no grade, changes no status,
 // and writes nothing. The GWA-at-3.00 finding is a question about the
@@ -613,7 +810,7 @@ include '../includes/sidebar.php';
         <div class="ah-dialog-head">
             <div>
                 <div class="ah-dialog-kicker">Before you close</div>
-                <h3 id="auditModalTitle">Check this term</h3>
+                <h3 id="auditModalTitle" tabindex="-1">Check this term</h3>
             </div>
             <button class="modal-close" type="button" onclick="closeAudit()" aria-label="Close">
                 <i class="fa-solid fa-xmark"></i>
@@ -653,6 +850,83 @@ function rowById(id) {
     return AH.rows.find(r => r.id === id) || null;
 }
 
+// ── Search within the term ──────────────────────────────────────
+// Program and section used to be dropdowns that reloaded the page on
+// every change. Searching the roster in place is faster for the way
+// this screen is actually used: a registrar is looking for one
+// student in a term they are already on, not browsing a taxonomy.
+//
+// All the words are OR'd rather than AND'd, so "bsit a" finds every
+// BSIT student in section A. AND-ing them is the behaviour people
+// expect from a file dialog and never what they expect from a name
+// box, where "mendoza" alone has to work.
+(function () {
+    const input    = document.getElementById('rosterSearch');
+    const clearBtn = document.getElementById('ahSearchClear');
+    const empty    = document.getElementById('ahSearchEmpty');
+    const readout  = document.getElementById('ahCountReadout');
+    const table    = document.querySelector('.ah-panel .table');
+    if (!input || !table) return;
+
+    const rows = Array.from(table.querySelectorAll('tbody tr[data-ah-search]'));
+    const total = rows.length;
+
+    function apply() {
+        const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        rows.forEach(row => {
+            // The haystack is precomputed server-side, so this stays
+            // off the row's own text - which would break the moment a
+            // cell contained markup.
+            const hay = row.dataset.ahSearch || '';
+            const hit = terms.length === 0 || terms.some(t => hay.includes(t));
+            row.hidden = !hit;
+            if (hit) shown++;
+        });
+
+        if (empty) {
+            empty.hidden = shown !== 0;
+            const text = document.getElementById('ahSearchEmptyText');
+            if (text && terms.length) {
+                // Name what was looked for. "No results" alone leaves the
+                // reader guessing whether the term is empty or the search
+                // is wrong, and those need opposite responses.
+                text.textContent = 'No student in this term matches “'
+                    + input.value.trim() + '”. Clear the search to see all '
+                    + total + '.';
+            }
+        }
+        if (readout) {
+            readout.textContent = shown === total
+                ? total + (total === 1 ? ' student' : ' students') + ' in view'
+                : shown + ' of ' + total + ' in view';
+        }
+        if (clearBtn) clearBtn.hidden = input.value === '';
+    }
+
+    input.addEventListener('input', apply);
+    input.addEventListener('search', apply);
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            input.value = '';
+            apply();
+            input.focus();
+        });
+    }
+    // The term box is a form control, so Enter navigates. The search
+    // box filters what is already on screen, so Enter there should
+    // hand the caret to the first match rather than reload the page.
+    input.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const first = rows.find(r => !r.hidden);
+        if (!first) return;
+        const btn = first.querySelector('button');
+        if (btn) btn.focus();
+    });
+    apply();
+})();
+
 /* Weighted term GWA, mirroring termGwa() on the server.
    A subject with no rating, no units, or an out-of-scale rating cannot
    contribute: that is missing data, not a zero. */
@@ -680,14 +954,75 @@ function band(r) {
 
 // The shared overlay in registrar.css is display:none and toggled with
 // .active, so the closed state is the absence of a class.
-function openDialog(id) {
-    const el = document.getElementById(id);
-    if (el) { el.classList.add('active'); document.body.style.overflow = 'hidden'; }
+//
+// Focus is handled here rather than at each call site, because the three
+// requirements the WAI-ARIA dialog pattern puts on a modal are properties
+// of "a modal is open", not of any one dialog. The page was carrying
+// aria-modal="true" on dialogs that did not honour any of them, which is
+// the specific combination the pattern warns about: assistive technology
+// is told the rest of the page is inert, and the keyboard disagrees.
+//
+// js/confirm.js already returns focus the same way. Two dialogs that
+// behave differently from the third is how this drifted.
+let lastDialogFocus = null;
+
+function dialogFocusables(dialog) {
+    return Array.from(dialog.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), ' +
+        'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null || el === document.activeElement);
 }
+
+// Where focus lands depends on what the dialog is for, so the caller says
+// rather than the helper guessing. A form wants its first field; a report
+// wants a static element it can announce, because focusing its close
+// button tells a screen reader nothing about what the dialog contains.
+function openDialog(id, initialFocus) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    lastDialogFocus = document.activeElement;
+    el.classList.add('active');
+    document.body.style.overflow = 'hidden';
+
+    const target = initialFocus === true
+        ? dialogFocusables(el)[0]
+        : (typeof initialFocus === 'string' ? el.querySelector(initialFocus) : null);
+    if (target) target.focus();
+}
+
 function closeDialog(id) {
     const el = document.getElementById(id);
-    if (el) { el.classList.remove('active'); document.body.style.overflow = ''; }
+    if (!el) return;
+    el.classList.remove('active');
+    document.body.style.overflow = '';
+    // Return focus to whatever opened the dialog, so a keyboard user is
+    // not dropped at the top of the document and has to re-navigate the
+    // roster. The element is re-checked because the roster is re-rendered
+    // by the reload that follows a save.
+    if (lastDialogFocus && document.contains(lastDialogFocus)) lastDialogFocus.focus();
+    lastDialogFocus = null;
 }
+
+// Tab must not walk out of an open dialog. A modal is declared inert
+// outside itself, so letting focus escape to the filters behind the
+// scrim contradicts the declaration and strands a keyboard user in a part
+// of the page they cannot see.
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const open = document.querySelector('.modal-overlay.active');
+    if (!open) return;
+    const items = dialogFocusables(open);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+});
 
 function openGrades(studentId) {
     const r = rowById(studentId);
@@ -711,12 +1046,110 @@ function openGrades(studentId) {
         r.subjects.forEach(s => body.insertAdjacentHTML('beforeend', gradeRowHtml(s)));
     }
     updatePreview();
-    openDialog('gradeModal');
-    const first = body.querySelector('input');
-    if (first) first.focus();
+    // The grid is filled before the dialog opens, so the helper can find
+    // the first field itself. Focus is the helper's job now, not this
+    // function's: the pattern's requirement belongs to "a modal is open".
+    openDialog('gradeModal', '#gradeRows input');
 }
 
 function closeGrades() { closeDialog('gradeModal'); }
+
+// ── Read-only view ──────────────────────────────────────────────
+// Opens the same term the editor opens, with no way to change it. The
+// figures come from AH.rows, which is the payload the roster table and
+// the editor both read, so this cannot show a different term or a
+// different GWA than the row you clicked.
+function ratingBand(v) {
+    // Mirrors the roster's banding: GWA_AT_RISK is 3.00 and the good
+    // band stops half a point under it. term_js_check.js pins these
+    // numbers against the server's, because a rating that changes
+    // colour but not meaning is worse than one that never changes.
+    if (v === null || v === undefined || v === '') return 'none';
+    const n = Number(v);
+    if (!isFinite(n)) return 'none';
+    return n < 2.5 ? 'good' : (n < 3 ? 'warn' : 'poor');
+}
+
+function openView(studentId) {
+    const r = rowById(studentId);
+    if (!r) return;
+
+    document.getElementById('viewInitials').textContent = AH.initials[studentId] || '—';
+    document.getElementById('viewName').textContent = r.name;
+    document.getElementById('viewMeta').textContent =
+        r.number + (r.program ? ' · ' + r.program : '') + (r.section ? ' · Section ' + r.section : '');
+    document.getElementById('viewTerm').textContent = AH.sem + ' · ' + AH.sy;
+
+    const body = document.getElementById('viewRows');
+    body.innerHTML = '';
+
+    if (!r.subjects.length) {
+        // Say so rather than showing an empty ruled table. A term with
+        // no subjects is a real state and it is the reason this row is
+        // in the roster at all.
+        body.insertAdjacentHTML('beforeend',
+            '<tr><td colspan="4" class="ah-view-blank">' +
+            'No subjects recorded for this term yet.' +
+            '</td></tr>');
+    } else {
+        r.subjects.forEach(s => body.insertAdjacentHTML('beforeend', viewRowHtml(s)));
+        // The transcript's bottom line. A ledger has to end in a total,
+        // otherwise the reader is left adding the column up by hand.
+        const shown = r.units === null || r.units === undefined
+            ? ''
+            : ' · ' + String(r.units).replace(/\.00$/, '') + ' units';
+        body.insertAdjacentHTML('beforeend',
+            '<tr class="ah-view-total"><td>' + r.subjects.length + ' subject' +
+            (r.subjects.length === 1 ? '' : 's') + shown + '</td>' +
+            '<td class="ah-col-units"></td>' +
+            '<td class="ah-col-rating"><span class="ah-gwa" data-band="' +
+            ratingBand(r.gwa) + '">' +
+            (r.gwa === null || r.gwa === undefined ? 'no data' : Number(r.gwa).toFixed(2)) +
+            '</span></td>' +
+            '<td class="ah-col-result"><span class="badge ah-state" data-state="' +
+            esc(r.state) + '">' + esc(viewStateLabel(r)) + '</span></td></tr>');
+    }
+
+    // The title, not a control: this dialog has nothing to fill in, and
+    // focusing its Close button tells a screen reader nothing about what
+    // it contains. Same reasoning as the audit drawer.
+    openDialog('viewModal', '#viewModalTitle');
+}
+
+function viewStateLabel(r) {
+    if (r.state === 'complete') return 'Complete';
+    if (r.state === 'partial') return r.missing + ' missing';
+    return 'Not started';
+}
+
+function viewRowHtml(s) {
+    const rated = s.final_rating !== null && s.final_rating !== undefined && s.final_rating !== '';
+    const result = s.grade_status || '';
+    // An unrated subject says "not rated" in words. A blank cell in a
+    // ledger is read as "nothing to see here", which is the opposite of
+    // what an empty final rating means.
+    // A ledger column of ratings has to line up, so every figure is
+    // written to two decimals. The stored value is 1.5, 2 and 1.75
+    // depending on who typed it, and "1.5" sitting next to "1.75" in
+    // the same column reads as two different precisions rather than
+    // two different grades.
+    const rating = rated
+        ? '<span class="ah-view-rating" data-band="' + ratingBand(s.final_rating) + '">' +
+            Number(s.final_rating).toFixed(2) + '</span>'
+        : '<span class="ah-view-rating" data-band="none">not rated</span>';
+    return '<tr>' +
+        '<td>' + (esc(s.subject) || '<span class="ah-view-blank-inline">Untitled subject</span>') +
+            (s.subject_code ? ' <span class="ah-view-code">' + esc(s.subject_code) + '</span>' : '') +
+        '</td>' +
+        '<td class="ah-col-units ah-num">' + (Number(s.units) > 0 ? esc(s.units) : '—') + '</td>' +
+        '<td class="ah-col-rating">' + rating + '</td>' +
+        '<td class="ah-col-result">' + (result
+            ? '<span class="ah-view-result" data-result="' + esc(result) + '">' + esc(result) + '</span>'
+            : '<span class="ah-view-blank-inline">—</span>') + '</td>' +
+        '</tr>';
+}
+
+function closeView() { closeDialog('viewModal'); }
 
 function gradeRowHtml(s) {
     const st = s.grade_status || '';
@@ -912,7 +1345,14 @@ function openAudit() {
             'subject, and the stored figures agree with them.</p></div>';
     }
     body.innerHTML = html;
-    openDialog('auditModal');
+    // A report, not a form. Focus goes to the heading rather than the
+    // close button: the drawer is built from findings and paragraphs that
+    // need to be read in order, and a focusable heading lets a screen
+    // reader start at the top and walk out from there. tabindex="-1"
+    // makes it programmatically focusable without adding it to the tab
+    // sequence, and the pattern asks that aria-describedby be left off
+    // when the content is structured this way.
+    openDialog('auditModal', '#auditModalTitle');
 }
 
 function closeAudit() { closeDialog('auditModal'); }
