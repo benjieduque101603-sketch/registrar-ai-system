@@ -1,9 +1,20 @@
 <?php
 // ============================================================
 //  REGISTRAR/ACADEMIC-HISTORY.PHP
-//  Student-level academic history viewer + enrollment intake
-//  import. Records are read-only here; they come from the
-//  enrollment dashboard (previous school) or other modules.
+//  Term grading workspace.
+//
+//  This page used to import previous schools. That was wrong twice
+//  over. academic_history is consumed as TERMS by the TOR, Form 137 and
+//  the student grade views, and the save-academic endpoint behind it
+//  could not record a semester subject, a final rating, or a computed
+//  GWA at all. So the page described records nobody was making.
+//
+//  It is now the workspace for grading a term: pick the term, filter the
+//  roster, enter final ratings, and check the term before closing it.
+//
+//  The GWA is computed in shared/term_grades.php and stored by the save
+//  path from that same computation, so the status rules and the TOR read
+//  one number rather than two. Staff do not type it.
 // ============================================================
 
 require_once __DIR__ . '/../shared/security_headers.php';
@@ -11,110 +22,237 @@ require_once __DIR__ . '/../shared/session_config.php';
 if (empty($_SESSION['user_id'])) { header('Location: ../login.php'); exit; }
 requireRole('registrar');
 require_once __DIR__ . '/../shared/database.php';
+require_once __DIR__ . '/../shared/term_grades.php';
 $db = Database::getInstance();
 
-// All academic records, newest first per student.
-$records = $db->fetchAll("
-    SELECT a.*, CONCAT(s.first_name,' ',s.last_name) AS student_name,
-           s.student_number, s.course
-    FROM academic_history a
-    JOIN students s ON a.student_id = s.id
-    WHERE s.status != 'archived'
-    ORDER BY s.last_name, s.first_name, a.created_at DESC
+// The session-bound CSRF token, taken from the guard itself.
+//
+// Reading $_SESSION['csrf_token'] directly would be wrong: the token is
+// created lazily by csrfToken() on first call, so a session that has never
+// posted anything has no value there and the page would ship an empty
+// token, and every save would be refused with a 419. Asking the guard
+// gets the real one and creates it if it is missing.
+require_once __DIR__ . '/../shared/csrf_guard.php';
+$csrfToken = csrfToken();
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Which term? Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// The term is chosen first and everything below is scoped to it, because
+// a term is the unit of work here. Grading one is not a per-student
+// action repeated 200 times; it is a single pass over a list.
+$years = array_map(
+    static fn($r) => (string) $r['school_year'],
+    $db->fetchAll("
+        SELECT DISTINCT school_year FROM academic_history
+         WHERE school_year IS NOT NULL AND school_year <> ''
+         ORDER BY school_year DESC
+    ")
+);
+
+// Offer the coming years so the current term can be started before it
+// exists in the table.
+$thisYear = (int) date('Y');
+foreach ([$thisYear . '-' . $thisYear, $thisYear . '-' . ($thisYear + 1), $thisYear . '-' . ($thisYear + 2)] as $cand) {
+    if (!in_array($cand, $years, true)) {
+        $years[] = $cand;
+    }
+}
+rsort($years);
+
+$sy  = isset($_GET['sy'])  ? trim((string) $_GET['sy'])  : '';
+$sem = isset($_GET['sem']) ? trim((string) $_GET['sem']) : '1st';
+if ($sy === '' && $years) {
+    $sy = $years[0];
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Roster filters Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// Grouped by program and year level, with section as an optional filter.
+// Section is a within-cohort detail; defaulting to it would split the
+// pass into fragments that have to be stitched back together before the
+// term can be called complete.
+$program = isset($_GET['program']) ? trim((string) $_GET['program']) : '';
+$section = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
+
+$roster = $db->fetchAll("
+    SELECT s.id, s.student_number, s.first_name, s.last_name,
+           s.course AS program, s.year_level, s.section
+      FROM students s
+     WHERE s.status != 'archived'
+     ORDER BY s.last_name, s.first_name
 ");
 
-// Group by student for the student-level table.
-$studentRows = [];
-foreach ($records as $r) {
-    $sid = (int) $r['student_id'];
-    if (!isset($studentRows[$sid])) {
-        $studentRows[$sid] = [
-            'student_id'     => $sid,
-            'student_number' => (string) $r['student_number'],
-            'student_name'   => (string) $r['student_name'],
-            'course'         => (string) ($r['course'] ?? ''),
-            'records'        => [],
+$programs = [];
+$sections = [];
+foreach ($roster as $r) {
+    $p = trim((string) ($r['program'] ?? ''));
+    if ($p !== '') { $programs[$p] = true; }
+    $sec = trim((string) ($r['section'] ?? ''));
+    if ($sec !== '') { $sections[$sec] = true; }
+}
+ksort($programs);
+ksort($sections);
+
+$visible = [];
+foreach ($roster as $r) {
+    if ($program !== '' && trim((string) ($r['program'] ?? '')) !== $program) { continue; }
+    if ($section !== '' && trim((string) ($r['section'] ?? '')) !== $section) { continue; }
+    $visible[] = $r;
+}
+
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ What has been recorded for this term? Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// Joined in one query rather than per student. The page shows a grid for
+// every visible student, and fetching subjects one at a time is the
+// difference between one round trip and two hundred.
+$termRecords = [];
+$termGrades  = [];
+if ($sy !== '' && $visible) {
+    $in = implode(',', array_map(static fn($r) => (int) $r['id'], $visible));
+    foreach ($db->fetchAll("
+        SELECT ah.* FROM academic_history ah
+         WHERE ah.student_id IN ($in) AND ah.school_year = ? AND ah.semester = ?
+    ", [$sy, $sem]) as $r) {
+        $termRecords[(int) $r['student_id']] = $r;
+    }
+    if ($termRecords) {
+        $rin = implode(',', array_map(static fn($r) => (int) $r['id'], $termRecords));
+        foreach ($db->fetchAll("
+            SELECT * FROM academic_grades WHERE academic_history_id IN ($rin) ORDER BY id ASC
+        ") as $g) {
+            $termGrades[(int) $g['academic_history_id']][] = $g;
+        }
+    }
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Per-student picture, and the audit over it Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+$rosterForAudit = [];
+$rows = [];
+$termComplete = 0;
+$termMissing  = 0;
+$termUnits    = 0.0;
+
+foreach ($visible as $r) {
+    $sid  = (int) $r['id'];
+    $rec  = $termRecords[$sid] ?? null;
+    $rid  = $rec ? (int) $rec['id'] : 0;
+
+    $subjects = [];
+    foreach (($rid ? ($termGrades[$rid] ?? []) : []) as $g) {
+        $subjects[] = [
+            'subject'      => (string) $g['subject'],
+            'subject_code' => (string) ($g['subject_code'] ?? ''),
+            'units'        => (float) ($g['units'] ?? 0),
+            'final_rating' => $g['final_rating'],
+            'grade'        => (string) ($g['grade'] ?? ''),
+            'remarks'      => (string) ($g['remarks'] ?? ''),
+            'grade_status' => (string) ($g['grade_status'] ?? ''),
         ];
     }
-    $studentRows[$sid]['records'][] = $r;
+
+    $gwa   = termGwa($subjects);
+    $units = 0.0;
+    $missingCount = 0;
+    foreach ($subjects as $sub) {
+        $units += max(0.0, (float) $sub['units']);
+        if ($sub['final_rating'] === null || $sub['final_rating'] === '') {
+            $missingCount++;
+        }
+    }
+    $termUnits += $units;
+
+    // Three states, not two. "Not started" and "started but incomplete"
+    // are different problems and call for different responses: the first
+    // needs a subject list built, the second needs a grade sheet chased.
+    if (!$subjects) {
+        $state = 'none';
+    } elseif ($missingCount > 0) {
+        $state = 'partial';
+    } else {
+        $state = 'complete';
+    }
+    $state === 'complete' ? $termComplete++ : $termMissing++;
+
+    $rows[] = [
+        'id'       => $sid,
+        'number'   => (string) $r['student_number'],
+        'name'     => trim($r['first_name'] . ' ' . $r['last_name']),
+        'program'  => (string) ($r['program'] ?? ''),
+        'level'    => (string) ($r['year_level'] ?? ''),
+        'section'  => (string) ($r['section'] ?? ''),
+        'record'   => $rid,
+        'gwa'      => $gwa,
+        'stored'   => $rec['gwa'] ?? null,
+        'units'    => round($units, 2),
+        'state'    => $state,
+        'missing'  => $missingCount,
+        'subjects' => $subjects,
+    ];
+
+    $rosterForAudit[] = [
+        'name'     => trim($r['first_name'] . ' ' . $r['last_name']),
+        'number'   => (string) $r['student_number'],
+        'gwa'      => $rec['gwa'] ?? null,
+        'subjects' => $subjects,
+    ];
 }
 
-// Per-record subject grades for the read-only view modal.
-$recordIds = array_map('intval', array_column($records, 'id'));
-$gradesByRecord = [];
-if ($recordIds) {
-    $in = implode(',', $recordIds);
-    foreach ($db->fetchAll("SELECT * FROM academic_grades WHERE academic_history_id IN ($in) ORDER BY id ASC") as $g) {
-        $gradesByRecord[(int) $g['academic_history_id']][] = $g;
+$audit = termAudit($sy, $sem, $rosterForAudit);
+
+// Career GWA across every term on file for the filtered roster, so the
+// figure someone remembers can be checked against what is actually held.
+$career      = null;
+$careerUnits = 0.0;
+if ($visible) {
+    $in = implode(',', array_map(static fn($r) => (int) $r['id'], $visible));
+    $careerTerms = [];
+    foreach ($db->fetchAll("SELECT id FROM academic_history WHERE student_id IN ($in)") as $h) {
+        $subjectsForTerm = [];
+        foreach ($db->fetchAll("SELECT units, final_rating FROM academic_grades WHERE academic_history_id = ?", [(int) $h['id']]) as $gs) {
+            $subjectsForTerm[] = ['units' => (float) ($gs['units'] ?? 0), 'final_rating' => $gs['final_rating']];
+        }
+        $careerTerms[] = ['subjects' => $subjectsForTerm];
+    }
+    $career = careerGwa($careerTerms);
+    foreach ($careerTerms as $t) {
+        foreach ($t['subjects'] as $s) {
+            if (termRatingValid($s['final_rating'])) {
+                $careerUnits += max(0.0, (float) $s['units']);
+            }
+        }
     }
 }
 
-// JSON payload for the view modal (records + grades per student).
-$acadData = [];
-foreach ($studentRows as $sid => $s) {
-    $recs = [];
-    foreach ($s['records'] as $r) {
-        $recs[] = [
-            'id'       => (int) $r['id'],
-            'school'   => (string) $r['school_name'],
-            'year'     => (string) ($r['school_year'] ?? ''),
-            'grade'    => (string) ($r['grade_level'] ?? ''),
-            'gwa'      => $r['gwa'] !== null ? (string) $r['gwa'] : '',
-            'semester' => (string) ($r['semester'] ?? ''),
-            'remarks'  => (string) ($r['remarks'] ?? ''),
-            'grades'   => array_map(fn($g) => [
-                'subject' => (string) ($g['subject'] ?? ''),
-                'units'   => (string) ($g['units'] ?? ''),
-                'grade'   => (string) ($g['grade'] ?? ''),
-                'remarks' => (string) ($g['remarks'] ?? ''),
-            ], $gradesByRecord[(int) $r['id']] ?? []),
-        ];
-    }
-    $acadData[$sid] = $recs;
+// The expected load, used only to raise a question and never to block.
+$typicalUnits = null;
+$termMeanGwa  = null;
+if ($sy !== '') {
+    $q = $db->fetchColumn("
+        SELECT AVG(credits) FROM academic_history
+         WHERE school_year = ? AND semester = ? AND credits IS NOT NULL AND credits > 0
+    ", [$sy, $sem]);
+    $typicalUnits = $q ? (float) $q : null;
+
+    $m = $db->fetchColumn("
+        SELECT AVG(gwa) FROM academic_history
+         WHERE school_year = ? AND semester = ? AND gwa IS NOT NULL
+    ", [$sy, $sem]);
+    $termMeanGwa = $m ? round((float) $m, 2) : null;
 }
 
-// All students (for the Receive Record list, regardless of current records).
-$allStudents = $db->fetchAll("
-    SELECT s.id, s.student_number,
-           CONCAT(s.first_name,' ',s.last_name) AS student_name
-    FROM students s
-    WHERE s.status != 'archived'
-    ORDER BY s.last_name, s.first_name
-");
-
-$receiveData = array_map(fn($s) => [
-    'id'     => (int) $s['id'],
-    'number' => (string) ($s['student_number'] ?? ''),
-    'name'   => (string) $s['student_name'],
-    'count'  => isset($studentRows[(int) $s['id']]) ? count($studentRows[(int) $s['id']]['records']) : 0,
-], $allStudents);
-
-// ── Metric strip ──────────────────────────────────
-// The registrar's job on this page is chasing students whose previous-school
-// records haven't been imported yet, so "awaiting" is a real figure rather
-// than a vanity count. Coverage shows whether it's a rounding error or half
-// the roster. Arrow functions auto-capture, so no explicit `use` is needed.
-$statStudents = count($studentRows);
-$statRecords  = count($records);
-$statSchools  = count(array_unique(
-    array_filter(array_map(fn($r) => trim((string) $r['school_name']), $records))
-));
-$statPool     = count($receiveData);
-$statAwaiting = count(array_filter($receiveData, fn($s) => $s['count'] === 0));
-$coveragePct  = $statPool > 0
-    ? (int) round((($statPool - $statAwaiting) / $statPool) * 100)
-    : 0;
-
-/** Two-letter initials from a name, for the student avatar tile. */
-function ah_initials(string $name): string {
-    $parts = preg_split('/\s+/', trim($name), -1, PREG_SPLIT_NO_EMPTY);
-    if (!$parts) return '?';
-    $sub = fn($s) => function_exists('mb_substr') ? mb_substr($s, 0, 1, 'UTF-8') : substr($s, 0, 1);
-    $up  = fn($s) => function_exists('mb_strtoupper') ? mb_strtoupper($s, 'UTF-8') : strtoupper($s);
-    $init = $up($sub($parts[0]));
-    if (count($parts) > 1) $init .= $up($sub(end($parts)));
-    return $init;
-}
+$payload = json_encode([
+    'sy'   => $sy,
+    'sem'  => $sem,
+    'csrf' => $csrfToken,
+    'rows' => array_map(static fn($r) => [
+        'id'       => $r['id'],
+        'name'     => $r['name'],
+        'number'   => $r['number'],
+        'program'  => $r['program'],
+        'level'    => $r['level'],
+        'section'  => $r['section'],
+        'record'   => $r['record'],
+        'subjects' => $r['subjects'],
+    ], $rows),
+], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
 
 $page_title = 'Academic History';
 $body_page = 'academic';
@@ -125,642 +263,895 @@ include '../includes/sidebar.php';
 ?>
 <style>
 /* ============================================================
-   Academic History — registrar-blue layer.
-   Mirrors registrar/guardians.php and registrar/rfid-cards.php:
-   same header, same metric strip, same panel/table/modals.
+   Term grading workspace - registrar-blue layer.
    Scoped to body[data-page="academic"] so nothing leaks into the
    other registrar pages.
+
+   The rating scale is 1.00-5.00 with lower better, which is the
+   opposite way round from the eye's first guess. A GWA figure is
+   tinted by band so the direction is visible without reading a
+   legend: green is good, amber is marginal, red is poor.
    ============================================================ */
-body[data-page="academic"]{background:#f5f7fb;color:#0f172a}
 
-/* ── Page header ───────────────────────────────── */
-body[data-page="academic"] .header{
-    display:flex;align-items:flex-end;justify-content:space-between;gap:20px;
-    flex-wrap:wrap;margin:0 0 16px;padding:25px 27px;
-    border:1px solid #c7d7fe;border-radius:19px;
-    background:linear-gradient(120deg,#eff6ff,#fff 68%);
-    box-shadow:0 10px 30px rgba(37,99,235,.08);
+body[data-page="academic"] .ah-kicker{
+    display:inline-flex;align-items:center;gap:7px;
+    font-size:.7rem;font-weight:700;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--primary,#1e5aa8);
 }
-body[data-page="academic"] .header .title h1{
-    margin:0 0 5px;font-size:28px;line-height:1.1;letter-spacing:-.03em;color:#172554;
-}
-body[data-page="academic"] .header .title p{
-    margin:0;max-width:620px;font-size:12.5px;line-height:1.5;color:#64748b;
-}
-.ah-kicker{
-    display:flex;align-items:center;gap:7px;margin-bottom:7px;color:#1d4ed8;
-    font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
-}
-body[data-page="academic"] .header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 
-/* ── Metric strip ───────────────────────────────── */
+/* Visually hidden, still announced. Used for the action column header,
+   which labels nothing on screen but names the buttons below it. */
+.ah-sr{
+    position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+    overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+
+/* ── Modals ──────────────────────────────────────────────
+   Two dialogs share one shape. The audit drawer is wider and
+   taller because it has a list to read; the grade grid is a
+   form, so it is the same shell with a denser body. */
+.ah-modal{position:fixed;inset:0;z-index:1200;display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px}
+.ah-modal[hidden]{display:none}
+.ah-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(2px)}
+.ah-modal-card{
+    position:relative;width:100%;max-width:880px;max-height:90vh;
+    display:flex;flex-direction:column;overflow:hidden;
+    background:#fff;border-radius:14px;
+    box-shadow:0 18px 48px rgba(15,23,42,.24);
+}
+.ah-modal-head{
+    display:flex;align-items:center;gap:10px;
+    padding:15px 18px;border-bottom:1px solid var(--border,#e3e8ef);
+}
+.ah-modal-head h2{margin:0;font-size:1.05rem;font-weight:700;color:var(--text,#1f2937);flex:1 1 auto}
+
+body[data-page="academic"] .ah-head-note{
+    margin:.35rem 0 0;font-size:.86rem;color:var(--muted,#6b7280);
+    max-width:62ch;line-height:1.5;
+}
+
+/* â”€â”€ Term bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   The term selector sits above everything because it scopes
+   everything. It navigates on change rather than filtering in
+   place: picking a term reloads the page, which keeps the URL
+   shareable and the back button meaningful. */
+body[data-page="academic"] .term-bar{
+    display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;
+    padding:16px 18px;margin-bottom:18px;
+    background:#fff;border:1px solid var(--border,#e3e8ef);
+    border-radius:12px;
+}
+body[data-page="academic"] .term-field{display:flex;flex-direction:column;gap:5px;min-width:150px}
+body[data-page="academic"] .term-field label{
+    font-size:.68rem;font-weight:700;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted,#6b7280);
+}
+body[data-page="academic"] .term-field select,
+body[data-page="academic"] .term-field input{
+    padding:9px 11px;font-size:.9rem;font-family:inherit;
+    border:1px solid var(--border,#d5dbe4);border-radius:8px;
+    background:#fff;color:inherit;min-height:38px;
+}
+body[data-page="academic"] .term-field select:focus,
+body[data-page="academic"] .term-field input:focus{
+    outline:2px solid var(--primary,#1e5aa8);outline-offset:1px;
+}
+body[data-page="academic"] .term-spacer{flex:1 1 auto}
+body[data-page="academic"] .term-current{
+    align-self:center;text-align:right;font-size:.78rem;
+    color:var(--muted,#6b7280);line-height:1.4;
+}
+body[data-page="academic"] .term-current strong{
+    display:block;font-size:.95rem;color:var(--text,#1f2937);
+}
+body[data-page="academic"] .term-current a{
+    color:var(--primary,#1e5aa8);font-size:.76rem;
+}
+
+/* â”€â”€ Metric strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 body[data-page="academic"] .ah-stats{
-    display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;
-    margin:0 0 16px;background:#fff;border:1px solid #dbeafe;border-radius:16px;
-    box-shadow:0 6px 22px rgba(15,23,42,.04);overflow:hidden;
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:1px;background:var(--border,#e3e8ef);
+    border:1px solid var(--border,#e3e8ef);border-radius:12px;
+    overflow:hidden;margin-bottom:18px;
 }
-body[data-page="academic"] .ah-stat{
-    position:relative;background:transparent;border:0;border-radius:0;padding:17px 20px;
-    border-right:1px solid #e2e8f0;box-shadow:none;transition:none;
-}
-body[data-page="academic"] .ah-stat:last-child{border-right:0}
+body[data-page="academic"] .ah-stat{background:#fff;padding:15px 17px;position:relative}
 body[data-page="academic"] .ah-stat::after{
-    content:"";position:absolute;left:20px;right:20px;bottom:0;height:3px;background:#dbeafe;
+    content:'';position:absolute;left:17px;right:17px;bottom:11px;height:2px;
+    background:var(--primary,#1e5aa8);opacity:.22;border-radius:2px;
 }
-body[data-page="academic"] .ah-stat:hover{transform:none;box-shadow:none;border-color:transparent}
-body[data-page="academic"] .ah-stat .ah-stat-top{
-    display:flex;align-items:center;justify-content:space-between;gap:8px;
-    margin:0 0 6px;min-height:16px;
+body[data-page="academic"] .ah-stat[data-tone="warn"]::after{background:#d97706;opacity:.45}
+body[data-page="academic"] .ah-stat[data-tone="ok"]::after{background:#15803d;opacity:.4}
+body[data-page="academic"] .ah-stat-label{
+    font-size:.68rem;font-weight:700;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted,#6b7280);margin:0 0 6px;
 }
-body[data-page="academic"] .ah-stat .ah-stat-number{
-    font-size:28px;font-weight:800;line-height:1.1;color:#0f172a;
+body[data-page="academic"] .ah-stat-value{
+    font-size:1.55rem;font-weight:700;line-height:1.1;
+    color:var(--text,#1f2937);margin:0;
     font-variant-numeric:tabular-nums;
 }
-body[data-page="academic"] .ah-stat .ah-stat-label{
-    color:#64748b;font-size:10px;font-weight:800;letter-spacing:.07em;
-    text-transform:uppercase;margin-top:2px;line-height:1.3;
-}
-body[data-page="academic"] .ah-stat-badge{
-    font-size:10px;font-weight:600;padding:1px 7px;border-radius:9999px;
-    display:inline-flex;align-items:center;gap:4px;
-}
-body[data-page="academic"] .ah-stat-badge.warn{color:#b45309;background:#fef3c7}
-/* Each accent needs the same specificity as the base ::after rule; an
-   unprefixed .ak-students (0-1-0) loses and every cell goes pale blue. */
-body[data-page="academic"] .ah-stat.ak-students::after{background:#1d4ed8}
-body[data-page="academic"] .ah-stat.ak-records::after{background:#16a34a}
-body[data-page="academic"] .ah-stat.ak-schools::after{background:#6366f1}
-body[data-page="academic"] .ah-stat.ak-awaiting::after{background:#d97706}
+body[data-page="academic"] .ah-stat-sub{font-size:.76rem;color:var(--muted,#6b7280);margin:5px 0 0}
 
-/* ── Panel + toolbar ───────────────────────────── */
-body[data-page="academic"] .ah-panel{padding:0;overflow:hidden}
-body[data-page="academic"] .ah-toolbar{
-    display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
-    padding:15px 20px;background:#f8faff;border-bottom:1px solid #e2e8f0;
+/* â”€â”€ Roster table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+body[data-page="academic"] .ah-panel{
+    background:#fff;border:1px solid var(--border,#e3e8ef);
+    border-radius:12px;overflow:hidden;margin-bottom:18px;
 }
-body[data-page="academic"] .ah-toolbar-title{
-    display:flex;align-items:center;gap:10px;font-size:15px;font-weight:800;
-    color:#0d1b2e;letter-spacing:-.3px;
+body[data-page="academic"] .ah-panel-head{
+    display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+    padding:14px 18px;border-bottom:1px solid var(--border,#e3e8ef);
 }
-body[data-page="academic"] .ah-toolbar-title i{color:#2563eb}
-body[data-page="academic"] .ah-pill{
-    padding:2px 9px;border-radius:999px;background:#e0ecff;color:#1d4ed8;
-    font-size:11px;font-weight:800;font-variant-numeric:tabular-nums;
+body[data-page="academic"] .ah-panel-head h2{
+    margin:0;font-size:1rem;font-weight:700;color:var(--text,#1f2937);
 }
-body[data-page="academic"] .ah-toolbar .search-wrap{
-    position:relative;flex:1 1 320px;min-width:220px;max-width:420px;margin-left:auto;
-}
-body[data-page="academic"] .ah-toolbar .search-wrap i{
-    position:absolute;left:13px;top:50%;transform:translateY(-50%);
-    color:#94a3b8;font-size:14px;pointer-events:none;
-}
-body[data-page="academic"] .ah-toolbar .search-wrap input{
-    width:100%;height:38px;padding:0 13px 0 36px;box-sizing:border-box;
-    border:1.5px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:inherit;
-    outline:none;background:#fff;transition:all .2s ease;
-}
-body[data-page="academic"] .ah-toolbar .search-wrap input:focus{
-    border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.1);background:#fff;
-}
-
-/* ── Table ──────────────────────────────────────── */
-body[data-page="academic"] .ah-table{
-    width:100%;border-collapse:collapse;background:#fff;margin:0;
-    table-layout:fixed;min-width:760px;
-}
+body[data-page="academic"] .ah-panel-head .spacer{flex:1 1 auto}
+body[data-page="academic"] .ah-table-wrap{overflow-x:auto}
+body[data-page="academic"] .ah-table{width:100%;border-collapse:collapse;font-size:.88rem}
 body[data-page="academic"] .ah-table th{
-    font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#64748b;
-    background:#fbfcfe;padding:13px 18px;text-align:left;
-    border-bottom:1px solid #eef2f7;font-weight:800;
+    text-align:left;font-size:.68rem;font-weight:700;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted,#6b7280);
+    padding:11px 14px;border-bottom:1px solid var(--border,#e3e8ef);
+    background:#fafbfd;white-space:nowrap;
 }
 body[data-page="academic"] .ah-table td{
-    padding:11px 16px;border-top:1px solid #f1f5f9;color:#334155;
-    font-size:12.5px;vertical-align:top;
+    padding:11px 14px;border-bottom:1px solid #f0f3f7;vertical-align:middle;
 }
-body[data-page="academic"] .ah-table td:last-child{vertical-align:middle;text-align:center}
-body[data-page="academic"] .ah-table tbody tr{transition:background .14s ease}
-body[data-page="academic"] .ah-table tbody tr:hover{background:#f8fbff}
-body[data-page="academic"] .ah-table thead th:nth-child(1){width:34%}
-body[data-page="academic"] .ah-table thead th:nth-child(2){width:22%}
-body[data-page="academic"] .ah-table thead th:nth-child(3){width:30%}
-body[data-page="academic"] .ah-table thead th:nth-child(4){width:14%;text-align:center}
-body[data-page="academic"] .ah-table th .ah-h{display:inline-flex;align-items:center;gap:6px}
-body[data-page="academic"] .ah-table th .ah-h i{font-size:10px}
-body[data-page="academic"] .ah-table th:nth-child(2) .ah-h{color:#1d4ed8}
-body[data-page="academic"] .ah-table th:nth-child(2) .ah-h i{color:#2563eb}
-body[data-page="academic"] .ah-table th:nth-child(3) .ah-h{color:#4f46e5}
-body[data-page="academic"] .ah-table th:nth-child(3) .ah-h i{color:#6366f1}
-body[data-page="academic"] .ah-table th:last-child .ah-h{color:#64748b}
-body[data-page="academic"] .ah-table th:last-child .ah-h i{color:#94a3b8}
-
-body[data-page="academic"] .ah-who{display:flex;align-items:center;gap:10px}
-body[data-page="academic"] .ah-avatar{
-    display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;
-    border-radius:11px;font-size:12.5px;font-weight:800;color:#fff;
-    background:linear-gradient(140deg,#2563eb,#1d4ed8);
-}
-body[data-page="academic"] .ah-name{font-size:13.5px;font-weight:700;color:#0f172a;line-height:1.3}
+body[data-page="academic"] .ah-table tbody tr:last-child td{border-bottom:none}
+body[data-page="academic"] .ah-table tbody tr{transition:background .12s ease}
+body[data-page="academic"] .ah-table tbody tr:hover{background:#f7f9fc}
 body[data-page="academic"] .ah-num{
-    margin-top:1px;font-family:'JetBrains Mono',ui-monospace,monospace;
-    font-size:11px;color:#64748b;
+    font-variant-numeric:tabular-nums;font-weight:600;color:var(--text,#1f2937);
 }
-body[data-page="academic"] .ah-count{
-    display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
-    background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:800;
-    font-variant-numeric:tabular-nums;
-}
-body[data-page="academic"] .ah-count i{font-size:9.5px}
-body[data-page="academic"] .ah-course{margin-top:4px;font-size:11px;color:#94a3b8}
-body[data-page="academic"] .ah-school{font-size:12.5px;color:#0f172a;font-weight:600;line-height:1.4}
+body[data-page="academic"] .ah-sub{font-size:.76rem;color:var(--muted,#6b7280)}
+body[data-page="academic"] .ah-gwa{font-variant-numeric:tabular-nums;font-weight:700;font-size:.95rem}
+body[data-page="academic"] .ah-gwa[data-band="good"]{color:#15803d}
+body[data-page="academic"] .ah-gwa[data-band="warn"]{color:#b45309}
+body[data-page="academic"] .ah-gwa[data-band="poor"]{color:#b91c1c}
+body[data-page="academic"] .ah-gwa[data-band="none"]{color:var(--muted,#9ca3af);font-weight:600}
 
-/* Empty state — says what happened and what to do next. */
-body[data-page="academic"] .ah-empty{
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    gap:8px;min-height:300px;text-align:center;padding:20px;
+/* â”€â”€ State pills â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+body[data-page="academic"] .ah-state{
+    display:inline-flex;align-items:center;gap:5px;
+    padding:3px 9px;border-radius:999px;
+    font-size:.72rem;font-weight:700;letter-spacing:.02em;white-space:nowrap;
 }
-body[data-page="academic"] .ah-empty i{
-    display:grid;place-items:center;width:52px;height:52px;margin-bottom:4px;
-    border-radius:16px;background:#eff6ff;color:#2563eb;font-size:20px;
-}
-body[data-page="academic"] .ah-empty p{margin:0;font-size:16px;font-weight:700;color:#334155}
-body[data-page="academic"] .ah-empty span{margin:0;color:#64748b;font-size:13px}
-body[data-page="academic"] .ah-empty strong{color:#1d4ed8}
+body[data-page="academic"] .ah-state[data-state="complete"]{background:#dcfce7;color:#15803d}
+body[data-page="academic"] .ah-state[data-state="partial"]{background:#fef3c7;color:#b45309}
+body[data-page="academic"] .ah-state[data-state="none"]{background:#f1f5f9;color:#64748b}
 
-body[data-page="academic"] .ah-table .action-btn{
-    width:30px;height:30px;border-radius:9px;border:1px solid #e2e8f0;
-    background:#fff;color:#475569;transition:all .18s ease;
+body[data-page="academic"] .ah-btn{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:7px 13px;font-size:.82rem;font-weight:600;font-family:inherit;
+    border:1px solid var(--border,#d5dbe4);border-radius:8px;
+    background:#fff;color:var(--text,#1f2937);cursor:pointer;
+    transition:background .12s ease,border-color .12s ease;
 }
-body[data-page="academic"] .ah-table .action-btn:hover{
-    background:#2563eb;border-color:#2563eb;color:#fff;
-    box-shadow:0 5px 14px rgba(37,99,235,.28);transform:translateY(-1px);
+body[data-page="academic"] .ah-btn:hover{background:#f4f7fb;border-color:#c3ccd9}
+body[data-page="academic"] .ah-btn:focus-visible{outline:2px solid var(--primary,#1e5aa8);outline-offset:2px}
+body[data-page="academic"] .ah-btn-primary{
+    background:var(--primary,#1e5aa8);border-color:var(--primary,#1e5aa8);color:#fff;
 }
-body[data-page="academic"] .table-footer{padding:11px 18px;background:#f8faff;border-top:1px solid #e2e8f0}
-body[data-page="academic"] .table-footer .info-text{font-size:12px;color:#64748b}
-body[data-page="academic"] .table-footer .info-text strong{color:#0f172a;font-variant-numeric:tabular-nums}
+body[data-page="academic"] .ah-btn-primary:hover{background:#184a8c;border-color:#184a8c}
+body[data-page="academic"] .ah-btn[disabled]{opacity:.5;cursor:not-allowed}
 
-/* ── Modals ──────────────────────────────────────
-   Pinned gradient header, independently scrolling body, pinned footer —
-   the same shell as the Manage Contacts / RFID modals. */
-body[data-page="academic"] .modal-content.ah-modal{
-    box-sizing:border-box;display:flex;flex-direction:column;padding:0;
-    max-width:680px;max-height:calc(100vh - 40px);overflow:hidden;
-    border:1px solid #dbeafe;border-radius:19px;
-    box-shadow:0 26px 64px rgba(15,23,42,.24);
+/* â”€â”€ Grade entry grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   The grid is the work surface. Ratings are 1.00-5.00 with lower
+   better, so each cell carries a band tint rather than a colour
+   the reader has to interpret. A cell outside the scale is
+   outlined in red, because it will not average and the save will
+   refuse it. */
+body[data-page="academic"] .ah-grid-wrap{overflow-x:auto;padding:0 18px 18px}
+body[data-page="academic"] .ah-grid{width:100%;border-collapse:collapse;font-size:.86rem}
+body[data-page="academic"] .ah-grid th{
+    text-align:left;font-size:.68rem;font-weight:700;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted,#6b7280);
+    padding:10px 12px;border-bottom:1px solid var(--border,#e3e8ef);
+    background:#fafbfd;white-space:nowrap;
 }
-body[data-page="academic"] .modal-header.ah-modal-head{
-    flex:0 0 auto;display:flex;align-items:center;gap:12px;margin:0;padding:18px 22px;
-    background:linear-gradient(120deg,#eff6ff,#fff 70%);
-    border-bottom:1px solid #dbeafe;border-radius:0;
+body[data-page="academic"] .ah-grid td{
+    padding:8px 12px;border-bottom:1px solid #f0f3f7;vertical-align:middle;
 }
-body[data-page="academic"] .modal-header.ah-modal-head h2{
-    display:flex;align-items:center;gap:10px;margin:0;
-    font-size:16px;font-weight:700;letter-spacing:-.02em;color:#172554;
+body[data-page="academic"] .ah-grid tbody tr:last-child td{border-bottom:none}
+body[data-page="academic"] .ah-in{
+    width:100%;padding:7px 9px;font-size:.85rem;font-family:inherit;
+    border:1px solid var(--border,#d5dbe4);border-radius:7px;
+    background:#fff;color:inherit;min-height:34px;
 }
-body[data-page="academic"] .modal-header.ah-modal-head h2 i{
-    display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;
-    border-radius:10px;background:linear-gradient(140deg,#2563eb,#1d4ed8);
-    color:#fff;font-size:14px;box-shadow:0 6px 16px rgba(37,99,235,.26);
+body[data-page="academic"] .ah-in-num{
+    width:74px;text-align:center;font-variant-numeric:tabular-nums;
 }
-body[data-page="academic"] .modal-close{
-    display:grid;place-items:center;width:32px;height:32px;margin-left:auto;
-    border:1px solid #dbeafe;border-radius:9px;background:#fff;color:#64748b;
+body[data-page="academic"] .ah-in:focus{
+    outline:2px solid var(--primary,#1e5aa8);outline-offset:1px;
 }
-body[data-page="academic"] .modal-close:hover{background:#f1f5f9;color:#0f172a}
-body[data-page="academic"] .modal-body{
-    flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
-    margin:0;padding:20px 22px;background:#fff;
+body[data-page="academic"] .ah-in[data-band="good"]{border-color:#86c79b;background:#f2fbf5}
+body[data-page="academic"] .ah-in[data-band="warn"]{border-color:#e0b168;background:#fffaf0}
+body[data-page="academic"] .ah-in[data-band="poor"]{border-color:#e39a9a;background:#fdf4f4}
+body[data-page="academic"] .ah-in[aria-invalid="true"]{border-color:#b91c1c;background:#fef2f2}
+body[data-page="academic"] .ah-sel{
+    padding:7px 8px;font-size:.82rem;font-family:inherit;
+    border:1px solid var(--border,#d5dbe4);border-radius:7px;background:#fff;
+    min-height:34px;
 }
-body[data-page="academic"] .modal-footer{
-    flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:9px;
-    margin:0;padding:14px 22px;background:#f8faff;border-top:1px solid #e2e8f0;
+body[data-page="academic"] .ah-rm{
+    border:none;background:transparent;color:var(--muted,#9ca3af);
+    cursor:pointer;font-size:.95rem;padding:4px 7px;border-radius:6px;
 }
-body[data-page="academic"] .ah-note{
-    display:flex;gap:9px;margin:0 0 14px;padding:11px 13px;border-radius:11px;
-    background:#eff6ff;border:1px solid #dbeafe;color:#334155;
-    font-size:12.5px;line-height:1.55;
+body[data-page="academic"] .ah-rm:hover{background:#fef2f2;color:#b91c1c}
+body[data-page="academic"] .ah-rm:focus-visible{outline:2px solid var(--primary,#1e5aa8);outline-offset:1px}
+body[data-page="academic"] .ah-scale{
+    display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    padding:10px 18px;background:#fafbfd;
+    border-bottom:1px solid var(--border,#e3e8ef);
+    font-size:.76rem;color:var(--muted,#6b7280);
 }
-body[data-page="academic"] .ah-note i{color:#2563eb;margin-top:1px}
-body[data-page="academic"] .ah-note strong{color:#1d4ed8}
-body[data-page="academic"] .ah-no-match{text-align:center;color:#94a3b8;padding:24px;font-size:13px}
+body[data-page="academic"] .ah-scale b{color:var(--text,#1f2937)}
+body[data-page="academic"] .ah-legend{display:inline-flex;align-items:center;gap:5px}
+body[data-page="academic"] .ah-dot{
+    width:9px;height:9px;border-radius:50%;display:inline-block;
+    border:1px solid rgba(0,0,0,.14);
+}
+body[data-page="academic"] .ah-dot[data-band="good"]{background:#dcfce7}
+body[data-page="academic"] .ah-dot[data-band="warn"]{background:#fef3c7}
+body[data-page="academic"] .ah-dot[data-band="poor"]{background:#fee2e2}
 
-body[data-page="academic"] .ah-modal .acad-search{position:relative;margin-bottom:10px}
-body[data-page="academic"] .ah-modal .acad-search i{
-    position:absolute;left:12px;top:50%;transform:translateY(-50%);
-    color:#94a3b8;font-size:13px;pointer-events:none;
+/* â”€â”€ Findings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   Blocking and advisory are visually distinct and never mixed.
+   A finding that blocks a close and a finding that only raises a
+   question must not read as the same weight. */
+body[data-page="academic"] .ah-find{
+    display:flex;gap:11px;padding:12px 14px;border-radius:9px;
+    border:1px solid;margin-bottom:9px;align-items:flex-start;
 }
-body[data-page="academic"] .ah-modal .acad-search input{
-    width:100%;height:38px;box-sizing:border-box;padding:0 12px 0 34px;
-    border:1.5px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:inherit;
-    outline:none;background:#fff;
+body[data-page="academic"] .ah-find[data-sev="blocking"]{background:#fef2f2;border-color:#f3c6c6}
+body[data-page="academic"] .ah-find[data-sev="advisory"]{background:#fffbeb;border-color:#f0dcae}
+body[data-page="academic"] .ah-find i{flex:0 0 auto;margin-top:2px;font-size:.92rem}
+body[data-page="academic"] .ah-find[data-sev="blocking"] i{color:#b91c1c}
+body[data-page="academic"] .ah-find[data-sev="advisory"] i{color:#b45309}
+body[data-page="academic"] .ah-find-body{min-width:0;flex:1 1 auto}
+body[data-page="academic"] .ah-find-title{
+    font-size:.85rem;font-weight:700;color:var(--text,#1f2937);margin:0 0 3px;
 }
-body[data-page="academic"] .ah-modal .acad-search input:focus{
-    border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.1);
+body[data-page="academic"] .ah-find-detail{
+    font-size:.82rem;color:var(--text,#374151);margin:0 0 4px;line-height:1.45;
+    overflow-wrap:anywhere;
 }
-body[data-page="academic"] .ah-modal .acad-search input::placeholder{color:#94a3b8}
-/* ── Receive modal: a worklist, not a directory ─────
-   Split into two groups, backlog first. The amber left rail,
-   tinted row and amber avatar mark the students who actually
-   need work; rows that are already on file stay flat and
-   quiet so the contrast reads as the backlog. */
-body[data-page="academic"] #receiveList{
-    max-height:52vh;overflow-y:auto;border:1px solid #eef2f7;border-radius:12px;
-    background:#fff;
+body[data-page="academic"] .ah-find-action{
+    font-size:.78rem;color:var(--muted,#6b7280);margin:0;line-height:1.45;font-style:italic;
 }
-/* Sticky so the group a row belongs to is always in view. */
-body[data-page="academic"] .rv-group{
-    position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;
-    padding:9px 14px;background:#f8fafc;border-bottom:1px solid #eef2f7;
-    font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
-    color:#64748b;
+body[data-page="academic"] .ah-audit-head{
+    display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+    padding:14px 18px;border-bottom:1px solid var(--border,#e3e8ef);
 }
-body[data-page="academic"] .rv-group.is-awaiting{background:#fffbeb;color:#b45309}
-body[data-page="academic"] .rv-group-n{
-    padding:1px 7px;border-radius:999px;background:#e2e8f0;color:#475569;
-    font-size:10px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:0;
+body[data-page="academic"] .ah-audit-head h2{margin:0;font-size:1rem;font-weight:700;color:var(--text,#1f2937)}
+body[data-page="academic"] .ah-audit-head .spacer{flex:1 1 auto}
+body[data-page="academic"] .ah-audit-summary{
+    padding:12px 18px;font-size:.85rem;color:var(--text,#374151);
+    background:#fafbfd;border-bottom:1px solid var(--border,#e3e8ef);
 }
-body[data-page="academic"] .rv-group.is-awaiting .rv-group-n{background:#fde68a;color:#92400e}
-body[data-page="academic"] .receive-row{
-    display:flex;align-items:center;gap:11px;padding:10px 14px;
-    border-bottom:1px solid #f1f5f9;border-left:3px solid transparent;
-    background:#fff;transition:background .14s ease;
+body[data-page="academic"] .ah-audit-body{padding:16px 18px;max-height:56vh;overflow-y:auto}
+body[data-page="academic"] .ah-audit-note{
+    margin:0 18px 16px;padding:11px 13px;border-radius:9px;
+    background:#f0f6ff;border:1px solid #cfe0f8;
+    font-size:.79rem;color:#1e3a5f;line-height:1.5;
 }
-body[data-page="academic"] .receive-row:last-child{border-bottom:none}
-body[data-page="academic"] .receive-row:hover{background:#f8fbff}
-body[data-page="academic"] .receive-row.is-awaiting{background:#fffdf7;border-left-color:#f59e0b}
-body[data-page="academic"] .receive-row.is-awaiting:hover{background:#fffbeb}
-body[data-page="academic"] .rv-avatar{
-    display:grid;place-items:center;width:30px;height:30px;flex:0 0 30px;
-    border-radius:10px;font-size:11.5px;font-weight:800;color:#fff;
-    background:linear-gradient(140deg,#64748b,#475569);
-}
-body[data-page="academic"] .receive-row.is-awaiting .rv-avatar{
-    background:linear-gradient(140deg,#f59e0b,#d97706);
-}
-body[data-page="academic"] .rv-who{flex:1;min-width:0}
-body[data-page="academic"] .rv-name{font-size:13px;font-weight:700;color:#0f172a;line-height:1.3}
-body[data-page="academic"] .rv-sub{
-    margin-top:1px;font-family:'JetBrains Mono',ui-monospace,monospace;
-    font-size:10.5px;color:#94a3b8;
-}
-body[data-page="academic"] .rv-status{
-    flex:0 0 auto;padding:3px 9px;border-radius:999px;white-space:nowrap;
-    font-size:10.5px;font-weight:800;font-variant-numeric:tabular-nums;
-    background:#f1f5f9;color:#64748b;
-}
-body[data-page="academic"] .rv-status.is-awaiting{background:#fef3c7;color:#b45309}
-body[data-page="academic"] .rv-import{
-    flex:0 0 auto;height:30px;min-width:84px;padding:0 12px;
-    font-size:11.5px;border-radius:8px;justify-content:center;
-}
-body[data-page="academic"] .rv-import:disabled{opacity:.65;cursor:progress}
 
-/* Student header inside the read-only view */
-body[data-page="academic"] .ah-view-head{
-    display:flex;align-items:center;gap:12px;margin-bottom:14px;
-    padding-bottom:14px;border-bottom:1px solid #eef2f7;
+/* â”€â”€ Save bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+body[data-page="academic"] .ah-savebar{
+    display:flex;flex-wrap:wrap;align-items:center;gap:11px;
+    padding:13px 18px;background:#fafbfd;
+    border-top:1px solid var(--border,#e3e8ef);
 }
-body[data-page="academic"] .ah-view-name{font-size:15px;font-weight:800;color:#0f172a}
-body[data-page="academic"] .ah-view-sub{font-size:12px;color:#64748b;margin-top:2px}
+body[data-page="academic"] .ah-savebar .spacer{flex:1 1 auto}
+body[data-page="academic"] .ah-savebar-status{font-size:.8rem;color:var(--muted,#6b7280);line-height:1.4}
+body[data-page="academic"] .ah-savebar-status[data-tone="bad"]{color:#b91c1c}
+body[data-page="academic"] .ah-savebar-status[data-tone="good"]{color:#15803d}
 
-/* One record card = one school year. */
-body[data-page="academic"] .ah-record{
-    border:1px solid #eef2f7;border-radius:13px;padding:14px 16px;margin-bottom:10px;
-    background:#fbfcfe;
-}
-body[data-page="academic"] .ah-record:last-child{margin-bottom:0}
-body[data-page="academic"] .ah-record-head{
-    display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;
-}
-body[data-page="academic"] .ah-record-school{font-size:13.5px;font-weight:800;color:#0f172a}
-body[data-page="academic"] .gwa-badge{
-    display:inline-flex;padding:3px 10px;border-radius:999px;
-    font-size:11.5px;font-weight:800;background:#e0ecff;color:#1d4ed8;
-    font-variant-numeric:tabular-nums;white-space:nowrap;
-}
-body[data-page="academic"] .ah-row{display:flex;gap:10px;font-size:12.5px;padding:4px 0;line-height:1.5}
-body[data-page="academic"] .ah-row span:first-child{color:#64748b}
-body[data-page="academic"] .ah-remarks{color:#475569}
-body[data-page="academic"] .ah-grades{margin-top:9px;border-top:1px dashed #e2e8f0;padding-top:9px}
-body[data-page="academic"] .ah-grades table{width:100%;border-collapse:collapse;font-size:12px}
-body[data-page="academic"] .ah-grades th{
-    text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
-    color:#94a3b8;padding:4px 6px;font-weight:800;
-}
-body[data-page="academic"] .ah-grades td{padding:5px 6px;border-top:1px solid #f1f5f9;color:#334155}
-body[data-page="academic"] .ah-none{
-    padding:26px;text-align:center;color:#64748b;background:#f8fafc;border-radius:13px;
-    font-size:13px;line-height:1.6;
-}
-body[data-page="academic"] .ah-none strong{color:#1d4ed8}
+/* â”€â”€ Empty state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   The commonest cause of an empty list is a filter left over from
+   a previous visit, so the empty state offers the way out rather
+   than only reporting the fact. */
+body[data-page="academic"] .ah-empty{padding:44px 24px;text-align:center;color:var(--muted,#6b7280)}
+body[data-page="academic"] .ah-empty i{font-size:1.9rem;opacity:.35;display:block;margin-bottom:12px}
+body[data-page="academic"] .ah-empty h3{margin:0 0 6px;font-size:1rem;color:var(--text,#1f2937)}
+body[data-page="academic"] .ah-empty p{margin:0 auto 16px;font-size:.87rem;max-width:46ch;line-height:1.5}
 
-@media (max-width:1200px){
-    body[data-page="academic"] .ah-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-    body[data-page="academic"] .ah-stat:nth-child(2n){border-right:0}
-    body[data-page="academic"] .ah-stat:nth-child(-n+2){border-bottom:1px solid #e2e8f0}
+@media (max-width:900px){
+    body[data-page="academic"] .term-current{text-align:left;align-self:flex-start}
+    body[data-page="academic"] .term-spacer{display:none}
+    body[data-page="academic"] .term-field{flex:1 1 140px;min-width:0}
 }
 @media (max-width:640px){
-    body[data-page="academic"] .ah-stats{grid-template-columns:1fr}
-    body[data-page="academic"] .ah-stat{border-right:0}
-    body[data-page="academic"] .ah-stat + .ah-stat{border-bottom:1px solid #e2e8f0}
-    body[data-page="academic"] .header{padding:21px 18px}
-    body[data-page="academic"] .ah-toolbar{flex-direction:column;align-items:stretch}
-    /* The search box is `flex:1 1 320px` — a WIDTH basis. Once the toolbar
-       flips to a column, that same basis applies to height and inflates the
-       wrapper to 320px tall. Reset it to a normal block. */
-    body[data-page="academic"] .ah-toolbar .search-wrap{
-        flex:0 0 auto;width:100%;max-width:none;margin-left:0;
-    }
-    body[data-page="academic"] .ah-record-head{flex-direction:column;align-items:flex-start;gap:6px}
+    body[data-page="academic"] .ah-stat-value{font-size:1.3rem}
+    body[data-page="academic"] .ah-table th,
+    body[data-page="academic"] .ah-table td{padding:9px 10px}
 }
 @media (prefers-reduced-motion:reduce){
-    body[data-page="academic"] .ah-stat{transition:none}
-    body[data-page="academic"] .ah-table tbody tr{transition:none}
-    body[data-page="academic"] .receive-row{transition:none}
+    body[data-page="academic"] .ah-table tbody tr,
+    body[data-page="academic"] .ah-btn{transition:none}
 }
 </style>
-
 <main class="dashboard-main">
 <div class="dashboard-container">
 
     <header class="header">
         <div class="title">
-            <div class="ah-kicker"><i class="fa-solid fa-school"></i> Previous schools</div>
+            <div class="ah-kicker"><i class="fa-solid fa-clipboard-check"></i> Term grading</div>
             <h1>Academic History</h1>
-            <p>Previous schools and academic records, received from the enrollment intake</p>
+            <p class="ah-head-note">
+                Record final ratings by term. The GWA is computed from the ratings you enter and
+                stored with the term, so the transcript, the TOR and the status rules all read
+                the same figure. Ratings run 1.00 to 5.00, where lower is better.
+            </p>
         </div>
         <div class="header-actions">
-            <button class="btn btn-primary" onclick="openReceive()"><i class="fas fa-inbox"></i> Receive Record</button>
+            <button class="ah-btn ah-btn-primary" type="button" id="btnAudit"
+                    onclick="openAudit()">
+                <i class="fa-solid fa-stethoscope"></i> Check this term before you close
+            </button>
         </div>
     </header>
 
-    <!-- ── Metric strip ────────────────────────────────────
-         Same shell as the other registrar list pages: one connected
-         panel, hairline dividers, an inset accent underline per figure,
-         and a badge in the top row. "Awaiting records" is the actionable
-         one, so it carries the coverage badge. -->
-    <div class="ah-stats">
-        <div class="ah-stat ak-students">
-            <div class="ah-stat-top"></div>
-            <div class="ah-stat-number"><?= $statStudents ?></div>
-            <div class="ah-stat-label">Students with records</div>
+    <!-- â”€â”€ Term and roster filters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+         A form that navigates on change. Reloading rather than
+         filtering in place keeps the term in the URL, so a view of
+         one term can be shared and the back button returns to the
+         previous term. -->
+    <form class="term-bar" method="get" action="academic-history.php" id="termForm">
+        <div class="term-field">
+            <label for="fltSy">School year</label>
+            <select name="sy" id="fltSy" onchange="this.form.submit()">
+                <?php foreach ($years as $y): ?>
+                    <option value="<?= htmlspecialchars($y) ?>"<?= $y === $sy ? ' selected' : '' ?>>
+                        <?= htmlspecialchars($y) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
         </div>
-        <div class="ah-stat ak-records">
-            <div class="ah-stat-top"></div>
-            <div class="ah-stat-number"><?= $statRecords ?></div>
-            <div class="ah-stat-label">Records on file</div>
+        <div class="term-field">
+            <label for="fltSem">Semester</label>
+            <select name="sem" id="fltSem" onchange="this.form.submit()">
+                <?php foreach (['1st', '2nd', 'Summer'] as $s): ?>
+                    <option value="<?= $s ?>"<?= $s === $sem ? ' selected' : '' ?>><?= $s ?></option>
+                <?php endforeach; ?>
+            </select>
         </div>
-        <div class="ah-stat ak-schools">
-            <div class="ah-stat-top"></div>
-            <div class="ah-stat-number"><?= $statSchools ?></div>
-            <div class="ah-stat-label">Schools represented</div>
+        <div class="term-field">
+            <label for="fltProgram">Program</label>
+            <select name="program" id="fltProgram" onchange="this.form.submit()">
+                <option value="">All programs</option>
+                <?php foreach (array_keys($programs) as $p): ?>
+                    <option value="<?= htmlspecialchars($p) ?>"<?= $p === $program ? ' selected' : '' ?>>
+                        <?= htmlspecialchars($p) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
         </div>
-        <div class="ah-stat ak-awaiting">
-            <div class="ah-stat-top">
-                <span class="ah-stat-badge warn"><?= $coveragePct ?>% covered</span>
+        <div class="term-field">
+            <label for="fltSection">Section</label>
+            <select name="section" id="fltSection" onchange="this.form.submit()">
+                <option value="">All sections</option>
+                <?php foreach (array_keys($sections) as $sec): ?>
+                    <option value="<?= htmlspecialchars($sec) ?>"<?= $sec === $section ? ' selected' : '' ?>>
+                        <?= htmlspecialchars($sec) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div class="term-spacer"></div>
+        <div class="term-current">
+            <strong><?= htmlspecialchars(termLabel($sy, $sem)) ?></strong>
+            <?= count($visible) ?> student<?= count($visible) === 1 ? '' : 's' ?> in view
+            <?php if ($program !== '' || $section !== ''): ?>
+                &middot; <a href="academic-history.php?sy=<?= urlencode($sy) ?>&amp;sem=<?= urlencode($sem) ?>">clear filters</a>
+            <?php endif; ?>
+        </div>
+    </form>
+
+    <!-- â”€â”€ Metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+         "Awaiting" is the actionable figure, so it carries the
+         tone. A mean GWA is only shown once there is something to
+         average - an average of nothing is not 0.00, it is absent. -->
+    <section class="ah-stats" aria-label="Term summary">
+        <div class="ah-stat">
+            <p class="ah-stat-label">In view</p>
+            <p class="ah-stat-value"><?= count($visible) ?></p>
+            <p class="ah-stat-sub"><?= $program !== '' ? htmlspecialchars($program) : 'All programs' ?></p>
+        </div>
+        <div class="ah-stat" data-tone="ok">
+            <p class="ah-stat-label">Complete</p>
+            <p class="ah-stat-value"><?= $termComplete ?></p>
+            <p class="ah-stat-sub">every subject has a final rating</p>
+        </div>
+        <div class="ah-stat"<?= $termMissing > 0 ? ' data-tone="warn"' : '' ?>>
+            <p class="ah-stat-label">Awaiting grades</p>
+            <p class="ah-stat-value"><?= $termMissing ?></p>
+            <p class="ah-stat-sub"><?= $termMissing > 0 ? 'not started or incomplete' : 'nothing outstanding' ?></p>
+        </div>
+        <div class="ah-stat">
+            <p class="ah-stat-label">Mean term GWA</p>
+            <p class="ah-stat-value">
+                <?= $termMeanGwa === null ? '&mdash;' : number_format($termMeanGwa, 2) ?>
+            </p>
+            <p class="ah-stat-sub">across recorded terms</p>
+        </div>
+        <div class="ah-stat">
+            <p class="ah-stat-label">Career GWA</p>
+            <p class="ah-stat-value">
+                <?= $career === null ? '&mdash;' : number_format($career, 2) ?>
+            </p>
+            <p class="ah-stat-sub">
+                <?= $career === null ? 'no ratings on file' : 'over ' . rtrim(rtrim(number_format($careerUnits, 0), '0'), '.') . ' units' ?>
+            </p>
+        </div>
+    </section>
+
+    <!-- â”€â”€ Roster â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+         One row per student with their computed GWA and state.
+         The GWA shown is the one the server computed and stored,
+         not a figure typed here. -->
+    <section class="ah-panel">
+        <div class="ah-panel-head">
+            <h2>Roster</h2>
+            <span class="ah-sub">
+                <?= count($visible) ?> in view
+                <?= $termComplete + $termMissing > 0
+                    ? '&middot; ' . $termComplete . ' complete, ' . $termMissing . ' outstanding'
+                    : '' ?>
+            </span>
+            <div class="spacer"></div>
+        </div>
+
+        <?php if (!$visible): ?>
+            <div class="ah-empty">
+                <i class="fa-regular fa-folder-open"></i>
+                <h3>No students match this view</h3>
+                <?php if ($program !== '' || $section !== ''): ?>
+                    <p>
+                        The program and section filters together match nobody. Clearing them
+                        shows the whole roster.
+                    </p>
+                    <a class="ah-btn" href="academic-history.php?sy=<?= urlencode($sy) ?>&amp;sem=<?= urlencode($sem) ?>">
+                        <i class="fa-solid fa-filter-circle-xmark"></i> Clear filters
+                    </a>
+                <?php else: ?>
+                    <p>
+                        There are no active students to grade. Archived students are left out
+                        of this page on purpose.
+                    </p>
+                <?php endif; ?>
             </div>
-            <div class="ah-stat-number"><?= $statAwaiting ?></div>
-            <div class="ah-stat-label">Awaiting records</div>
-        </div>
-    </div>
-
-    <div class="panel ah-panel">
-        <div class="ah-toolbar">
-            <div class="ah-toolbar-title">
-                <i class="fa-solid fa-graduation-cap"></i> Students with records
-                <span class="ah-pill"><?= $statStudents ?></span>
+        <?php else: ?>
+            <div class="ah-table-wrap">
+                <table class="ah-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Student</th>
+                            <th scope="col">Program</th>
+                            <th scope="col">Level</th>
+                            <th scope="col">Section</th>
+                            <th scope="col">Subjects</th>
+                            <th scope="col">Units</th>
+                            <th scope="col">Term GWA</th>
+                            <th scope="col">State</th>
+                            <th scope="col"><span class="ah-sr">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($rows as $r): ?>
+                        <?php
+                        $band = 'none';
+                        if ($r['gwa'] !== null) {
+                            // Lower is better on this scale, so the bands run
+                            // the opposite way round from a school average.
+                            $band = $r['gwa'] < GWA_AT_RISK - 0.5 ? 'good'
+                                  : ($r['gwa'] < GWA_AT_RISK ? 'warn' : 'poor');
+                        }
+                        $stateLabel = [
+                            'complete' => 'Complete',
+                            'partial'  => $r['missing'] . ' missing',
+                            'none'     => 'Not started',
+                        ][$r['state']];
+                        ?>
+                        <tr>
+                            <td>
+                                <div class="ah-num"><?= htmlspecialchars($r['name']) ?></div>
+                                <div class="ah-sub"><?= htmlspecialchars($r['number']) ?></div>
+                            </td>
+                            <td><?= htmlspecialchars($r['program'] ?: '—') ?></td>
+                            <td><?= htmlspecialchars($r['level'] ?: '—') ?></td>
+                            <td><?= htmlspecialchars($r['section'] ?: '—') ?></td>
+                            <td><?= count($r['subjects']) ?: '<span class="ah-sub">—</span>' ?></td>
+                            <td><?= $r['units'] > 0 ? rtrim(rtrim(number_format($r['units'], 2), '0'), '.') : '<span class="ah-sub">—</span>' ?></td>
+                            <td>
+                                <span class="ah-gwa" data-band="<?= $band ?>">
+                                    <?= $r['gwa'] === null ? 'no data' : number_format($r['gwa'], 2) ?>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="ah-state" data-state="<?= $r['state'] ?>"><?= $stateLabel ?></span>
+                            </td>
+                            <td>
+                                <button class="ah-btn" type="button"
+                                        onclick="openGrades(<?= (int) $r['id'] ?>)">
+                                    <i class="fa-solid fa-pen"></i> Grades
+                                </button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
-            <div class="search-wrap">
-                <i class="fas fa-search"></i>
-                <input type="text" id="acadSearch" placeholder="Search by student name or number...">
-            </div>
-        </div>
-
-        <div class="table-responsive" style="overflow-x:auto;">
-        <table class="ah-table">
-            <thead><tr>
-                <th>Student</th>
-                <th><span class="ah-h"><i class="fa-solid fa-file-lines"></i> Records</span></th>
-                <th><span class="ah-h"><i class="fa-solid fa-school"></i> Latest School</span></th>
-                <th style="text-align:center;"><span class="ah-h"><i class="fa-solid fa-eye"></i> View</span></th>
-            </tr></thead>
-            <tbody id="acadBody">
-            <?php if (empty($studentRows)): ?>
-                <tr class="empty-state-row"><td colspan="4"><div class="ah-empty">
-                    <i class="fa-solid fa-graduation-cap"></i>
-                    <p>No academic history records yet</p>
-                    <span>Use <strong>Receive Record</strong> to import them from the enrollment intake</span>
-                </div></td></tr>
-            <?php else: foreach ($studentRows as $s): ?>
-                <tr data-search="<?= htmlspecialchars(strtolower($s['student_number'] . ' ' . $s['student_name']), ENT_QUOTES) ?>"
-                    data-sid="<?= (int) $s['student_id'] ?>">
-                    <td>
-                        <div class="ah-who">
-                            <span class="ah-avatar"><?= ah_initials($s['student_name']) ?></span>
-                            <div>
-                                <div class="ah-name"><?= htmlspecialchars($s['student_name']) ?></div>
-                                <div class="ah-num"><?= htmlspecialchars($s['student_number']) ?></div>
-                            </div>
-                        </div>
-                    </td>
-                    <td>
-                        <span class="ah-count"><i class="fa-solid fa-file-lines"></i> <?= count($s['records']) ?></span>
-                        <?= $s['course'] ? '<div class="ah-course">' . htmlspecialchars($s['course']) . '</div>' : '' ?>
-                    </td>
-                    <td><div class="ah-school"><?= htmlspecialchars($s['records'][0]['school_name']) ?></div></td>
-                    <td style="text-align:center;">
-                        <button class="action-btn view" title="View academic history" onclick="openView(<?= (int) $s['student_id'] ?>)"><i class="fas fa-eye"></i></button>
-                    </td>
-                </tr>
-            <?php endforeach; endif; ?>
-            </tbody>
-        </table>
-        </div>
-
-        <div class="table-footer">
-            <span class="info-text" id="acadCount"><?= $statStudents ?> of <?= $statStudents ?> students</span>
-        </div>
-    </div>
-
+        <?php endif; ?>
+    </section>
 </div>
 </main>
 
-<!-- Receive Record Modal -->
-<div class="modal-overlay" id="receiveModal"><div class="modal-content ah-modal">
-    <div class="modal-header ah-modal-head">
-        <h2><i class="fa-solid fa-inbox"></i> Receive Academic Records</h2>
-        <button class="modal-close" onclick="closeModal('receiveModal')" aria-label="Close"><i class="fas fa-times"></i></button>
-    </div>
-    <div class="modal-body">
-        <div class="ah-note">
-            <i class="fas fa-circle-info"></i>
-            <div>Import pulls a student's previous-school records from the enrollment dashboard. Students with nothing on file are listed first.</div>
+<!-- â”€â”€ Grade entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+     One student's term, opened from the roster. The GWA preview
+     below the grid is recomputed as the user types, using the
+     same weighting the server will apply, so what they see before
+     saving is what gets stored. -->
+<div class="ah-modal" id="gradeModal" role="dialog" aria-modal="true" aria-labelledby="gradeModalTitle" hidden>
+    <div class="ah-modal-backdrop" onclick="closeGrades()"></div>
+    <div class="ah-modal-card">
+        <div class="ah-modal-head">
+            <h2 id="gradeModalTitle">Final ratings</h2>
+            <button class="ah-rm" type="button" onclick="closeGrades()" aria-label="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
         </div>
-        <div class="acad-search">
-            <i class="fas fa-search"></i>
-            <input type="text" id="receiveSearch" placeholder="Search student name or number...">
-        </div>
-        <div id="receiveList"></div>
-    </div>
-    <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeModal('receiveModal')">Close</button>
-    </div>
-</div></div>
+        <div class="ah-audit-summary" id="gradeWho"></div>
 
-<!-- View (read-only) Modal -->
-<div class="modal-overlay" id="viewModal"><div class="modal-content ah-modal">
-    <div class="modal-header ah-modal-head">
-        <h2><i class="fa-solid fa-school"></i> Academic History</h2>
-        <button class="modal-close" onclick="closeModal('viewModal')" aria-label="Close"><i class="fas fa-times"></i></button>
+        <div class="ah-scale">
+            <span>Ratings <b>1.00 to 5.00</b>, lower is better.</span>
+            <span class="ah-legend"><i class="ah-dot" data-band="good"></i> under 2.50</span>
+            <span class="ah-legend"><i class="ah-dot" data-band="warn"></i> 2.50 to 2.99</span>
+            <span class="ah-legend"><i class="ah-dot" data-band="poor"></i> 3.00 and above</span>
+        </div>
+
+        <div class="ah-grid-wrap">
+            <table class="ah-grid">
+                <thead>
+                    <tr>
+                        <th scope="col" style="width:34%">Subject</th>
+                        <th scope="col" style="width:12%">Units</th>
+                        <th scope="col" style="width:20%">Final rating</th>
+                        <th scope="col" style="width:24%">Result</th>
+                        <th scope="col"><span class="ah-sr">Remove</span></th>
+                    </tr>
+                </thead>
+                <tbody id="gradeRows"></tbody>
+            </table>
+        </div>
+
+        <div class="ah-savebar">
+            <button class="ah-btn" type="button" onclick="addGradeRow()">
+                <i class="fa-solid fa-plus"></i> Add subject
+            </button>
+            <div class="spacer"></div>
+            <span class="ah-savebar-status" id="gradeGwaPreview"></span>
+            <button class="ah-btn ah-btn-primary" type="button" id="btnSaveGrades" onclick="saveGrades()">
+                <i class="fa-solid fa-floppy-disk"></i> Save term
+            </button>
+        </div>
     </div>
-    <div class="modal-body">
-        <div id="viewHead"></div>
-        <div id="viewRecords"></div>
+</div>
+
+<!-- â”€â”€ Pre-close audit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+     Read-only. It reports what is missing or inconsistent and
+     stops there: it assigns no grade, changes no status, and
+     writes nothing. The GWA-at-3.00 finding is a question about
+     the status rules, not a decision about this student. -->
+<div class="ah-modal" id="auditModal" role="dialog" aria-modal="true" aria-labelledby="auditModalTitle" hidden>
+    <div class="ah-modal-backdrop" onclick="closeAudit()"></div>
+    <div class="ah-modal-card">
+        <div class="ah-audit-head">
+            <h2 id="auditModalTitle">Check before closing</h2>
+            <div class="spacer"></div>
+            <button class="ah-rm" type="button" onclick="closeAudit()" aria-label="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="ah-audit-summary" id="auditSummary"></div>
+        <div class="ah-audit-body" id="auditBody"></div>
+        <p class="ah-audit-note">
+            <i class="fa-solid fa-circle-info"></i>
+            This check reads the records and reports. It does not assign grades, change any
+            status, or save anything. Findings about a GWA at 3.00 or above are a prompt to
+            look, and any status decision stays with you on the status page.
+        </p>
     </div>
-    <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeModal('viewModal')">Close</button>
-    </div>
-</div></div>
+</div>
 
 <script>
-const ACAD = <?= json_encode($acadData ?: new stdClass(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-const RECEIVE_LIST = <?= json_encode($receiveData, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+'use strict';
+// Server-computed figures. termGwa() in shared/term_grades.php is the
+// reference; the preview below re-implements only the arithmetic so it can
+// run on every keystroke, and tests/term_grades_check.php pins the same
+// weighting. If you change one, change the other.
+const AH = <?= $payload ?>;
 
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
-function closeModal(id) { const el = document.getElementById(id); if (el) { el.classList.remove('active'); document.body.style.overflow = ''; } }
-function openModal(id) { const el = document.getElementById(id); if (el) { el.classList.add('active'); document.body.style.overflow = 'hidden'; } }
-['receiveModal','viewModal'].forEach(id => {
+// The audit is computed server-side and rendered here. Findings are data,
+// not prose written in JS, so the drawer and the save-time validation
+// cannot drift apart.
+const AH_AUDIT = <?= json_encode([
+    'blocking' => $audit['blocking'],
+    'advisory' => $audit['advisory'],
+    'summary'  => $audit['summary'],
+    'stats'    => $audit['stats'],
+], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>;
+
+let gradeStudent = null;
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+}
+
+function rowById(id) {
+    return AH.rows.find(r => r.id === id) || null;
+}
+
+/* Weighted term GWA, mirroring termGwa() on the server.
+   A subject with no rating, no units, or an out-of-scale rating cannot
+   contribute: that is missing data, not a zero. */
+function previewGwa(subjects) {
+    let weighted = 0, units = 0;
+    for (const s of subjects) {
+        const u = parseFloat(s.units);
+        const r = s.final_rating === '' ? NaN : parseFloat(s.final_rating);
+        if (!isFinite(u) || u <= 0) continue;
+        if (!isFinite(r) || r < 1 || r > 5) continue;
+        weighted += r * u;
+        units += u;
+    }
+    return units > 0 ? Math.round((weighted / units) * 100) / 100 : null;
+}
+
+/* The 1.00-5.00 bands, tinted so the direction reads without a legend. */
+function band(r) {
+    if (!isFinite(r)) return null;
+    if (r < 2.5) return 'good';
+    if (r < 3.0) return 'warn';
+    return 'poor';
+}
+
+function show(id) {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('click', function(e) { if (e.target === this) closeModal(id); });
-});
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal('receiveModal'); closeModal('viewModal'); } });
-
-// Table search
-(function () {
-    const input = document.getElementById('acadSearch');
-    const count = document.getElementById('acadCount');
-    if (!input) return;
-    const rows = Array.from(document.querySelectorAll('#acadBody tr[data-search]'));
-    const total = rows.length;
-    function apply() {
-        const q = input.value.trim().toLowerCase();
-        let shown = 0;
-        rows.forEach(r => {
-            const hit = !q || r.dataset.search.indexOf(q) !== -1;
-            r.style.display = hit ? '' : 'none';
-            if (hit) shown++;
-        });
-        if (count) count.textContent = shown + ' of ' + total + ' students';
-    }
-    input.addEventListener('input', apply);
-    apply();
-})();
-
-// Receive Record modal: student list + Import
-function openReceive() {
-    renderReceiveList(document.getElementById('receiveSearch').value);
-    openModal('receiveModal');
+    if (el) { el.hidden = false; document.body.style.overflow = 'hidden'; }
 }
-// Two-letter initials, matching the server-side ah_initials().
-function rvInitials(name) {
-    const p = String(name || '').trim().split(/\s+/).filter(Boolean);
-    if (!p.length) return '?';
-    return p[0][0].toUpperCase() + (p.length > 1 ? p[p.length - 1][0].toUpperCase() : '');
+function hide(id) {
+    const el = document.getElementById(id);
+    if (el) { el.hidden = true; document.body.style.overflow = ''; }
 }
 
-// This list is a worklist, not a directory: the students with no records
-// on file are the work, so they lead. Status is stated in words because a
-// bare "3" reads the same whether it means "three on file" or "nothing yet".
-// Re-importing over existing records is a maintenance action, so its button
-// is secondary — the primary weight stays with the backlog.
-function renderReceiveList(q) {
-    q = (q || '').trim().toLowerCase();
-    const wrap = document.getElementById('receiveList');
-    const filtered = RECEIVE_LIST.filter(s => !q || (s.number + ' ' + s.name).toLowerCase().indexOf(q) !== -1);
-    if (!filtered.length) {
-        wrap.innerHTML = '<div class="ah-no-match">No students match "' + esc(q) + '".</div>';
-        return;
-    }
-
-    const groups = [
-        { cls: 'is-awaiting', label: 'Needs records', rows: filtered.filter(s => !s.count) },
-        { cls: '',           label: 'On file',       rows: filtered.filter(s =>  s.count) },
-    ];
-
-    wrap.innerHTML = groups.filter(g => g.rows.length).map(g =>
-        '<div class="rv-group ' + g.cls + '">'
-        + esc(g.label)
-        + '<span class="rv-group-n">' + g.rows.length + '</span></div>'
-        + g.rows.map(s =>
-            '<div class="receive-row' + (s.count ? '' : ' is-awaiting') + '">'
-            + '<span class="rv-avatar">' + esc(rvInitials(s.name)) + '</span>'
-            + '<div class="rv-who">'
-            + '<div class="rv-name">' + esc(s.name) + '</div>'
-            + '<div class="rv-sub">' + esc(s.number) + '</div></div>'
-            + '<span class="rv-status' + (s.count ? '' : ' is-awaiting') + '">'
-            + (s.count ? s.count + ' on file' : 'Needs import') + '</span>'
-            + '<button class="btn btn-sm rv-import ' + (s.count ? 'btn-secondary' : 'btn-primary') + '"'
-            + ' onclick="importRecords(' + s.id + ', this)">'
-            + '<i class="fas fa-file-import"></i> Import</button>'
-            + '</div>'
-        ).join('')
-    ).join('');
-}
-document.getElementById('receiveSearch').addEventListener('input', function () { renderReceiveList(this.value); });
-
-async function importRecords(studentId, btn) {
-    const orig = btn.innerHTML;
-    btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importing...';
-    try {
-        const res = await fetch('../api/students.php?action=import-academic', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ student_id: studentId })
-        });
-        const d = await res.json();
-        if (!d.success) throw new Error(d.message || 'Import failed.');
-        showToast(d.message || 'Imported.', 'success');
-        setTimeout(() => window.location.reload(), 800);
-    } catch (err) {
-        btn.disabled = false; btn.innerHTML = orig;
-        showToast(err.message || 'Import failed.', 'error');
-    }
-}
-
-// View (read-only) academic history
-function openView(studentId) {
-    const recs = ACAD[studentId] || [];
-    const head = document.getElementById('viewHead');
-    const body = document.getElementById('viewRecords');
-    const student = RECEIVE_LIST.find(s => s.id === studentId);
-    const name = esc(student ? student.name : 'Student');
-    const number = esc(student ? student.number : '');
-
-    head.innerHTML = '<div class="ah-view-head">'
-        + '<div><div class="ah-view-name">' + name + '</div>'
-        + '<div class="ah-view-sub">' + number
-        + (recs.length ? ' &middot; ' + recs.length + ' record(s)' : ' &middot; No records yet')
-        + '</div></div></div>';
-
-    if (!recs.length) {
-        body.innerHTML = '<div class="ah-none">No academic history on file.<br>Use <strong>Receive Record</strong> to import from the enrollment dashboard.</div>';
+function openGrades(studentId) {
+    const r = rowById(studentId);
+    if (!r) return;
+    gradeStudent = r;
+    document.getElementById('gradeWho').innerHTML =
+        '<strong>' + esc(r.name) + '</strong> &middot; ' + esc(r.number) +
+        (r.program ? ' &middot; ' + esc(r.program) : '') +
+        ' &middot; ' + esc(AH.sy) + ' ' + esc(AH.sem);
+    const body = document.getElementById('gradeRows');
+    body.innerHTML = '';
+    if (!r.subjects.length) {
+        // One blank row rather than an empty table. A term nobody has
+        // started is the state this page exists to move away from, and
+        // an empty grid offers nowhere to type.
+        body.innerHTML = gradeRowHtml({subject:'', units:'', final_rating:'', grade_status:''});
     } else {
-        body.innerHTML = recs.map(r =>
-        '<div class="ah-record">'
-        + '<div class="ah-record-head">'
-        + '<span class="ah-record-school">' + esc(r.school) + '</span>'
-        + (r.gwa ? '<span class="gwa-badge">GWA ' + esc(r.gwa) + '</span>' : '')
-        + '</div>'
-        + (r.year || r.grade || r.semester
-            ? '<div class="ah-row"><span>' + esc([r.year, r.grade, r.semester].filter(Boolean).join(' &middot; ')) + '</span></div>' : '')
-        + (r.remarks ? '<div class="ah-row ah-remarks"><span>' + esc(r.remarks) + '</span></div>' : '')
-        + (r.grades.length ? '<div class="ah-grades"><table><thead><tr><th>Subject</th><th>Units</th><th>Grade</th><th>Remarks</th></tr></thead><tbody>'
-            + r.grades.map(g => '<tr><td>' + esc(g.subject) + '</td><td>' + esc(g.units) + '</td><td>' + esc(g.grade) + '</td><td>' + esc(g.remarks) + '</td></tr>').join('')
-            + '</tbody></table></div>' : '')
-        + '</div>'
-    ).join('');
+        r.subjects.forEach(s => { body.insertAdjacentHTML('beforeend', gradeRowHtml(s)); });
     }
-    openModal('viewModal');
+    updatePreview();
+    show('gradeModal');
+    const first = body.querySelector('input');
+    if (first) first.focus();
 }
 
+function closeGrades() { hide('gradeModal'); }
+
+function gradeRowHtml(s) {
+    const st = s.grade_status || '';
+    return '<tr>' +
+        '<td><input class="ah-in" type="text" data-f="subject" value="' + esc(s.subject) + '" placeholder="Subject name"></td>' +
+        '<td><input class="ah-in ah-in-num" type="number" data-f="units" min="0" max="12" step="0.5" value="' + esc(s.units) + '"></td>' +
+        '<td><input class="ah-in ah-in-num" type="number" data-f="final_rating" min="1" max="5" step="0.01" value="' +
+            esc(s.final_rating === null ? '' : s.final_rating) + '"></td>' +
+        '<td><select class="ah-sel" data-f="grade_status">' +
+            ['passed','failed','dropped',''].map(o =>
+                '<option value="' + o + '"' + (st === o ? ' selected' : '') + '>' +
+                (o === '' ? 'Not set' : o.charAt(0).toUpperCase() + o.slice(1)) + '</option>').join('') +
+        '</select></td>' +
+        '<td><button class="ah-rm" type="button" onclick="removeGradeRow(this)" aria-label="Remove subject">' +
+            '<i class="fa-solid fa-trash-can"></i></button></td>' +
+    '</tr>';
+}
+
+function readGrid() {
+    return Array.from(document.querySelectorAll('#gradeRows tr')).map(tr => {
+        const o = {};
+        tr.querySelectorAll('[data-f]').forEach(el => { o[el.dataset.f] = el.value.trim(); });
+        return o;
+    }).filter(s => s.subject !== '');
+}
+
+function addGradeRow() {
+    const body = document.getElementById('gradeRows');
+    body.insertAdjacentHTML('beforeend', gradeRowHtml({subject:'', units:'', final_rating:'', grade_status:''}));
+    const rows = body.querySelectorAll('tr');
+    rows[rows.length - 1].querySelector('input').focus();
+}
+
+function removeGradeRow(btn) {
+    btn.closest('tr').remove();
+    updatePreview();
+}
+
+/* Recompute the preview and repaint the rating cells.
+   Out-of-scale and missing values are marked here, so the grid says the
+   save will fail before the user presses it rather than after. */
+function updatePreview() {
+    const subjects = readGrid();
+    const gwa = previewGwa(subjects);
+
+    document.querySelectorAll('#gradeRows tr').forEach(tr => {
+        const input = tr.querySelector('[data-f="final_rating"]');
+        const raw = input.value.trim();
+        input.removeAttribute('aria-invalid');
+        input.removeAttribute('data-band');
+        if (raw === '') return;
+        const v = parseFloat(raw);
+        if (!isFinite(v) || v < 1 || v > 5) {
+            // Named on the cell itself, not only in the bar below, so the
+            // reason travels with the field.
+            input.setAttribute('aria-invalid', 'true');
+            input.title = 'Ratings run from 1.00 to 5.00. This value cannot be averaged.';
+            return;
+        }
+        const b = band(v);
+        if (b) input.setAttribute('data-band', b);
+    });
+
+    const bad = subjects.filter(s => {
+        if (s.final_rating === '') return true;
+        const v = parseFloat(s.final_rating);
+        return !isFinite(v) || v < 1 || v > 5;
+    });
+
+    const out = document.getElementById('gradeGwaPreview');
+    if (bad.length) {
+        out.dataset.tone = 'bad';
+        out.textContent = bad.length + ' subject' + (bad.length === 1 ? '' : 's') +
+            ' still need' + (bad.length === 1 ? 's' : '') + ' a valid rating before saving.';
+    } else if (gwa === null) {
+        out.dataset.tone = '';
+        out.textContent = subjects.length ? 'No units to average yet.' : 'Add the subjects taken this term.';
+    } else {
+        out.dataset.tone = 'good';
+        out.textContent = subjects.length + ' subject' + (subjects.length === 1 ? '' : 's') +
+            ' · term GWA ' + gwa.toFixed(2);
+    }
+}
+
+/* Saving posts the term and lets the server decide. The GWA is not sent
+   from here: it is computed server-side from the same ratings, so there
+   is no value on the wire for a stale client to overwrite. */
+async function saveGrades() {
+    if (!gradeStudent) return;
+    const subjects = readGrid();
+    const btn = document.getElementById('btnSaveGrades');
+    const out = document.getElementById('gradeGwaPreview');
+    btn.disabled = true;
+    out.dataset.tone = '';
+    out.textContent = 'Saving…';
+
+    try {
+        const res = await fetch('../api/students.php?action=save-academic', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Required by shared/csrf_guard.php. The token is bound to
+                // the session, so a save from a stale tab is refused and the
+                // user is told to reload rather than silently losing work.
+                'X-CSRF-Token': AH.csrf || '',
+            },
+            body: JSON.stringify({
+                student_id: gradeStudent.id,
+                school_year: AH.sy,
+                semester: AH.sem,
+                grade_level: gradeStudent.level,
+                grades: subjects,
+            }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            out.dataset.tone = 'good';
+            out.textContent = data.message;
+            // Reload rather than patching the table in place: the stored
+            // GWA, the completion state and the audit all derive from the
+            // saved row, and a partial client-side update would leave
+            // them disagreeing until the next refresh.
+            setTimeout(() => window.location.reload(), 700);
+            return;
+        }
+
+        btn.disabled = false;
+        out.dataset.tone = 'bad';
+        const problems = Array.isArray(data.problems) ? data.problems : [];
+        out.textContent = problems.length
+            ? data.message + ' ' + problems.join(' ')
+            : (data.message || 'The term could not be saved.');
+    } catch (err) {
+        btn.disabled = false;
+        out.dataset.tone = 'bad';
+        out.textContent = 'The term could not be saved. The server did not respond; check the connection and try again.';
+    }
+}
+
+/* â”€â”€ The pre-close audit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   Rendered from the server's findings. The drawer only presents
+   them; it decides nothing, and there is no call from here that
+   writes anything. */
+function findingHtml(f, sev) {
+    const icon = sev === 'blocking' ? 'fa-circle-exclamation' : 'fa-circle-info';
+    return '<div class="ah-find" data-sev="' + sev + '">' +
+        '<i class="fa-solid ' + icon + '"></i>' +
+        '<div class="ah-find-body">' +
+            '<p class="ah-find-title">' + esc(f.title) + '</p>' +
+            '<p class="ah-find-detail">' + esc(f.detail) + '</p>' +
+            '<p class="ah-find-action">' + esc(f.action) + '</p>' +
+        '</div>' +
+    '</div>';
+}
+
+function openAudit() {
+    const body = document.getElementById('auditBody');
+    const sum = document.getElementById('auditSummary');
+    const a = AH_AUDIT;
+
+    sum.textContent = a.summary;
+
+    let html = '';
+    if (a.blocking.length) {
+        html += '<p class="ah-find-title">Blocking — resolve before closing</p>';
+        html += a.blocking.map(f => findingHtml(f, 'blocking')).join('');
+    }
+    if (a.advisory.length) {
+        html += '<p class="ah-find-title">Advisory — worth a look</p>';
+        html += a.advisory.map(f => findingHtml(f, 'advisory')).join('');
+    }
+    if (!a.blocking.length && !a.advisory.length) {
+        // A clean term says so plainly. Silence would be read as "the
+        // check did not run".
+        html = '<div class="ah-empty" style="padding:26px 12px">' +
+            '<i class="fa-solid fa-circle-check" style="color:#15803d;opacity:1"></i>' +
+            '<h3>Nothing to resolve</h3>' +
+            '<p style="margin-bottom:0">Every student in view has a final rating for every subject, '
+            + 'and the stored figures agree with them.</p></div>';
+    }
+    body.innerHTML = html;
+    show('auditModal');
+}
+
+function closeAudit() { hide('auditModal'); }
+
+// Repaint the preview as the user types, and stop Escape closing the
+// wrong dialog if both were somehow open.
+document.addEventListener('input', e => {
+    if (e.target.closest && e.target.closest('#gradeRows')) updatePreview();
+});
+document.addEventListener('change', e => {
+    if (e.target.closest && e.target.closest('#gradeRows')) updatePreview();
+});
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById('gradeModal').hidden) closeGrades();
+    else if (!document.getElementById('auditModal').hidden) closeAudit();
+});
 </script>
 
 <?php include '../includes/footer.php'; ?>

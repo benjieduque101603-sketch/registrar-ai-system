@@ -1199,15 +1199,16 @@ function dt_collect_context(int $requestId, array $opt = []): ?array
     // Weighted GWA over numeric final ratings. NULL when nothing
     // numeric exists, so the template prints N/A rather than a
     // fabricated 0.00.
-    $weighted = 0.0; $units = 0.0;
-    foreach ($terms as $t) {
-        foreach ($t['subjects'] as $sub) {
-            $fr = (float) ($sub['final_rating'] ?? 0);
-            $un = (float) ($sub['units'] ?? 0);
-            if ($fr > 0 && $un > 0) { $weighted += $fr * $un; $units += $un; }
-        }
-    }
-    $careerGwa = $units > 0 ? round($weighted / $units, 4) : null;
+    //
+    // This used to be its own loop, testing only $fr > 0. That was a
+    // looser rule than the one grading applies (1.00-5.00), so a
+    // bad rating in the database was averaged onto the transcript here
+    // while the grading page and the status rules rejected it. The
+    // helper is now the single implementation: the stored
+    // academic_history.gwa that status_evidence.php reads, and this
+    // printed figure, come from the same function and cannot drift.
+    require_once __DIR__ . '/term_grades.php';
+    $careerGwa = careerGwa($terms);
 
     $totalUnits = 0.0; $anyUnits = false;
     foreach ($terms as $t) {
