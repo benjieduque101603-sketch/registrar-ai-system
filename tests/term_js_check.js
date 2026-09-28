@@ -10,16 +10,19 @@ const fs = require('fs');
 const vm = require('vm');
 
 const html = fs.readFileSync(process.argv[2] || 'ah_render.html', 'utf8');
-const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
-    .map(m => m[1]);
 
-if (blocks.length === 0) {
-    console.error('  FAIL  no inline script block found');
+// This page's script is located by its own marker, not by position. The
+// shared header and footer both ship inline <script> blocks, and picking
+// the last one tests the footer - which is why an earlier version of this
+// file reported fifteen missing functions on a page that defined them all.
+const mine = html.match(/<script[^>]*>((?:(?!<\/script>)[\s\S])*?const AH =[\s\S]*?)<\/script>/);
+if (!mine) {
+    console.error('  FAIL  this page\'s script block was not found');
     process.exit(1);
 }
+const inline = mine[1];
 
 let fail = 0;
-const inline = blocks[blocks.length - 1];
 
 try {
     new vm.Script(inline, {filename: 'academic-history-inline.js'});

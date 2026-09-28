@@ -19,10 +19,13 @@ const expected = JSON.parse(fs.readFileSync(path.join(__dirname, 'term_gwa_expec
 // Pull previewGwa straight out of the rendered page, so this tests the
 // shipped code rather than a copy of it.
 const html = fs.readFileSync(path.join(__dirname, '..', 'ah_render.html'), 'utf8');
-const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
-    .map(m => m[1]).pop();
+const inline = html.match(/<script[^>]*>((?:(?!<\/script>)[\s\S])*?const AH =[\s\S]*?)<\/script>/);
+if (!inline) {
+    console.error('  FAIL  this page\'s script block was not found');
+    process.exit(1);
+}
 
-const previewSrc = inline.match(/function previewGwa[\s\S]*?\n}/);
+const previewSrc = inline[1].match(/function previewGwa[\s\S]*?\n}/);
 if (!previewSrc) {
     console.error('  FAIL  previewGwa is not in the rendered page');
     process.exit(1);
