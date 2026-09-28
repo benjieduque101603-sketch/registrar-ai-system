@@ -165,9 +165,9 @@ include '../includes/sidebar.php';
 <main class="dashboard-main">
 <header class="header">
     <div class="title">
-      <div class="st-kicker"><i class="fas fa-scale-balanced"></i> Registrar's desk</div>
+      <div class="st-kicker"><i class="fas fa-chart-line"></i> Registrar intelligence</div>
       <h1>Status Tracker</h1>
-      <p>Every status change is a decision you make. This page gathers the evidence, points at what disagrees with itself, and leaves the call to you.</p>
+      <p>Monitor student status changes, review activity, and identify students who need attention.</p>
     </div>
 </header>
 <div class="st-wrap">

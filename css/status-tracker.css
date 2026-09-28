@@ -14,6 +14,19 @@
    it, both fitting above the fold.
    ============================================================ */
 
+/* Page header.
+   Restored verbatim. The layout rework did not touch the header, but
+   rebuilding this stylesheet dropped the kicker rule, which left the
+   page title rendering as unstyled body text. The colour is the
+   original hard-coded #1d4ed8, matching masterlist.php, so the header
+   looks exactly as it did before. */
+.st-kicker{
+  display:flex;align-items:center;gap:7px;margin-bottom:7px;
+  color:#1d4ed8;font-size:10.5px;font-weight:800;
+  letter-spacing:.08em;text-transform:uppercase;
+}
+
+
 /* â”€â”€ Desk grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Fixed rail, fluid directory. The rail's contents are short lines
    that would wrap badly if it flexed; the table wants every pixel. */
