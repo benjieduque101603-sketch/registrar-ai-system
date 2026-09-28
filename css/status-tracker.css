@@ -171,96 +171,6 @@ body[data-page="status-tracker"] .st-rail-item-name{
 body[data-page="status-tracker"] .st-rail-item-badge{
   font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:20px;
   white-space:nowrap;flex-shrink:0;text-transform:capitalize;
-
-
-
-/* â”€â”€ By status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Counts and filters in one list, and the proportion bar that used to
-   be a separate band above the table.
-
-   A row is three columns: the status glyph in a tinted square, the name
-   over its share, and the count. The glyph replaced a 7px dot because
-   the dot was too small to carry the status colour into a scan and the
-   glyph is the same vocabulary the table badges and case panel use.
-
-   The fill is a pseudo-element so the label and count stay selectable
-   and the whole row remains the hit target. */
-body[data-page="status-tracker"] .st-rail-sec.st-filters{
-  background:var(--surface);
-  border:1px solid var(--border);border-radius:var(--radius-md);
-  overflow:hidden;box-shadow:0 4px 14px rgba(15,23,42,.05);
-}
-body[data-page="status-tracker"] .st-rail-sec.st-filters .st-rail-head{
-  background:var(--surface);border-bottom:1px solid var(--border-subtle);
-}
-body[data-page="status-tracker"] .st-rail-head-n{
-  font-size:10px;font-weight:700;color:var(--text-subtle);
-  font-variant-numeric:tabular-nums;letter-spacing:.02em;
-}
-body[data-page="status-tracker"] .st-rail-flist{list-style:none;margin:0;padding:6px}
-body[data-page="status-tracker"] .st-rail-f{
-  position:relative;display:flex;align-items:center;gap:9px;
-  padding:7px 9px;border-radius:var(--radius-sm);overflow:hidden;
-  font-size:12.5px;color:var(--text-body);text-decoration:none;
-  transition:background .1s;
-}
-body[data-page="status-tracker"] .st-rail-f:hover{background:var(--surface-subtle)}
-body[data-page="status-tracker"] .st-rail-f:focus-visible{
-  outline:2px solid var(--brand-500);outline-offset:-2px;
-}
-body[data-page="status-tracker"] .st-rail-f.on{color:var(--brand-700);font-weight:600}
-body[data-page="status-tracker"] .st-rail-f::before{
-  content:"";position:absolute;left:0;top:0;bottom:0;
-  width:var(--fill,0%);
-  background:var(--fill-color,#e2e8f0);
-  opacity:.3;pointer-events:none;transition:width .2s;
-}
-body[data-page="status-tracker"] .st-rail-f.on::before{opacity:.46}
-body[data-page="status-tracker"] .st-rail-glyph,
-body[data-page="status-tracker"] .st-rail-fbody,
-body[data-page="status-tracker"] .st-rail-fnum{position:relative;z-index:1}
-
-/* The glyph tile. Fixed size and centred so the column of names below it
-   starts at a consistent x, which is what lets the list be scanned as a
-   column rather than read row by row. */
-body[data-page="status-tracker"] .st-rail-glyph{
-  width:26px;height:26px;border-radius:8px;flex-shrink:0;
-  display:grid;place-items:center;font-size:11px;
-}
-body[data-page="status-tracker"] .st-rail-glyph-all{
-  background:var(--brand-50);color:var(--brand-600);
-}
-body[data-page="status-tracker"] .st-rail-fbody{
-  flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;
-}
-body[data-page="status-tracker"] .st-rail-fname{
-  font-weight:600;line-height:1.25;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-/* The share. Small and quiet, but it is the number the fill bar implies
-   and nothing else on the row states it. */
-body[data-page="status-tracker"] .st-rail-fpct{
-  font-size:10.5px;color:var(--text-subtle);line-height:1.2;
-  font-variant-numeric:tabular-nums;
-}
-body[data-page="status-tracker"] .st-rail-fall .st-rail-fpct{font-style:italic}
-body[data-page="status-tracker"] .st-rail-fnum{
-  font-size:14px;font-weight:700;color:var(--text-strong);
-  font-variant-numeric:tabular-nums;letter-spacing:-.2px;
-  flex-shrink:0;min-width:22px;text-align:right;
-}
-body[data-page="status-tracker"] .st-rail-f.on .st-rail-fnum{color:var(--brand-700)}
-body[data-page="status-tracker"] .st-rail-f.on .st-rail-fpct{color:var(--brand-600)}
-
-/* Statuses nobody is in. Named rather than listed, so the reader knows
-   they exist and can go looking, without eight rows reading zero. */
-body[data-page="status-tracker"] .st-rail-empty{
-  margin:0;padding:9px 14px 11px;
-  font-size:10.5px;line-height:1.5;color:var(--text-subtle);
-  background:var(--surface-subtle);border-top:1px solid var(--border-subtle);
-}
-
-
 }
 body[data-page="status-tracker"] .st-rail-item-why{
   font-size:11px;color:var(--text-muted);line-height:1.4;font-weight:500;
@@ -279,6 +189,133 @@ body[data-page="status-tracker"] .st-rail-partial{
   margin:0;padding:9px 14px;font-size:11px;color:var(--warning-600);
   background:#fffbeb;border-top:1px solid #fde68a;cursor:help;
 }
+
+
+
+
+
+/* â”€â”€ By status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   The card is the design, not a box of links. It reads top to bottom as
+   three moves: the figure, the composition, the breakdown.
+
+   The container is paired with the work-queue card above it. That one
+   carries a red top edge because it means "someone is waiting"; this one
+   carries a brand edge and means "here is the shape of the roster". Two
+   cards, two signals, one visual language.
+
+   The stacked bar is the centrepiece and the reason the card earns its
+   height. It answers "what is this roster made of" in a single glance,
+   which a list of eight rows cannot do without being read. */
+body[data-page="status-tracker"] .st-rail-sec.st-filters{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-top:3px solid var(--brand-500);
+  border-radius:var(--radius-md);
+  overflow:hidden;
+  box-shadow:0 4px 14px rgba(15,23,42,.05);
+}
+body[data-page="status-tracker"] .st-rail-sec.st-filters .st-rail-head{
+  background:var(--surface);border-bottom:1px solid var(--border-subtle);
+}
+body[data-page="status-tracker"] .st-rail-head-n{
+  font-size:10px;font-weight:700;color:var(--text-subtle);
+  font-variant-numeric:tabular-nums;letter-spacing:.02em;
+}
+
+/* The figure band. Tinted so the composition below it sits on white and
+   the two never blur into one another. */
+body[data-page="status-tracker"] .st-comp{
+  padding:14px 15px 15px;
+  background:linear-gradient(180deg,var(--surface-subtle),var(--surface));
+  border-bottom:1px solid var(--border-subtle);
+}
+body[data-page="status-tracker"] .st-comp-figure{
+  display:flex;align-items:baseline;gap:8px;margin-bottom:12px;
+}
+body[data-page="status-tracker"] .st-comp-figure b{
+  font-size:30px;font-weight:800;line-height:1;letter-spacing:-.03em;
+  color:var(--text-strong);font-variant-numeric:tabular-nums;
+}
+body[data-page="status-tracker"] .st-comp-figure span{
+  font-size:11.5px;color:var(--text-muted);font-weight:500;
+}
+
+/* The composition bar. Segments are proportional with a 2px gap so the
+   boundaries are visible without a border, and a floor of 3px keeps a
+   2%-of-roster status from collapsing to nothing and becoming unhoverable.
+   The selected segment lifts and gains a ring so the bar and the list
+   agree about what is being looked at. */
+body[data-page="status-tracker"] .st-comp-bar{
+  display:flex;gap:2px;height:10px;
+  border-radius:6px;overflow:hidden;
+  background:var(--surface-muted);
+}
+body[data-page="status-tracker"] .st-comp-seg{
+  flex:var(--seg) 1 0;min-width:3px;
+  border-radius:2px;
+  transition:transform .15s,box-shadow .15s;
+}
+body[data-page="status-tracker"] .st-comp-seg:first-child{border-radius:6px 2px 2px 6px}
+body[data-page="status-tracker"] .st-comp-seg:last-child{border-radius:2px 6px 6px 2px}
+body[data-page="status-tracker"] .st-comp-seg:hover{transform:scaleY(1.35)}
+body[data-page="status-tracker"] .st-comp-seg.on{
+  box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--brand-500);
+  z-index:1;
+}
+
+/* The key. A colour chip rather than a glyph tile: the bar above already
+   carries colour at size, and repeating it in a 26px tile per row made
+   the list heavier than the thing it was describing. */
+body[data-page="status-tracker"] .st-rail-flist{list-style:none;margin:0;padding:6px}
+body[data-page="status-tracker"] .st-rail-f{
+  position:relative;display:flex;align-items:center;gap:9px;
+  padding:6px 9px;border-radius:var(--radius-sm);
+  font-size:12.5px;color:var(--text-body);text-decoration:none;
+  transition:background .1s;
+}
+body[data-page="status-tracker"] .st-rail-f:hover{background:var(--surface-subtle)}
+body[data-page="status-tracker"] .st-rail-f:focus-visible{
+  outline:2px solid var(--brand-500);outline-offset:-2px;
+}
+/* Selection is a left rule in the status colour plus a tint, so it reads
+   at a glance without recolouring the text. */
+body[data-page="status-tracker"] .st-rail-f.on{
+  background:var(--brand-50);
+  box-shadow:inset 3px 0 0 var(--status,var(--brand-500));
+  font-weight:600;color:var(--text-strong);
+}
+body[data-page="status-tracker"] .st-rail-chip{
+  width:8px;height:8px;border-radius:3px;flex-shrink:0;
+}
+body[data-page="status-tracker"] .st-rail-fbody{
+  flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;
+}
+body[data-page="status-tracker"] .st-rail-fname{
+  font-weight:600;line-height:1.25;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+body[data-page="status-tracker"] .st-rail-fpct{
+  font-size:10.5px;color:var(--text-subtle);line-height:1.2;
+  font-variant-numeric:tabular-nums;
+}
+body[data-page="status-tracker"] .st-rail-fall .st-rail-fpct{font-style:italic}
+body[data-page="status-tracker"] .st-rail-fall{border-bottom:1px solid var(--border-subtle);border-radius:0;margin-bottom:4px}
+body[data-page="status-tracker"] .st-rail-fall.on{--status:var(--brand-500)}
+body[data-page="status-tracker"] .st-rail-fnum{
+  font-size:13.5px;font-weight:700;color:var(--text-strong);
+  font-variant-numeric:tabular-nums;letter-spacing:-.2px;
+  flex-shrink:0;min-width:22px;text-align:right;
+}
+
+/* Statuses nobody is in. Named rather than listed, so the reader knows
+   they exist and can go looking, without eight rows reading zero. */
+body[data-page="status-tracker"] .st-rail-empty{
+  display:flex;align-items:flex-start;gap:7px;
+  margin:0;padding:10px 15px 11px;
+  font-size:10.5px;line-height:1.5;color:var(--text-subtle);
+  background:var(--surface-subtle);border-top:1px solid var(--border-subtle);
+}
+body[data-page="status-tracker"] .st-rail-empty i{margin-top:3px;font-size:8px;flex-shrink:0}
 
 
 /* â”€â”€ Directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */

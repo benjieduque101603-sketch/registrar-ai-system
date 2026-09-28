@@ -77,14 +77,29 @@ if ($errors === 0) {
 // Every selector in the rail must resolve, which is the specific thing
 // that was silently broken. Checked by name rather than by eye because the
 // eye read this file as correct.
+// A selector mapped to false is one that was deliberately removed; the
+// rest must all resolve. The glyph tile is gone because the composition
+// bar now carries the status colour at a size worth reading, and the key
+// rows use a chip instead of repeating it 26px at a time.
 $required = [
     '.st-rail', '.st-rail-sec', '.st-rail-head', '.st-rail-list', '.st-rail-item',
     '.st-rail-clear', '.st-rail-flist', '.st-rail-f', '.st-head', '.st-desk-grid',
-    '.st-rail-glyph', '.st-rail-fpct', '.st-rail-fnum', '.st-rail-empty',
+    '.st-rail-glyph' => false,
+    '.st-rail-chip', '.st-rail-fpct', '.st-rail-fnum', '.st-rail-empty',
+    '.st-comp', '.st-comp-bar', '.st-comp-seg', '.st-comp-figure',
 ];
 if (basename($file) === 'status-tracker.css') {
-    foreach ($required as $sel) {
-        if (strpos($src, $sel) === false) {
+    foreach ($required as $sel => $mustExist) {
+        $present = strpos($src, $sel) !== false;
+        if ($mustExist === false) {
+            // Deliberately removed. Still reported, so that resurrecting one
+            // by accident is visible rather than silent.
+            if ($present) {
+                printf("  note  %s is back, but was marked removed\n", $sel);
+            }
+            continue;
+        }
+        if (!$present) {
             printf("  FAIL  selector %s is absent\n", $sel);
             $errors++;
         }
