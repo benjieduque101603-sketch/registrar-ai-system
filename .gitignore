@@ -46,6 +46,12 @@ uploads/student_files/*
 Thumbs.db
 *.log
 
+# Test-only session injector used by the notification HTTP checks. It
+# mints a logged-in session for any user id passed in the query string,
+# so committing it would ship a session-forgery endpoint to the web root.
+# The checks that call it are committed; this helper stays local.
+tests/_session_probe.php
+
 # Headless-screenshot scratch: renders registrar/documents.php without auth.
 # Never commit this - it bypasses the session guard.
 registrar/__shot.html

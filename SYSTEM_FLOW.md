@@ -1134,13 +1134,17 @@ REGISTRAR:
 
 ```
   Staff notifications:
-    api/notifications.php -> reads from announcements table
+    api/notifications.php -> reads from audit_logs table
     Sidebar bell icon -> notification modal
+    Read state is a per-user cursor (staff_notification_reads):
+    highest audit_logs.id that user has already seen
+    POST action=read_all advances the cursor
 
   Student notifications:
     api/student-notifications.php -> student_notifications table
     Triggered by: document status changes
     Auto-created when registrar processes a request
+    (process / ready / reject / claim) via notifyStudent()
 
   Communication log:
     Every email logged to communication_log table

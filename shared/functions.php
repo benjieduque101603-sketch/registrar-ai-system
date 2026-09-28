@@ -287,6 +287,25 @@ function logActivity($userId, $action, $details = null, $tableName = null, $reco
 }
 
 /**
+ * Human-readable label for a document_requests.document_type enum value.
+ * Lives here because the same wording is needed by the registrar desk,
+ * the student portal, and the notification text.
+ *
+ * @param string $type Raw enum value (form137, good_moral, ...)
+ * @return string       Display label, or '' for an unknown value
+ */
+function documentTypeLabel(string $type): string {
+    $map = [
+        'form137'     => 'Form 137',
+        'good_moral'  => 'Good Moral Certificate',
+        'transcript'  => 'Transcript of Records',
+        'certificate' => 'Certificate',
+        'clearance'   => 'Clearance',
+    ];
+    return $map[$type] ?? '';
+}
+
+/**
  * Send a notification to a student's bell (student_notifications table).
  *
  * @param int    $studentId   Target student

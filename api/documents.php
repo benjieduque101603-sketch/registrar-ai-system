@@ -534,6 +534,31 @@ try {
 
             logActivity($userId, 'document_request_' . $v2Action, null, 'document_requests', $id);
 
+            // Tell the student their request moved. Without this the portal
+            // bell only ever carried data-quality reminders, so a student
+            // had no in-app way to learn their document was ready or refused.
+            $docLabel = documentTypeLabel($req['document_type'] ?? '');
+            $studentId = (int) ($req['student_id'] ?? 0);
+            if ($studentId && $docLabel !== '') {
+                $notifyMap = [
+                    'process' => ['Your document is being prepared', 'info'],
+                    'ready'   => ['Your document is ready for pickup', 'success'],
+                    'reject'  => ['Your document request was rejected', 'error'],
+                    'claim'   => ['Your document was released', 'success'],
+                ];
+                if (isset($notifyMap[$v2Action])) {
+                    [$nTitle, $nType] = $notifyMap[$v2Action];
+                    notifyStudent(
+                        $studentId,
+                        $nTitle . ' — ' . $docLabel,
+                        $note,
+                        $nType,
+                        (int) $id,
+                        $userId
+                    );
+                }
+            }
+
             echo json_encode(['success' => true, 'message' => 'Request updated.', 'data' => ['id' => $id, 'document_status' => $newStatus]]);
             exit;
         }

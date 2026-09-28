@@ -66,10 +66,16 @@ if ($method === 'GET') {
         [$studentId]
     );
 
-    $unread = 0;
+    // Counted over the whole table, not the 50-row window above.
+    // Counting the window instead made the badge disagree with the
+    // ?unread=1 mode as soon as a student passed 50 notifications.
+    $unread = (int) $db->fetchColumn(
+        "SELECT COUNT(*) FROM student_notifications WHERE student_id = ? AND is_read = 0",
+        [$studentId]
+    );
+
     $data = [];
     foreach ($notifs as $n) {
-        if (!$n['is_read']) $unread++;
         $diff = time() - strtotime($n['created_at']);
         if ($diff < 60) $timeAgo = 'Just now';
         elseif ($diff < 3600) $timeAgo = floor($diff / 60) . 'm ago';

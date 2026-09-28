@@ -502,17 +502,46 @@ if ($USER_ROLE === 'student') {
 
     var USER_ROLE = '<?= $USER_ROLE ?>';
 
+    // Resolved from the page's own $APP_ROOT. These endpoints used to be
+    // hardcoded as '../api/...', which is only correct one directory deep:
+    // root pages (dashboard.php, settings.php) sit at $APP_ROOT = './', so
+    // the relative path climbed above the web root and 404'd — the bell was
+    // silently dead there because failures are swallowed below.
+    var API_ROOT = '<?= $APP_ROOT ?>api/';
+    var FEED_URL = USER_ROLE === 'student'
+        ? API_ROOT + 'student-notifications.php'
+        : API_ROOT + 'notifications.php';
+
+    // Notification text is authored by staff and can contain markup.
+    // Escaped before it reaches innerHTML.
+    function esc(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // Read the CSRF token from the page and send it on the POST directly.
+    // This used to rely entirely on js/csrf.js monkey-patching window.fetch
+    // to attach the header, which silently depends on that script having
+    // loaded and patched first. If it had not, the POST went out without a
+    // token, the server rejected it with 419, and "mark all as read" did
+    // nothing. Reading the token here makes the call self-sufficient.
+    var CSRF_TOKEN = (function() {
+        var meta = document.querySelector('meta[name=csrf-token]');
+        return meta ? meta.getAttribute('content') || '' : '';
+    })();
+
     function loadNotifications() {
-        var url = USER_ROLE === 'student'
-            ? '../api/student-notifications.php'
-            : '../api/notifications.php';
-        fetch(url)
+        fetch(FEED_URL)
             .then(function(r) { return r.json(); })
             .then(function(d) {
                 if (d.success && d.data) {
                     notifications = d.data;
                     renderNotifications();
-                    if (USER_ROLE === 'student' && typeof d.unread !== 'undefined') {
+                    if (typeof d.unread !== 'undefined') {
                         bellBadge.textContent = d.unread;
                         bellBadge.style.display = d.unread > 0 ? 'flex' : 'none';
                     }
@@ -532,12 +561,12 @@ if ($USER_ROLE === 'student') {
         var html = '';
         notifications.forEach(function(n) {
             if (n.unread) unreadCount++;
-            html += '<div class="notif-item ' + (n.unread ? 'unread' : '') + '" data-notif-id="' + (n.id || '') + '">' +
-                '<div class="notif-icon"><i class="fas ' + (n.icon || 'fa-circle-info') + '"></i></div>' +
+            html += '<div class="notif-item ' + (n.unread ? 'unread' : '') + '" data-notif-id="' + esc(n.id) + '">' +
+                '<div class="notif-icon"><i class="fas ' + esc(n.icon || 'fa-circle-info') + '"></i></div>' +
                 '<div class="notif-content">' +
-                    '<div class="notif-title">' + (n.title || '') + '</div>' +
-                    '<div class="notif-message">' + (n.message || '') + '</div>' +
-                    '<div class="notif-time">' + (n.time || '') + '</div>' +
+                    '<div class="notif-title">' + esc(n.title) + '</div>' +
+                    '<div class="notif-message">' + esc(n.message) + '</div>' +
+                    '<div class="notif-time">' + esc(n.time) + '</div>' +
                 '</div>' +
             '</div>';
         });
@@ -558,21 +587,48 @@ if ($USER_ROLE === 'student') {
     }
 
     function markAllRead() {
-        if (USER_ROLE === 'student') {
-            fetch('../api/student-notifications.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'action=read_all'
-            }).then(function() {
-                notifications.forEach(function(n) { n.unread = false; });
-                renderNotifications();
-                closeNotifModal();
-            }).catch(function() { closeNotifModal(); });
-        } else {
+        // The response body decides the outcome, not the promise resolving.
+        // fetch() only rejects on a network failure — an HTTP 419 (CSRF) or
+        // 500 still resolves. Clearing the badge on resolution alone made
+        // "mark all as read" look like it worked while the server had
+        // changed nothing, so the count came straight back on the next page.
+        if (notifMarkRead) {
+            notifMarkRead.disabled = true;
+            notifMarkRead.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving';
+        }
+
+        fetch(FEED_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRF-Token': CSRF_TOKEN
+            },
+            body: 'action=read_all'
+        }).then(function(r) {
+            return r.json().catch(function() { return { success: false }; });
+        }).then(function(d) {
+            if (!d || d.success !== true) {
+                throw new Error((d && d.message) || 'Could not mark notifications as read.');
+            }
             notifications.forEach(function(n) { n.unread = false; });
             renderNotifications();
             closeNotifModal();
-        }
+        }).catch(function(err) {
+            // Leave the list untouched so the true state stays on screen,
+            // and say why rather than closing as if it had worked.
+            if (notifList) {
+                var alreadyUnread = notifications.filter(function(n) { return n.unread; }).length;
+                notifList.innerHTML = '<p style="color:#dc2626;font-size:14px;text-align:center;">'
+                    + esc(err && err.message ? err.message : 'Could not mark notifications as read.')
+                    + (alreadyUnread ? '<br><span style="color:#64748b;">' + alreadyUnread + ' notification' + (alreadyUnread === 1 ? '' : 's') + ' still unread.</span>' : '')
+                    + '</p>';
+            }
+        }).finally(function() {
+            if (notifMarkRead) {
+                notifMarkRead.disabled = false;
+                notifMarkRead.innerHTML = '<i class="fa-solid fa-check"></i> Mark All as Read';
+            }
+        });
     }
 
     if (bellBtn) bellBtn.addEventListener('click', openNotifModal);
