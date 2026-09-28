@@ -295,28 +295,31 @@ include '../includes/sidebar.php';
       appear to do nothing.
     -->
     <?php
-    // Each row carries the status key itself. $STATUS_META is keyed by
-    // status and holds only colour, background and glyph, so the id has
-    // to be added explicitly or every $r['id'] below reads undefined.
+    // Every status is always listed. This is a filter control, not a
+    // report, and hiding a status with nobody in it made an available
+    // filter indistinguishable from a missing one — a registrar about to
+    // move a student to "Graduated" could not see that the filter was
+    // there. Empty statuses are shown dimmed rather than removed, so the
+    // control stays complete and the visual weight stays on the rows that
+    // have students in them.
+    //
+    // $STATUS_META is keyed by status and holds only colour, background
+    // and glyph, so the id is added explicitly or $r['id'] is undefined.
     $statusRows = [];
-    $emptyRows  = [];
     foreach ($DB_STATUSES as $s) {
-        $row = ['id' => $s] + $STATUS_META[$s] + [
+        $statusRows[] = ['id' => $s] + $STATUS_META[$s] + [
             'count' => $counts[$s],
             'pct'   => (float) ($distData[$s] ?? 0),
         ];
-        if ($counts[$s] > 0 || $filterStatus === $s) {
-            $statusRows[] = $row;
-        } else {
-            $emptyRows[] = $row;
-        }
     }
-    $shownRows = array_values(array_filter($statusRows, static fn($r) => $r['count'] > 0));
+    // Only populated statuses get a segment in the composition bar. A
+    // zero-width segment would be a 3px stub that reads as a category.
+    $barRows = array_values(array_filter($statusRows, static fn($r) => $r['count'] > 0));
     ?>
     <section class="st-rail-sec st-filters">
       <div class="st-rail-head">
         <h2>By status</h2>
-        <span class="st-rail-head-n"><?= count($shownRows) ?> of <?= count($DB_STATUSES) ?></span>
+        <span class="st-rail-head-n"><?= count($barRows) ?> in use</span>
       </div>
 
       <div class="st-comp">
@@ -324,18 +327,20 @@ include '../includes/sidebar.php';
           <b><?= number_format($totalStudents) ?></b>
           <span><?= $totalStudents === 1 ? 'student' : 'students' ?> on the roster</span>
         </div>
-        <?php if ($shownRows): ?>
+        <?php if ($barRows): ?>
           <div class="st-comp-bar" role="img"
                aria-label="<?= htmlspecialchars(implode(', ', array_map(
                    static fn($r) => $r['id'] . ' ' . rtrim(rtrim(number_format($r['pct'], 1), '0'), '.') . '%',
-                   $shownRows
+                   $barRows
                ))) ?>">
-            <?php foreach ($shownRows as $r): ?>
+            <?php foreach ($barRows as $r): ?>
               <span class="st-comp-seg<?= $filterStatus === $r['id'] ? ' on' : '' ?>"
                     style="--seg:<?= $r['pct'] ?>%;background:<?= $r['color'] ?>"
                     title="<?= htmlspecialchars(ucwords(str_replace('-', ' ', $r['id'])) . ' — ' . number_format($r['count']) . ' (' . rtrim(rtrim(number_format($r['pct'], 1), '0'), '.') . '%)') ?>"></span>
             <?php endforeach; ?>
           </div>
+        <?php else: ?>
+          <div class="st-comp-bar st-comp-bar-empty"></div>
         <?php endif; ?>
       </div>
 
@@ -350,33 +355,23 @@ include '../includes/sidebar.php';
             <span class="st-rail-fnum"><?= number_format($totalStudents) ?></span>
           </a>
         </li>
-        <?php foreach ($statusRows as $r): ?>
+        <?php foreach ($statusRows as $r): $empty = $r['count'] === 0; ?>
           <li>
-            <a class="st-rail-f<?= $filterStatus === $r['id'] ? ' on' : '' ?>"
+            <a class="st-rail-f<?= $empty ? ' is-empty' : '' ?><?= $filterStatus === $r['id'] ? ' on' : '' ?>"
                style="--status:<?= $r['color'] ?>"
                href="<?= htmlspecialchars($dirUrl(['status' => $r['id'], 'page' => 1])) ?>">
-              <span class="st-rail-chip" style="background:<?= $r['color'] ?>"></span>
+              <span class="st-rail-chip" style="background:<?= $empty ? 'var(--border-strong)' : $r['color'] ?>"></span>
               <span class="st-rail-fbody">
                 <span class="st-rail-fname"><?= htmlspecialchars(ucwords(str_replace('-', ' ', $r['id']))) ?></span>
-                <span class="st-rail-fpct"><?= $r['pct'] > 0
-                    ? rtrim(rtrim(number_format($r['pct'], 1), '0'), '.') . '%'
-                    : 'none yet' ?></span>
+                <span class="st-rail-fpct"><?= $empty
+                    ? 'no students yet'
+                    : rtrim(rtrim(number_format($r['pct'], 1), '0'), '.') . '%' ?></span>
               </span>
-              <span class="st-rail-fnum"><?= number_format($r['count']) ?></span>
+              <span class="st-rail-fnum"><?= $empty ? '—' : number_format($r['count']) ?></span>
             </a>
           </li>
         <?php endforeach; ?>
       </ul>
-      <?php if ($emptyRows): ?>
-        <p class="st-rail-empty">
-          <i class="fas fa-minus"></i>
-          <?= count($emptyRows) ?> status<?= count($emptyRows) === 1 ? '' : 'es' ?> with no students:
-          <?= htmlspecialchars(implode(', ', array_map(
-              static fn($r) => ucwords(str_replace('-', ' ', $r['id'])),
-              $emptyRows
-          ))) ?>
-        </p>
-      <?php endif; ?>
     </section>
   </aside>
 

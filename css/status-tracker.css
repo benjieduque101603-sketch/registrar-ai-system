@@ -307,15 +307,26 @@ body[data-page="status-tracker"] .st-rail-fnum{
   flex-shrink:0;min-width:22px;text-align:right;
 }
 
-/* Statuses nobody is in. Named rather than listed, so the reader knows
-   they exist and can go looking, without eight rows reading zero. */
-body[data-page="status-tracker"] .st-rail-empty{
-  display:flex;align-items:flex-start;gap:7px;
-  margin:0;padding:10px 15px 11px;
-  font-size:10.5px;line-height:1.5;color:var(--text-subtle);
-  background:var(--surface-subtle);border-top:1px solid var(--border-subtle);
+/* An empty status stays in the list because the list is a filter
+   control, not a report: a registrar about to move a student to
+   "Graduated" needs to see that the filter is there. It is dimmed and
+   its chip goes grey so the visual weight stays on the rows that have
+   students, and the count is an em dash rather than a zero that would
+   read as a measurement. The row is not disabled — filtering to it is a
+   valid thing to do, and the directory answers it. */
+body[data-page="status-tracker"] .st-rail-f.is-empty{color:var(--text-subtle)}
+body[data-page="status-tracker"] .st-rail-f.is-empty .st-rail-fname{font-weight:500}
+body[data-page="status-tracker"] .st-rail-f.is-empty .st-rail-fpct{font-style:italic}
+body[data-page="status-tracker"] .st-rail-f.is-empty .st-rail-fnum{color:var(--border-strong);font-weight:600}
+body[data-page="status-tracker"] .st-rail-f.is-empty:hover{color:var(--text-body)}
+body[data-page="status-tracker"] .st-rail-f.is-empty.on{
+  color:var(--text-strong);
+  background:var(--surface-muted);
 }
-body[data-page="status-tracker"] .st-rail-empty i{margin-top:3px;font-size:8px;flex-shrink:0}
+
+/* The bar with nothing to draw. A flat track, so the card keeps its
+   shape rather than collapsing a band when the roster is empty. */
+body[data-page="status-tracker"] .st-comp-bar-empty{background:var(--surface-muted)}
 
 
 /* â”€â”€ Directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */

@@ -85,7 +85,8 @@ $required = [
     '.st-rail', '.st-rail-sec', '.st-rail-head', '.st-rail-list', '.st-rail-item',
     '.st-rail-clear', '.st-rail-flist', '.st-rail-f', '.st-head', '.st-desk-grid',
     '.st-rail-glyph' => false,
-    '.st-rail-chip', '.st-rail-fpct', '.st-rail-fnum', '.st-rail-empty',
+    '.st-rail-empty' => false,   // replaced by dimmed rows; the footnote is gone
+    '.st-rail-chip', '.st-rail-fpct', '.st-rail-fnum',
     '.st-comp', '.st-comp-bar', '.st-comp-seg', '.st-comp-figure',
 ];
 if (basename($file) === 'status-tracker.css') {
