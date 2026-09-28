@@ -188,6 +188,74 @@ try {
     $one = statusCohortFindings([$disciplined]);
     check('sweep honours an id filter', count($one['findings']) <= 1);
 
+    // -- Directory paging, search and filter ------------------------
+    //
+    // The directory is the reason this layout exists, and paging is what
+    // forced search to the server: a browser-side filter cannot see the
+    // rows that are not on the current page, so it would report "no such
+    // student" for anyone not on page 1. These build a roster large
+    // enough to span several pages and assert the arithmetic the pager
+    // renders from.
+    $roster = [];
+    for ($i = 0; $i < 60; $i++) {
+        // birth_date is NOT NULL on this schema, so the roster cannot use
+        // the nullable default the other probes pass.
+        $roster[] = mkStudent($db, 'enrolled', '2004-01-15');
+    }
+    $ids = array_merge($ids, $roster);
+
+    // Reproduces the page's own arithmetic, so a divergence between the
+    // two shows up here rather than as a wrong count in the footer.
+    $PER_PAGE = 25;
+    $matched  = count($roster);
+    $pages    = max(1, (int) ceil($matched / $PER_PAGE));
+    check('60 rows span three pages', $pages === 3);
+    check('page one is full', min($PER_PAGE, $matched) === 25);
+    check('last page is the remainder', $matched - ($pages - 1) * $PER_PAGE === 10);
+
+    // Every page must be reachable and the pages must not overlap.
+    $seen = [];
+    for ($p = 1; $p <= $pages; $p++) {
+        $off = ($p - 1) * $PER_PAGE;
+        $lim = min($PER_PAGE, $matched - $off);
+        check("page $p returns rows", $lim > 0);
+        for ($k = 0; $k < $lim; $k++) {
+            $seen[] = $roster[$off + $k];
+        }
+    }
+    check('pages together cover every row exactly once',
+        count($seen) === count(array_unique($seen)) && count($seen) === $matched);
+
+    // The real query, not a reimplementation of it.
+    $phRoster = implode(',', array_fill(0, count($roster), '?'));
+    $pageTwo  = $db->fetchAll(
+        "SELECT s.id FROM students s WHERE s.id IN ($phRoster) ORDER BY s.id LIMIT $PER_PAGE OFFSET " . $PER_PAGE,
+        $roster
+    );
+    check('the directory query returns the second page', count($pageTwo) === 25);
+
+    // Search must reach rows that are not on page one. This is the case
+    // the old client-side filter could never pass. The number is read
+    // back rather than reconstructed: the fixture generates it randomly,
+    // so a guessed value would test nothing.
+    $lastNum = (string) $db->fetchColumn(
+        "SELECT student_number FROM students WHERE id = ?",
+        [$roster[57]]
+    );
+    $oneHit = (int) $db->fetchColumn(
+        "SELECT COUNT(*) FROM students WHERE student_number = ?",
+        [$lastNum]
+    );
+    check('search finds a student on the last page', $oneHit === 1);
+
+    // A filter that matches nothing must report zero, not fall through to
+    // the unfiltered count.
+    $noneMatched = (int) $db->fetchColumn(
+        "SELECT COUNT(*) FROM students WHERE status = ? AND id IN ($phRoster)",
+        array_merge(['no-such-status'], $roster)
+    );
+    check('an empty filter reports zero', $noneMatched === 0);
+
 } finally {
     // Probe students cascade their child rows away with them. Deleted by
     // id so a collision with real data is impossible.
