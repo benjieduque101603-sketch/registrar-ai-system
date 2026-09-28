@@ -686,6 +686,7 @@ function dt_tor(array $ctx): string
         'Student No.'  => $s['student_number'] ?? null,
         'Program'      => $s['course'] ?? null,
         'Year Level'   => $s['year_level'] ?? null,
+        'Section'      => $s['section'] ?? null,
     ]);
 
     $out .= '<div class="dt-body">';
@@ -1156,7 +1157,7 @@ function dt_collect_context(int $requestId, array $opt = []): ?array
     // database that predates any given migration must still render —
     // a missing column is a reason to print N/A, never to fatal.
     $studentCols = ['first_name', 'middle_name', 'last_name', 'name_suffix',
-                    'student_number', 'course', 'year_level',
+                    'student_number', 'course', 'year_level', 'section',
                     'school_year', 'semester', 'status', 'previous_school',
                     'last_year_level_completed', 'graduation_date'];
     $present = dt_existing_columns($db, 'students', $studentCols);

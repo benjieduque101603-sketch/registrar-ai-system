@@ -239,6 +239,7 @@ try {
             'year_level'      => $enc['year_level'] ?? '',
             'school_year'     => $enc['school_year'] ?? '',
             'semester'        => $enc['semester'] ?? '',
+            'section'         => $enc['section'] ?? '',
             'prev_school_name'          => $enc['prev_school_name'] ?? '',
             'prev_school_last_year'     => $enc['prev_school_last_year'] ?? '',
             'prev_school_graduated_sy'  => $enc['prev_school_graduated_sy'] ?? '',
@@ -250,7 +251,7 @@ try {
 
         // Data-quality pass: trim text, fix enum-bound fields and reject
         // impossible dates so bad source data can't fail the insert silently.
-        foreach (['first_name', 'middle_name', 'last_name', 'name_suffix', 'place_of_birth', 'nationality', 'religion', 'father_name', 'mother_name', 'email', 'address', 'contact_number', 'course', 'major', 'school_year', 'semester', 'prev_school_name', 'prev_school_last_year', 'prev_school_graduated_sy', 'emergency_name', 'emergency_relationship', 'emergency_contact'] as $f) {
+        foreach (['first_name', 'middle_name', 'last_name', 'name_suffix', 'place_of_birth', 'nationality', 'religion', 'father_name', 'mother_name', 'email', 'address', 'contact_number', 'course', 'major', 'school_year', 'semester', 'section', 'prev_school_name', 'prev_school_last_year', 'prev_school_graduated_sy', 'emergency_name', 'emergency_relationship', 'emergency_contact'] as $f) {
             $payload[$f] = trim((string) $payload[$f]);
         }
         $payload['emergency_contact'] = normalizePhone((string) $payload['emergency_contact']);
@@ -345,7 +346,7 @@ try {
         // student_number is deliberately NOT touched — it stays the same.
         $newFields = [];
         foreach ([
-            'course', 'major', 'year_level', 'school_year', 'semester'
+            'course', 'major', 'year_level', 'school_year', 'semester', 'section'
         ] as $field) {
             $val = $enc[$field] ?? null;
             if ($val !== null && $val !== '') {
@@ -370,6 +371,7 @@ try {
             'year_level'     => $newFields['year_level'] ?? $student['year_level'],
             'school_year'    => $newFields['school_year'] ?? $student['school_year'],
             'semester'       => $newFields['semester'] ?? $student['semester'],
+            'section'        => $newFields['section'] ?? $student['section'],
             'status'         => 'enrolled',
             'enrolled_at'    => date('Y-m-d H:i:s'),
         ]);

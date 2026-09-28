@@ -85,6 +85,9 @@ else                   { $timeGreeting = 'Good night';     $bodyClass = 'night';
                     <span class="intro-chip"><i class="fa-solid fa-id-card"></i> <?= htmlspecialchars($student['student_number'] ?? '—') ?></span>
                     <span class="intro-chip"><i class="fa-solid fa-graduation-cap"></i> <?= htmlspecialchars($student['course'] ?? '—') ?></span>
                     <span class="intro-chip"><i class="fa-solid fa-calendar-days"></i> Year <?= htmlspecialchars((string)($student['year_level'] ?? '—')) ?></span>
+                    <?php if (!empty($student['section'])): ?>
+                    <span class="intro-chip"><i class="fa-solid fa-people-group"></i> Section <?= htmlspecialchars($student['section']) ?></span>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -188,6 +191,10 @@ else                   { $timeGreeting = 'Good night';     $bodyClass = 'night';
                 <div class="status-info-cell">
                     <div class="sic-label">Year Level</div>
                     <div class="sic-value">Year <?= htmlspecialchars((string)($student['year_level'] ?? '—')) ?></div>
+                </div>
+                <div class="status-info-cell">
+                    <div class="sic-label">Section</div>
+                    <div class="sic-value"><?= htmlspecialchars($student['section'] ?? '—') ?></div>
                 </div>
                 <div class="status-info-cell">
                     <div class="sic-label">Academic Year</div>

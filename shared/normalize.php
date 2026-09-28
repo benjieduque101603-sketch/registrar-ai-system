@@ -295,6 +295,7 @@ function studentQualityScore(array $s): int {
         'email'          => 6,
         'nationality'    => 4,
         'religion'       => 4,
+        'section'        => 5,
         'school_year'    => 5,
     ];
     foreach ($missing as $field => $pts) {

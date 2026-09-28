@@ -6,6 +6,7 @@
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/section_code.php';
 
 // ── Prevent direct access ──
 if (defined('FUNCTIONS_LOADED')) {
@@ -507,8 +508,47 @@ function getStudentInitials($student) {
 }
 
 /**
+ * Next section number for a course+year+semester, mirroring autoAssignStudentSections.
+ * Scoped by course + year + semester only (the code has no SY digit), consistent with
+ * auto-assign's bucket key. Manual codes that aren't 5-digit numeric are ignored.
+ */
+function nextSectionNumber(string $course, int $year, ?string $semester): int {
+    $db = Database::getInstance();
+    $prefix = substr(sectionCodeFromParts($year, $semester, 1), 0, 2); // e.g. "11"
+    $rows = $db->fetchAll(
+        "SELECT DISTINCT section FROM students
+         WHERE TRIM(course) = ? AND year_level = ?
+           AND TRIM(IFNULL(semester, '')) = ?
+           AND section LIKE ? AND section REGEXP '^[0-9]{5}$'",
+        [$course, $year, (string) $semester, $prefix . '%']
+    );
+    $max = 0;
+    foreach ($rows as $r) {
+        $num = (int) substr(trim((string) $r['section']), 2);
+        if ($num > $max) $max = $num;
+    }
+    return $max + 1;
+}
+
+/**
+ * True if a student already exists in this course+year+semester+section.
+ * Same code across different courses is allowed (matches auto-assign).
+ */
+function sectionExists(string $course, int $year, ?string $semester, string $section): bool {
+    $db = Database::getInstance();
+    $found = $db->fetchOne(
+        "SELECT id FROM students
+         WHERE TRIM(course) = ? AND year_level = ?
+           AND TRIM(IFNULL(semester, '')) = ? AND TRIM(section) = ?
+         LIMIT 1",
+        [$course, $year, (string) $semester, $section]
+    );
+    return (bool) $found;
+}
+
+/**
  * Offered BCP courses with their majors. Single source of truth shared by
- * the Students page.
+ * the Students page and the Masterlist section-creation flow.
  */
 function getOfferedCourses(): array {
     return [
@@ -541,13 +581,166 @@ function getOfferedCourses(): array {
 }
 
 /**
- * Group student rows for masterlist display (course -> year level).
+ * Assign sections automatically: group by course + year + semester,
+ * max N students per section. Section codes follow [year][sem][###],
+ * e.g. 11001 (yr 1, sem 1, section 1), 12001 (yr 1, sem 2), 21001 (yr 2, sem 1).
  *
- * Replaces the old course -> year -> section grouping: sectioning belongs
- * to another department, so the masterlist stops at year level.
+ * @return array{updated: int, skipped: int, sections: list<array{course: ?string, year_level: int, semester: ?string, section: string, count: int, max: int}>}
+ */
+function autoAssignStudentSections(?int $maxPerSection = null): array {
+    $maxPerSection = $maxPerSection ?? (defined('MAX_STUDENTS_PER_SECTION') ? (int) MAX_STUDENTS_PER_SECTION : 50);
+    if ($maxPerSection < 1) {
+        $maxPerSection = 50;
+    }
+
+    $db = Database::getInstance();
+
+    // A section code is derived from the year level, so students without one
+    // cannot be placed. They are excluded here (rather than defaulted to
+    // year 0, which would render a misleading Year-1 code) and reported back
+    // as skipped so the registrar can see why they were left out.
+    $skippedRow = $db->fetchOne(
+        "SELECT COUNT(*) AS cnt FROM students
+         WHERE course IS NOT NULL AND TRIM(course) != ''
+           AND (year_level IS NULL OR TRIM(IFNULL(year_level, '')) = '')"
+    );
+    $skipped = (int) ($skippedRow['cnt'] ?? 0);
+
+    $students = $db->fetchAll(
+        "SELECT id, course, year_level, semester, section, last_name, first_name
+         FROM students
+         WHERE course IS NOT NULL AND TRIM(course) != ''
+           AND year_level IS NOT NULL AND TRIM(IFNULL(year_level, '')) != ''
+         ORDER BY TRIM(course) ASC, year_level ASC, last_name ASC, first_name ASC, id ASC"
+    );
+
+    $buckets = [];
+    foreach ($students as $row) {
+        $course = trim((string) $row['course']);
+        $year = (int) $row['year_level'];
+        $semester = ($row['semester'] ?? '') !== '' ? (string) $row['semester'] : null;
+        $key = $course . "\0" . $year . "\0" . ($semester ?? '');
+        if (!isset($buckets[$key])) {
+            $buckets[$key] = [
+                'course' => $course,
+                'year_level' => $year,
+                'semester' => $semester,
+                'ids' => [],
+            ];
+        }
+        $buckets[$key]['ids'][] = [
+            'id' => (int) $row['id'],
+            'section' => trim((string) ($row['section'] ?? '')),
+        ];
+    }
+
+    $updated = 0;
+    $sections = [];
+    $conn = $db->getConnection();
+    $conn->beginTransaction();
+
+    try {
+        foreach ($buckets as $bucket) {
+            $course = $bucket['course'];
+            $year = $bucket['year_level'];
+            $semester = $bucket['semester'];
+
+            // Split this bucket's students into those already in a section vs unassigned
+            $unassigned = [];
+            foreach ($bucket['ids'] as $s) {
+                if ($s['section'] === '') $unassigned[] = $s['id'];
+            }
+
+            // Existing section codes for this course+year+semester (5-digit only)
+            $existingRows = $db->fetchAll(
+                "SELECT TRIM(section) AS section, COUNT(*) AS cnt
+                 FROM students
+                 WHERE TRIM(course) = ? AND year_level = ?
+                   AND TRIM(IFNULL(semester, '')) = ?
+                   AND section REGEXP '^[0-9]{5}$'
+                 GROUP BY TRIM(section)
+                 ORDER BY section",
+                [$course, $year, (string) $semester]
+            );
+
+            $existingCodes = [];
+            foreach ($existingRows as $r) {
+                $existingCodes[trim($r['section'])] = (int) $r['cnt'];
+            }
+
+            // 1) Fill existing sections first (only unassigned students)
+            foreach ($existingCodes as $code => $cnt) {
+                if (empty($unassigned)) break;
+                $slots = $maxPerSection - $cnt;
+                if ($slots <= 0) continue;
+                $toPlace = array_splice($unassigned, 0, $slots);
+                foreach ($toPlace as $sid) {
+                    $db->update('students', ['section' => $code], 'id = ?', [$sid]);
+                    $updated++;
+                }
+                $existingCodes[$code] += count($toPlace);
+            }
+
+            // 2) Create new sections only for students still unassigned
+            $nextNumber = 1;
+            while (!empty($unassigned)) {
+                // Pick the next free code (skip codes already used)
+                while (isset($existingCodes[sectionCodeFromParts($year, $semester, $nextNumber)])) {
+                    $nextNumber++;
+                }
+                $code = sectionCodeFromParts($year, $semester, $nextNumber);
+                $toPlace = array_splice($unassigned, 0, $maxPerSection);
+                foreach ($toPlace as $sid) {
+                    $db->update('students', ['section' => $code], 'id = ?', [$sid]);
+                    $updated++;
+                }
+                $existingCodes[$code] = count($toPlace);
+                $sections[] = [
+                    'course' => $course,
+                    'year_level' => $year,
+                    'semester' => $semester,
+                    'section' => $code,
+                    'count' => count($toPlace),
+                    'max' => $maxPerSection,
+                ];
+            }
+
+            // Record the filled existing sections in the result
+            foreach ($existingCodes as $code => $cnt) {
+                // Skip codes we already added as newly-created (avoid duplicates
+                // in the report). Cast to string: PHP turns numeric array keys
+                // like "11001" into ints, which would never match strictly.
+                $codeStr = (string) $code;
+                $isNew = false;
+                foreach ($sections as $s) {
+                    if ($s['section'] === $codeStr) { $isNew = true; break; }
+                }
+                if (!$isNew) {
+                    $sections[] = [
+                        'course' => $course,
+                        'year_level' => $year,
+                        'semester' => $semester,
+                        'section' => $codeStr,
+                        'count' => $cnt,
+                        'max' => $maxPerSection,
+                    ];
+                }
+            }
+        }
+        $conn->commit();
+    } catch (Exception $e) {
+        $conn->rollBack();
+        throw $e;
+    }
+
+    return ['updated' => $updated, 'skipped' => $skipped, 'sections' => $sections];
+}
+
+/**
+ * Group student rows for masterlist display (course → year → section).
  *
  * @param array<int, array<string, mixed>> $students
- * @return list<array{course: string, year_level: string, students: array<int, array<string, mixed>>}>
+ * @return list<array{course: string, year_level: string, section: string, students: array<int, array<string, mixed>>}>
  */
 function groupStudentsForMasterlist(array $students): array {
     $groups = [];
@@ -555,14 +748,17 @@ function groupStudentsForMasterlist(array $students): array {
     foreach ($students as $student) {
         $courseRaw = trim((string) ($student['course'] ?? ''));
         $course = $courseRaw !== '' ? $courseRaw : 'No Course';
-        $year = $student['year_level'] ?? null;
+        $year = $student['year_level'];
         $yearLabel = ($year !== null && $year !== '') ? (string) (int) $year : 'N/A';
-        $key = $course . "\0" . $yearLabel;
+        $sectionRaw = trim((string) ($student['section'] ?? ''));
+        $section = $sectionRaw !== '' ? $sectionRaw : '—';
+        $key = $course . "\0" . $yearLabel . "\0" . $section;
 
         if (!isset($groups[$key])) {
             $groups[$key] = [
                 'course' => $course,
                 'year_level' => $yearLabel,
+                'section' => $section,
                 'students' => [],
             ];
         }
@@ -571,15 +767,30 @@ function groupStudentsForMasterlist(array $students): array {
 
     $list = array_values($groups);
     usort($list, static function (array $a, array $b): int {
-        return [$a['course'], $a['year_level']]
-            <=> [$b['course'], $b['year_level']];
+        return [$a['course'], $a['year_level'], $a['section']]
+            <=> [$b['course'], $b['year_level'], $b['section']];
     });
 
     return $list;
 }
 
+/**
+ * Whether a masterlist group has a real assigned section (not placeholder).
+ */
+function masterlistGroupHasSection(array $group): bool {
+    $section = trim((string) ($group['section'] ?? ''));
+    return $section !== '' && $section !== '—';
+}
 
-
+/**
+ * Keep only groups that belong to an assigned section.
+ *
+ * @param list<array<string, mixed>> $groups
+ * @return list<array<string, mixed>>
+ */
+function filterAssignedMasterlistGroups(array $groups): array {
+    return array_values(array_filter($groups, 'masterlistGroupHasSection'));
+}
 
 // ─── STATUS HELPERS ────────────────────────────────────────────
 
@@ -834,9 +1045,9 @@ function createStudentFromInput(array $input, $db): array
         throw new InvalidArgumentException('Email is required and must be a valid address.');
     }
 
-    // Year level: required, and must be a real year. The masterlist groups
-    // by course and year, so a blank year would leave the student outside
-    // every block.
+    // Year level: required, and must be a real year. A section code is derived
+    // from it ([year][sem][###]), so a blank year would leave the student
+    // unplaceable in any section.
     $yearLevelRaw = trim((string) ($input['year_level'] ?? ''));
     if ($yearLevelRaw === '') {
         throw new InvalidArgumentException('Year level is required.');
@@ -846,7 +1057,7 @@ function createStudentFromInput(array $input, $db): array
         throw new InvalidArgumentException('Year level must be 1st, 2nd, 3rd, or 4th Year.');
     }
 
-    // Semester: required, from the fixed set the registrar office uses.
+    // Semester: required, from the fixed set the section codes encode.
     $semesterRaw = trim((string) ($input['semester'] ?? ''));
     if ($semesterRaw === '') {
         throw new InvalidArgumentException('Semester is required.');
@@ -875,6 +1086,7 @@ function createStudentFromInput(array $input, $db): array
         'year_level' => $yearLevel,
         'school_year' => isset($input['school_year']) && trim($input['school_year']) !== '' ? trim($input['school_year']) : null,
         'semester' => $semesterRaw,
+        'section' => $input['section'] ?? null,
         'adviser_id' => isset($input['adviser_id']) && $input['adviser_id'] !== '' ? (int) $input['adviser_id'] : null,
         'status' => $input['status'] ?? 'active',
     ];

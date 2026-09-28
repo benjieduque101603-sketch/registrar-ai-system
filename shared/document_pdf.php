@@ -258,6 +258,7 @@ function buildDocumentPdf(array $request, array $student, ?array $catalog, strin
         'Student No.'    => (string) ($student['student_number'] ?? '—'),
         'Course'         => (string) ($student['course'] ?? '—'),
         'Year Level'     => $student['year_level'] !== '' && $student['year_level'] !== null ? (string) $student['year_level'] : '—',
+        'Section'        => (string) ($student['section'] ?? '—'),
         'School Year'    => (string) ($student['school_year'] ?? '—') . ' · ' . (string) ($student['semester'] ?? ''),
     ];
     foreach ($info as $label => $value) {
@@ -290,7 +291,7 @@ function buildDocumentPdf(array $request, array $student, ?array $catalog, strin
 
     switch ($sku) {
         case 'DOC-COE':
-            $body = 'THIS IS TO CERTIFY that ' . $name . ', with student number ' . ($student['student_number'] ?? '—') . ', is officially enrolled at Bestlink College of the Philippines for the Academic Year ' . $sy . ($sem !== '' ? ', ' . $sem . ' Semester' : '') . ' under the ' . $course . ' program, ' . ($student['year_level'] ?? '') . ' year level.';
+            $body = 'THIS IS TO CERTIFY that ' . $name . ', with student number ' . ($student['student_number'] ?? '—') . ', is officially enrolled at Bestlink College of the Philippines for the Academic Year ' . $sy . ($sem !== '' ? ', ' . $sem . ' Semester' : '') . ' under the ' . $course . ' program, ' . ($student['year_level'] ?? '') . ' year level, section ' . ($student['section'] ?? '—') . '.';
             if ($purpose !== '') $body .= "\n\nThis certificate is issued upon the request of the student for the following purpose: " . $purpose . '.';
             $body .= "\n\nIssued this " . $now . ' at the Office of the Registrar, Bestlink College of the Philippines.';
             break;
@@ -679,6 +680,7 @@ function buildTranscriptPdf(array $student, array $terms): array
         'Student No.'  => (string) ($student['student_number'] ?? '—'),
         'Course'       => (string) ($student['course'] ?? '—'),
         'Year Level'   => $student['year_level'] !== '' && $student['year_level'] !== null ? (string) $student['year_level'] : '—',
+        'Section'      => (string) ($student['section'] ?? '—'),
     ];
     $pdf->SetFont('helvetica', 'B', 8.5);
     $pdf->SetTextColor(80, 90, 110);
