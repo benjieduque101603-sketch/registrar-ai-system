@@ -80,6 +80,7 @@ if ($errors === 0) {
 $required = [
     '.st-rail', '.st-rail-sec', '.st-rail-head', '.st-rail-list', '.st-rail-item',
     '.st-rail-clear', '.st-rail-flist', '.st-rail-f', '.st-head', '.st-desk-grid',
+    '.st-rail-glyph', '.st-rail-fpct', '.st-rail-fnum', '.st-rail-empty',
 ];
 if (basename($file) === 'status-tracker.css') {
     foreach ($required as $sel) {

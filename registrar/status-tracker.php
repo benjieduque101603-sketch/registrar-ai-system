@@ -240,33 +240,84 @@ include '../includes/sidebar.php';
       <?php endif; ?>
     </section>
 
-    <!-- Counts and filters are the same list. The inline --fill turns the
-         count into a proportion bar, so this doubles as the distribution
-         that used to be a separate band above the table. -->
+    <!--
+      Counts and filters in one list, and the proportion bar that used to
+      be a separate band above the table.
+
+      Two decisions the content makes here. Each row leads with the status
+      glyph in a tinted square rather than a 7px dot, because the dot was
+      too small to carry the status colour into a scan and the glyph is
+      the same vocabulary the table badges and the case panel already use.
+      And the count is stated as a number and a share, since the fill bar
+      implies a proportion that nothing otherwise quantified.
+
+      Statuses with nobody in them are collapsed to a footnote. On a
+      hundred-student roster that is usually half the list, and eight rows
+      reading 0 buried the two that mattered. The active filter is always
+      shown even at zero, or selecting it would appear to do nothing.
+    -->
+    <?php
+    // Each row carries the status key itself. $STATUS_META is keyed by
+    // status and holds only colour, background and glyph, so the id has
+    // to be added explicitly or every $r['id'] below reads undefined.
+    $statusRows = [];
+    $emptyRows  = [];
+    foreach ($DB_STATUSES as $s) {
+        $row = ['id' => $s] + $STATUS_META[$s] + [
+            'count' => $counts[$s],
+            'pct'   => (float) ($distData[$s] ?? 0),
+        ];
+        if ($counts[$s] > 0 || $filterStatus === $s) {
+            $statusRows[] = $row;
+        } else {
+            $emptyRows[] = $row;
+        }
+    }
+    ?>
     <section class="st-rail-sec st-filters">
-      <div class="st-rail-head"><h2>By status</h2></div>
+      <div class="st-rail-head">
+        <h2>By status</h2>
+        <span class="st-rail-head-n"><?= count($statusRows) ?> of <?= count($DB_STATUSES) ?></span>
+      </div>
       <ul class="st-rail-flist">
         <li>
-          <a class="st-rail-f<?= $filterStatus === '' ? ' on' : '' ?>"
-             style="--fill:<?= $totalStudents > 0 ? 100 : 0 ?>%;--fill-color:var(--brand-400)"
+          <a class="st-rail-f st-rail-fall<?= $filterStatus === '' ? ' on' : '' ?>"
+             style="--fill:100%;--fill-color:var(--brand-400)"
              href="<?= htmlspecialchars($dirUrl(['status' => null, 'page' => 1])) ?>">
-            <span class="st-rail-fdot" style="background:var(--brand-500)"></span>
-            <span class="st-rail-fname">All students</span>
-            <span class="st-rail-fc"><?= number_format($totalStudents) ?></span>
+            <span class="st-rail-glyph st-rail-glyph-all"><i class="fas fa-users"></i></span>
+            <span class="st-rail-fbody">
+              <span class="st-rail-fname">All students</span>
+              <span class="st-rail-fpct">everyone on the roster</span>
+            </span>
+            <span class="st-rail-fnum"><?= number_format($totalStudents) ?></span>
           </a>
         </li>
-        <?php foreach ($DB_STATUSES as $s): $m = $STATUS_META[$s] ?? $STATUS_META['inactive']; ?>
+        <?php foreach ($statusRows as $r): ?>
           <li>
-            <a class="st-rail-f<?= $filterStatus === $s ? ' on' : '' ?>"
-               style="--fill:<?= (float) ($distData[$s] ?? 0) ?>%;--fill-color:<?= $m['color'] ?>"
-               href="<?= htmlspecialchars($dirUrl(['status' => $s, 'page' => 1])) ?>">
-              <span class="st-rail-fdot" style="background:<?= $m['color'] ?>"></span>
-              <span class="st-rail-fname"><?= htmlspecialchars(ucwords(str_replace('-', ' ', $s))) ?></span>
-              <span class="st-rail-fc"><?= number_format($counts[$s]) ?></span>
+            <a class="st-rail-f<?= $filterStatus === $r['id'] ? ' on' : '' ?>"
+               style="--fill:<?= $r['pct'] ?>%;--fill-color:<?= $r['color'] ?>"
+               href="<?= htmlspecialchars($dirUrl(['status' => $r['id'], 'page' => 1])) ?>">
+              <span class="st-rail-glyph" style="background:<?= $r['bg'] ?>;color:<?= $r['color'] ?>">
+                <i class="<?= $r['icon'] ?>"></i>
+              </span>
+              <span class="st-rail-fbody">
+                <span class="st-rail-fname"><?= htmlspecialchars(ucwords(str_replace('-', ' ', $r['id']))) ?></span>
+                <span class="st-rail-fpct"><?= $r['pct'] > 0 ? rtrim(rtrim(number_format($r['pct'], 1), '0'), '.') . '%' : 'none yet' ?></span>
+              </span>
+              <span class="st-rail-fnum"><?= number_format($r['count']) ?></span>
             </a>
           </li>
         <?php endforeach; ?>
       </ul>
+      <?php if ($emptyRows): ?>
+        <p class="st-rail-empty">
+          <?= count($emptyRows) ?> status<?= count($emptyRows) === 1 ? '' : 'es' ?> with no students:
+          <?= htmlspecialchars(implode(', ', array_map(
+              static fn($r) => ucwords(str_replace('-', ' ', $r['id'])),
+              $emptyRows
+          ))) ?>
+        </p>
+      <?php endif; ?>
     </section>
   </aside>
 

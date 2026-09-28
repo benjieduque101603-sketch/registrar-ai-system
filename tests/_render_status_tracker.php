@@ -2,7 +2,10 @@
 // Render registrar/status-tracker.php in-process with a registrar session
 // and write the HTML to st_render.html for inspection.
 //
-//   php tests/_render_status_tracker.php
+//   php tests/_render_status_tracker.php [status] [q] [page]
+//
+// Query parameters can be passed so a filtered, searched or paged view can
+// be rendered and inspected the same way, rather than only the default.
 //
 // The HTTP route is not usable for this: shared/session_config.php sets
 // session.use_strict_mode=1, so a session id minted by a CLI script is
@@ -12,6 +15,10 @@
 // and the same <script> block.
 ini_set('session.use_strict_mode', '0');
 session_name('BCP_REGISTRAR_SESSION');
+
+if (isset($argv[1])) $_GET['status'] = $argv[1];
+if (isset($argv[2])) $_GET['q']      = $argv[2];
+if (isset($argv[3])) $_GET['page']   = $argv[3];
 
 require_once __DIR__ . '/../shared/config.php';
 require_once __DIR__ . '/../shared/database.php';

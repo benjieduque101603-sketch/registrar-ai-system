@@ -14,7 +14,7 @@
    it, both fitting above the fold.
    ============================================================ */
 
-/* ── Page header ────────────────────────────────────────────
+/* -- Page header --------------------------------------------
    The house card, copied from .q-head in registrar/queue.php and
    .dq-head in registrar/documents.php: bordered, rounded 19px, a soft
    blue gradient, align-items:flex-end, 25/27px padding, and the same
@@ -172,12 +172,19 @@ body[data-page="status-tracker"] .st-rail-item-badge{
   font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:20px;
   white-space:nowrap;flex-shrink:0;text-transform:capitalize;
 
+
+
 /* â”€â”€ By status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Counts and filters in one list. The bar is the design idea: a
-   right-aligned proportion fill behind each row, so the list reads as
-   a distribution as well as a set of links. The fill is drawn on a
-   pseudo-element so the label and count stay selectable and the hit
-   target remains the whole row. */
+   Counts and filters in one list, and the proportion bar that used to
+   be a separate band above the table.
+
+   A row is three columns: the status glyph in a tinted square, the name
+   over its share, and the count. The glyph replaced a 7px dot because
+   the dot was too small to carry the status colour into a scan and the
+   glyph is the same vocabulary the table badges and case panel use.
+
+   The fill is a pseudo-element so the label and count stay selectable
+   and the whole row remains the hit target. */
 body[data-page="status-tracker"] .st-rail-sec.st-filters{
   background:var(--surface);
   border:1px solid var(--border);border-radius:var(--radius-md);
@@ -186,10 +193,14 @@ body[data-page="status-tracker"] .st-rail-sec.st-filters{
 body[data-page="status-tracker"] .st-rail-sec.st-filters .st-rail-head{
   background:var(--surface);border-bottom:1px solid var(--border-subtle);
 }
+body[data-page="status-tracker"] .st-rail-head-n{
+  font-size:10px;font-weight:700;color:var(--text-subtle);
+  font-variant-numeric:tabular-nums;letter-spacing:.02em;
+}
 body[data-page="status-tracker"] .st-rail-flist{list-style:none;margin:0;padding:6px}
 body[data-page="status-tracker"] .st-rail-f{
-  position:relative;display:flex;align-items:center;gap:8px;
-  padding:6px 9px;border-radius:var(--radius-sm);overflow:hidden;
+  position:relative;display:flex;align-items:center;gap:9px;
+  padding:7px 9px;border-radius:var(--radius-sm);overflow:hidden;
   font-size:12.5px;color:var(--text-body);text-decoration:none;
   transition:background .1s;
 }
@@ -202,21 +213,53 @@ body[data-page="status-tracker"] .st-rail-f::before{
   content:"";position:absolute;left:0;top:0;bottom:0;
   width:var(--fill,0%);
   background:var(--fill-color,#e2e8f0);
-  opacity:.34;pointer-events:none;transition:width .2s;
+  opacity:.3;pointer-events:none;transition:width .2s;
 }
-body[data-page="status-tracker"] .st-rail-f.on::before{opacity:.5}
-body[data-page="status-tracker"] .st-rail-fdot,
-body[data-page="status-tracker"] .st-rail-fname,
-body[data-page="status-tracker"] .st-rail-fc{position:relative;z-index:1}
-body[data-page="status-tracker"] .st-rail-fdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+body[data-page="status-tracker"] .st-rail-f.on::before{opacity:.46}
+body[data-page="status-tracker"] .st-rail-glyph,
+body[data-page="status-tracker"] .st-rail-fbody,
+body[data-page="status-tracker"] .st-rail-fnum{position:relative;z-index:1}
+
+/* The glyph tile. Fixed size and centred so the column of names below it
+   starts at a consistent x, which is what lets the list be scanned as a
+   column rather than read row by row. */
+body[data-page="status-tracker"] .st-rail-glyph{
+  width:26px;height:26px;border-radius:8px;flex-shrink:0;
+  display:grid;place-items:center;font-size:11px;
+}
+body[data-page="status-tracker"] .st-rail-glyph-all{
+  background:var(--brand-50);color:var(--brand-600);
+}
+body[data-page="status-tracker"] .st-rail-fbody{
+  flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;
+}
 body[data-page="status-tracker"] .st-rail-fname{
-  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-weight:600;line-height:1.25;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-body[data-page="status-tracker"] .st-rail-fc{
-  font-size:11.5px;color:var(--text-subtle);
-  font-variant-numeric:tabular-nums;font-weight:600;
+/* The share. Small and quiet, but it is the number the fill bar implies
+   and nothing else on the row states it. */
+body[data-page="status-tracker"] .st-rail-fpct{
+  font-size:10.5px;color:var(--text-subtle);line-height:1.2;
+  font-variant-numeric:tabular-nums;
 }
-body[data-page="status-tracker"] .st-rail-f.on .st-rail-fc{color:var(--brand-700)}
+body[data-page="status-tracker"] .st-rail-fall .st-rail-fpct{font-style:italic}
+body[data-page="status-tracker"] .st-rail-fnum{
+  font-size:14px;font-weight:700;color:var(--text-strong);
+  font-variant-numeric:tabular-nums;letter-spacing:-.2px;
+  flex-shrink:0;min-width:22px;text-align:right;
+}
+body[data-page="status-tracker"] .st-rail-f.on .st-rail-fnum{color:var(--brand-700)}
+body[data-page="status-tracker"] .st-rail-f.on .st-rail-fpct{color:var(--brand-600)}
+
+/* Statuses nobody is in. Named rather than listed, so the reader knows
+   they exist and can go looking, without eight rows reading zero. */
+body[data-page="status-tracker"] .st-rail-empty{
+  margin:0;padding:9px 14px 11px;
+  font-size:10.5px;line-height:1.5;color:var(--text-subtle);
+  background:var(--surface-subtle);border-top:1px solid var(--border-subtle);
+}
+
 
 }
 body[data-page="status-tracker"] .st-rail-item-why{
