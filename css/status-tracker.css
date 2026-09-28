@@ -440,44 +440,57 @@ body[data-page="status-tracker"] .st-pager-nav a:focus-visible{outline:2px solid
 body[data-page="status-tracker"] .st-pager-nav a.on{background:var(--brand-500);color:#fff;font-weight:600}
 body[data-page="status-tracker"] .st-pager-nav .off{color:var(--border-strong);cursor:default}
 body[data-page="status-tracker"] .st-pager-nav .gap{color:var(--text-subtle);cursor:default}
+
+
 /* â”€â”€ Review drawer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Results slide in from the right instead of rendering above the
    table. The inline panel was the other half of the scrolling: every
-   check run moved the directory, so the row you were reading was
-   never in the same place twice. */
+   check run moved the directory, so the row being read was never in the
+   same place twice.
+
+   The panel is a findings surface, not a message box. The header keeps
+   the check named in view while the body scrolls, because a registrar
+   working down a list needs to know where they are. */
 body[data-page="status-tracker"] .st-drawer{position:fixed;inset:0;z-index:1200}
 body[data-page="status-tracker"] .st-drawer-scrim{
-  position:absolute;inset:0;background:rgba(15,23,42,.4);
+  position:absolute;inset:0;background:rgba(15,23,42,.45);
   opacity:0;transition:opacity .2s;
 }
 body[data-page="status-tracker"] .st-drawer.open .st-drawer-scrim{opacity:1}
 body[data-page="status-tracker"] .st-drawer-panel{
-  position:absolute;top:0;right:0;bottom:0;width:min(460px,100vw);
+  position:absolute;top:0;right:0;bottom:0;width:min(520px,100vw);
   display:flex;flex-direction:column;
   background:var(--surface);
   border-left:1px solid var(--border);
-  box-shadow:var(--shadow-lg);
+  box-shadow:-24px 0 60px rgba(15,23,42,.18);
   transform:translateX(100%);
-  transition:transform .22s cubic-bezier(.16,1,.3,1);
+  transition:transform .24s cubic-bezier(.16,1,.3,1);
 }
 body[data-page="status-tracker"] .st-drawer.open .st-drawer-panel{transform:none}
 body[data-page="status-tracker"] .st-drawer-head{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:15px 18px;border-bottom:1px solid var(--border-subtle);
-  background:var(--surface-subtle);
+  display:flex;align-items:center;gap:12px;flex-shrink:0;
+  padding:15px 20px;
+  border-bottom:1px solid var(--border-subtle);
+  border-top:3px solid var(--danger-500);
+  background:linear-gradient(180deg,var(--surface-subtle),var(--surface));
 }
 body[data-page="status-tracker"] .st-drawer-head h2{
-  margin:0;font-size:13.5px;font-weight:700;color:var(--text-strong);
+  margin:0;flex:1;min-width:0;
+  font-size:11px;font-weight:800;color:var(--text-strong);
+  text-transform:uppercase;letter-spacing:.07em;
   display:flex;align-items:center;gap:8px;
 }
-body[data-page="status-tracker"] .st-drawer-head h2 i{color:var(--brand-500)}
+body[data-page="status-tracker"] .st-drawer-head h2 i{color:var(--danger-500)}
 body[data-page="status-tracker"] .st-drawer-x{
-  background:none;border:0;cursor:pointer;padding:4px;
-  color:var(--text-subtle);font-size:15px;border-radius:var(--radius-sm);
+  width:30px;height:30px;flex-shrink:0;
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--text-subtle);cursor:pointer;font-size:14px;
 }
 body[data-page="status-tracker"] .st-drawer-x:hover{color:var(--text-strong);background:var(--surface-muted)}
 body[data-page="status-tracker"] .st-drawer-x:focus-visible{outline:2px solid var(--brand-500);outline-offset:2px}
-body[data-page="status-tracker"] .st-drawer-body{flex:1;overflow-y:auto;padding:16px 18px}
+body[data-page="status-tracker"] .st-drawer-body{
+  flex:1;overflow-y:auto;padding:16px 20px 24px;background:var(--surface-subtle);
+}
 body[data-page="status-tracker"] .st-loading{
   text-align:center;padding:34px 16px;font-size:13px;color:var(--text-subtle);
 }
@@ -485,31 +498,110 @@ body[data-page="status-tracker"] .st-loading i{margin-right:6px;color:var(--bran
 body[data-page="status-tracker"] .st-panel-fail{
   text-align:center;padding:20px;font-size:12.5px;color:var(--warning-600);
 }
-body[data-page="status-tracker"] .st-missed-head{
-  display:flex;align-items:flex-start;gap:10px;
-  padding:12px 14px;margin-bottom:14px;
-  background:var(--danger-100);border-left:3px solid var(--danger-500);
-  border-radius:var(--radius-sm);
+
+
+/* â”€â”€ A finding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   A card, not a paragraph: who it is, what disagrees, and what to look
+   at before deciding. The three levels stay visually distinct because
+   they are three different things - the headline, the record, and the
+   question - and running them at one weight made the question, the only
+   actionable part, the hardest thing on the card to find. */
+body[data-page="status-tracker"] .st-find{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-left:3px solid var(--danger-500);
+  border-radius:var(--radius-md);
+  padding:0;margin-bottom:12px;overflow:hidden;
+  box-shadow:0 2px 8px rgba(15,23,42,.04);
 }
-body[data-page="status-tracker"] .st-missed-head>i{
-  color:var(--danger-600);font-size:13px;margin-top:2px;flex-shrink:0;
+body[data-page="status-tracker"] .st-find-head{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px 11px;border-bottom:1px solid var(--border-subtle);
 }
-body[data-page="status-tracker"] .st-missed-head p{
-  margin:0;font-size:12.5px;line-height:1.55;color:var(--text-strong);flex:1;
+body[data-page="status-tracker"] .st-find-av{
+  width:32px;height:32px;border-radius:9px;flex-shrink:0;
+  display:grid;place-items:center;
+  font-size:11.5px;font-weight:800;letter-spacing:.02em;
 }
-body[data-page="status-tracker"] .st-case-src{
-  font-size:10px;font-weight:600;color:var(--text-subtle);
-  border:1px solid var(--border);border-radius:4px;padding:1px 6px;
-  white-space:nowrap;flex-shrink:0;align-self:flex-start;margin-top:2px;
+body[data-page="status-tracker"] .st-find-who{
+  flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;
 }
-body[data-page="status-tracker"] .st-missed-issue{
-  font-size:12.5px;color:var(--text-body);line-height:1.5;margin-top:7px;
+body[data-page="status-tracker"] .st-find-who b{
+  font-size:13px;font-weight:700;color:var(--text-strong);line-height:1.25;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-body[data-page="status-tracker"] .st-missed-issue strong{color:var(--text-strong)}
-body[data-page="status-tracker"] .st-missed-q{
-  font-size:12px;color:var(--text-muted);line-height:1.5;
-  padding-left:10px;border-left:2px solid var(--border-strong);margin-top:5px;
+body[data-page="status-tracker"] .st-find-who span{
+  font-size:11px;color:var(--text-subtle);font-variant-numeric:tabular-nums;
 }
+body[data-page="status-tracker"] .st-find-badge{
+  font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;
+  white-space:nowrap;flex-shrink:0;text-transform:capitalize;
+}
+body[data-page="status-tracker"] .st-find-n{
+  margin:0;padding:8px 14px 0;
+  font-size:10.5px;font-weight:600;color:var(--danger-600);letter-spacing:.02em;
+}
+body[data-page="status-tracker"] .st-find-list{list-style:none;margin:0;padding:11px 14px 4px}
+body[data-page="status-tracker"] .st-find-iss{display:flex;gap:9px;padding:0 0 12px}
+body[data-page="status-tracker"] .st-find-iss:last-child{padding-bottom:6px}
+body[data-page="status-tracker"] .st-find-ico{
+  width:20px;height:20px;border-radius:6px;flex-shrink:0;margin-top:1px;
+  display:grid;place-items:center;
+  background:var(--danger-100);color:var(--danger-600);font-size:9px;
+}
+body[data-page="status-tracker"] .st-find-issbody{min-width:0;flex:1}
+body[data-page="status-tracker"] .st-find-issbody>b{
+  display:block;font-size:12.5px;font-weight:700;color:var(--text-strong);
+  line-height:1.35;margin-bottom:3px;
+}
+/* The record: what the database actually says. */
+body[data-page="status-tracker"] .st-find-issbody>p{
+  margin:0;font-size:12px;color:var(--text-body);line-height:1.5;
+}
+/* The question is the only part a person acts on, so it sits on its own
+   rule with a question glyph rather than being left to be inferred from
+   a change of colour. */
+body[data-page="status-tracker"] .st-find-q{
+  display:flex;gap:7px;align-items:flex-start;margin-top:7px!important;
+  padding:7px 10px;background:var(--surface-subtle);
+  border-left:2px solid var(--border-strong);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  font-size:11.5px;color:var(--text-muted);line-height:1.5;
+}
+body[data-page="status-tracker"] .st-find-q i{
+  margin-top:2px;font-size:10px;color:var(--brand-500);flex-shrink:0;
+}
+body[data-page="status-tracker"] .st-find-foot{
+  display:flex;gap:8px;padding:10px 14px 12px;
+  border-top:1px solid var(--border-subtle);background:var(--surface-subtle);
+}
+
+/* The all-clear. An empty result is still a result, and it is stated in
+   the same voice as a finding rather than as an apology. */
+body[data-page="status-tracker"] .st-find-clear{
+  text-align:center;padding:44px 24px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-md);
+}
+body[data-page="status-tracker"] .st-find-clear>i{
+  display:grid;place-items:center;width:42px;height:42px;margin:0 auto 12px;
+  border-radius:50%;background:var(--success-100);color:var(--success-600);font-size:17px;
+}
+body[data-page="status-tracker"] .st-find-clear b{
+  display:block;font-size:13.5px;color:var(--text-strong);margin-bottom:4px;
+}
+body[data-page="status-tracker"] .st-find-clear span{
+  display:block;font-size:12px;color:var(--text-muted);
+  line-height:1.55;max-width:280px;margin:0 auto;
+}
+body[data-page="status-tracker"] .st-find-warn{
+  display:flex;align-items:flex-start;gap:8px;
+  padding:10px 13px;margin-bottom:12px;
+  background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-sm);
+  font-size:11.5px;color:var(--warning-600);line-height:1.5;
+}
+body[data-page="status-tracker"] .st-find-warn i{margin-top:2px;flex-shrink:0}
+
 
 /* â”€â”€ Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Below 1080px the rail moves above the directory and stops being

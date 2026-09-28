@@ -1,0 +1,7 @@
+    h += '<footer class="st-find-foot">';
+    h += '<button class="st-btn-apply" onclick="openFromCard(\'missed-' + i + '\',' + parseInt(f.student_id) + ')">Read the case</button>';
+    h += '<button class="st-btn-dismiss" onclick="dismissRec(\'missed-' + i + '\')">Dismiss</button>';
+    h += '</footer></article>';
+  });
+  return { html: h, count: count };
+}

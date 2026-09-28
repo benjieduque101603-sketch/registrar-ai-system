@@ -1,0 +1,73 @@
+
+// ── Checks ───────────────────────────────────────────────────
+let fail = 0, pass = 0;
+const check = (label, cond) => {
+  if (cond) { pass++; console.log('  ok    ' + label); }
+  else { fail++; console.log('  FAIL  ' + label); }
+};
+
+console.log('findings drawer - rendered card structure');
+
+const one = renderMissedCards({
+  findings: [{
+    student_id: 7, student_name: 'Dela Cruz', student_number: '2024-0117',
+    current_status: 'active',
+    issues: [{ title: 'Unresolved disciplinary case', detail: '1 pending (open 30 days).', question: 'Resolve or dismiss before reviewing.' }],
+  }],
+});
+const a = one.html;
+check('returns one finding', one.count === 1);
+check('card is an article', /<article class="st-find"/.test(a));
+check('names the student', a.includes('Dela Cruz'));
+check('shows the student number', a.includes('2024-0117'));
+check('shows the status', /st-find-badge[^>]*>active</.test(a));
+check('initials come from first and last name', a.includes('>DC<'));
+check('carries the issue title', a.includes('Unresolved disciplinary case'));
+check('carries the issue detail', a.includes('1 pending (open 30 days).'));
+check('carries the question', a.includes('Resolve or dismiss before reviewing.'));
+check('question is set apart from the record', a.includes('st-find-q'));
+check('links into the case', /openFromCard\('missed-0',7\)/.test(a));
+check('offers dismiss', /dismissRec\('missed-0'\)/.test(a));
+check('no summary line on a single issue', !a.includes('st-find-n'));
+
+const two = renderMissedCards({
+  findings: [{
+    student_id: 9, student_name: 'Lim', student_number: '2024-0132',
+    current_status: 'loa',
+    issues: [
+      { title: 'Leave window has closed', detail: 'Ended 3 Mar 2026.', question: 'Return or extend?' },
+      { title: 'Outstanding balance', detail: 'PHP 1,200.00', question: 'Does it block this status?' },
+    ],
+  }],
+});
+const b = two.html;
+check('two issues on one student', (b.match(/st-find-iss"/g) || []).length === 2);
+check('states how many contradictions', b.includes('2 contradictions in this record'));
+check('both questions render', b.includes('Return or extend?') && b.includes('Does it block this status?'));
+
+const odd = renderMissedCards({
+  findings: [{ student_id: 3, student_name: 'Solo Name', student_number: '', current_status: 'transferred',
+    issues: [{ title: 'T', detail: 'D', question: 'Q' }] }],
+});
+check('unknown status falls back, no throw', odd.count === 1 && odd.html.includes('>transferred<'));
+check('missing student number handled', odd.html.includes('No ID'));
+
+const none = renderMissedCards({ findings: [] });
+check('empty result is not an error', none.count === 0);
+check('empty result explains itself', none.html.includes('Nothing contradicts itself'));
+
+const partial = renderMissedCards({ findings: [], partial: true });
+check('partial read is announced', partial.html.includes('st-find-warn'));
+
+const nasty = renderMissedCards({
+  findings: [{ student_id: 1, student_name: '<img src=x onerror=alert(1)>', student_number: '1',
+    current_status: 'active', issues: [{ title: 'T', detail: 'D', question: 'Q' }] }],
+});
+check('student name is escaped', !nasty.html.includes('<img src=x'));
+
+// process.exitCode rather than process.exit(). Calling process.exit()
+// terminates before buffered stdout has drained when the output is a pipe,
+// so the whole report was silently discarded and the run looked as though
+// it had printed nothing at all.
+console.log(`\n  ${pass} passed, ${fail} failed`);
+process.exitCode = fail === 0 ? 0 : 1;

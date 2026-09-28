@@ -704,26 +704,39 @@ const d=(data&&data.data)||data||{};
 const list=d.findings||[];
 const count=list.length;
 let h='';
-if(d.headline){
-h+='<div class="st-missed-head"><i class="fas fa-robot"></i><p>'+escapeHTML(d.headline)+'</p>';
-h+='<span class="st-case-src">'+(d.source==='ai'?'phrasing by AI':'rule text')+'</span></div>';
-}
 if(d.partial){
-h+='<div class="st-desk-partial" style="margin:0 0 12px"><i class="fas fa-triangle-exclamation"></i> Some records could not be read, so this list is incomplete.</div>';
+h+='<div class="st-find-warn"><i class="fas fa-triangle-exclamation"></i> Some records could not be read, so this list is incomplete.</div>';
 }
 if(!count){
-return{html:h+'<div class="st-modal-empty"><i class="fas fa-circle-check"></i> No contradictions found</div>',count:0};
+return{html:h+'<div class="st-find-clear"><i class="fas fa-circle-check"></i><b>Nothing contradicts itself</b><span>Every record on the roster agrees with itself. New findings land here as soon as one does not.</span></div>',count:0};
 }
 list.forEach((f,i)=>{
-h+='<div class="st-rec sv-high" id="missed-'+i+'"><div class="st-rec-info">';
-h+='<div class="st-rec-title"><i class="fas fa-triangle-exclamation"></i> '+escapeHTML(f.student_name)+'</div>';
-h+='<div class="st-rec-name"><span class="st-ai-src">'+escapeHTML(f.student_number||'No ID')+'</span> currently '+escapeHTML(f.current_status||'unset')+'</div>';
-(f.issues||[]).forEach(iss=>{
-h+='<div class="st-missed-issue"><strong>'+escapeHTML(iss.title)+'</strong> â€” '+escapeHTML(iss.detail)+'</div>';
-h+='<div class="st-missed-q">'+escapeHTML(iss.question)+'</div>';
+const meta=STATUS_META[f.current_status]||STATUS_META.inactive;
+const parts=String(f.student_name||'?').trim().split(' ');
+const initials=(parts[0]?parts[0][0]:'')+(parts.length>1?parts[parts.length-1][0]:'');
+const issues=f.issues||[];
+h+='<article class="st-find" id="missed-'+i+'">';
+h+='<header class="st-find-head">';
+h+='<span class="st-find-av" style="background:'+meta.bg+';color:'+meta.color+'">'+escapeHTML(initials.toUpperCase())+'</span>';
+h+='<span class="st-find-who"><b>'+escapeHTML(f.student_name)+'</b><span>'+escapeHTML(f.student_number||'No ID')+'</span></span>';
+h+='<span class="st-find-badge" style="background:'+meta.bg+';color:'+meta.color+'">'+escapeHTML(String(f.current_status||'unset').replace(/-/g,' '))+'</span>';
+h+='</header>';
+if(issues.length>1)h+='<p class="st-find-n">'+issues.length+' contradictions in this record</p>';
+h+='<ul class="st-find-list">';
+issues.forEach(iss=>{
+h+='<li class="st-find-iss">';
+h+='<span class="st-find-ico"><i class="fas fa-triangle-exclamation"></i></span>';
+h+='<div class="st-find-issbody">';
+h+='<b>'+escapeHTML(iss.title)+'</b>';
+h+='<p>'+escapeHTML(iss.detail)+'</p>';
+h+='<p class="st-find-q"><i class="fas fa-circle-question"></i><span>'+escapeHTML(iss.question)+'</span></p>';
+h+='</div></li>';
 });
-h+='<div class="st-rec-acts"><button class="st-btn-apply" onclick="openFromCard(\'missed-'+i+'\','+parseInt(f.student_id)+')">Read the case</button>';
-h+='<button class="st-btn-dismiss" onclick="dismissRec(\'missed-'+i+'\')">Dismiss</button></div></div></div>';
+h+='</ul>';
+h+='<footer class="st-find-foot">';
+h+='<button class="st-btn-apply" onclick="openFromCard(\'missed-'+i+'\','+parseInt(f.student_id)+')">Read the case</button>';
+h+='<button class="st-btn-dismiss" onclick="dismissRec(\'missed-'+i+'\')">Dismiss</button>';
+h+='</footer></article>';
 });
 return{html:h,count:count};
 }
