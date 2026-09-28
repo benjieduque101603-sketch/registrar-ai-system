@@ -1003,7 +1003,12 @@ function updateBulkBar() {
     document.getElementById('bulkCount').textContent = checked + ' selected';
     bar.classList.toggle('show', checked > 0);
 }
-function applyBulkAction() {
+// async because it awaits confirmAction(). A top-level `await` outside an
+// async function is a SyntaxError, and one SyntaxError discards the WHOLE
+// script block - which is why openReceiveModal, openAddModal and
+// aiToolsPost were all reported as "not defined" even though they are
+// defined. They never ran.
+async function applyBulkAction() {
     const action = document.getElementById('bulkActionSelect').value;
     if (!action) { showToast('Select an action first.', 'warning'); return; }
     const ids = Array.from(document.querySelectorAll('.student-cb:checked')).map(cb => cb.value);
@@ -1577,7 +1582,8 @@ function applyPaste() {
 }
 
 // Duplicate check on name blur (deterministic, no LLM)
-function checkDuplicateHint() {
+// async: awaits confirmAction() before deciding whether to enroll.
+async function checkDuplicateHint() {
     const fn = document.getElementById('addFirstName').value.trim();
     const ln = document.getElementById('addLastName').value.trim();
     const bd = document.getElementById('addBirthDate').value;
@@ -1605,7 +1611,8 @@ document.getElementById('addFirstName').addEventListener('blur', checkDuplicateH
 document.getElementById('addLastName').addEventListener('blur', checkDuplicateHint);
 
 // Course auto-standardize on blur (deterministic)
-function standardizeCourse() {
+// async: awaits confirmAction() before overwriting the course field.
+async function standardizeCourse() {
     const el = document.getElementById('addCourse');
     const val = el.value.trim();
     if (!val) return;
