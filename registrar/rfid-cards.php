@@ -1323,26 +1323,51 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 }
 #assignModal #assignSubmitBtn:disabled{opacity:.55;cursor:not-allowed}
 
-/* Live / Retired view toggle. Lives in the table header so the retired group
-   is one click away and completely out of the way otherwise. */
-.rfid-view-toggle{
-    display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;
-    padding:8px 13px;border:1px solid #dbe3ef;border-radius:10px;background:#fff;
-    font:600 12.5px Inter,system-ui,sans-serif;color:#475569;cursor:pointer;
-    transition:all .15s ease;
+/* View switcher: two peer segments rather than one button.
+   A single "Show retired" button has to relabel itself to "Show live" once you
+   switch, so the reader re-reads the control on every click and the retired
+   count is invisible until they go looking. Two segments keep both counts on
+   screen and never change meaning. */
+.rfid-view-switch{
+    display:inline-flex;gap:2px;padding:2px;flex:0 0 auto;
+    border:1px solid #e2e8f0;border-radius:10px;background:#f1f5f9;
 }
-.rfid-view-toggle:hover{border-color:#94a3b8;background:#f8fafc;color:#0f172a}
-.rfid-view-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(37,99,235,.25);border-color:#2563eb}
-.rfid-view-toggle i{font-size:11.5px;color:#94a3b8}
-.rfid-view-toggle-count{
-    display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;
-    border-radius:999px;background:#eef2f7;color:#475569;
-    font:700 11px Inter,sans-serif;
+.rfid-view-switch button{
+    display:inline-flex;align-items:center;gap:7px;
+    padding:6px 12px;border:0;border-radius:8px;background:transparent;
+    font:600 12.5px Inter,system-ui,sans-serif;color:#64748b;cursor:pointer;
+    transition:background .12s ease,color .12s ease,box-shadow .12s ease;
 }
-/* While the retired view is open the button becomes the way back. */
-.rfid-view-toggle.is-retired{border-color:#cbd5e1;background:#f1f5f9;color:#0f172a}
-.rfid-view-toggle.is-retired i{color:#64748b}
-.rfid-view-toggle.is-retired .rfid-view-toggle-count{background:#475569;color:#fff}
+.rfid-view-switch button:hover{color:#0f172a}
+.rfid-view-switch button[aria-selected="true"]{
+    background:#fff;color:#0f172a;
+    /* The lift reads as a card slipped into a holder - the subject matter. */
+    box-shadow:0 1px 2px rgba(15,23,42,.10);
+}
+.rfid-view-switch button:focus-visible{
+    outline:none;box-shadow:0 0 0 2px #f1f5f9,0 0 0 4px rgba(37,99,235,.45);
+}
+.rfid-view-switch i{font-size:11px;opacity:.65}
+.rfid-view-switch .n{
+    min-width:15px;text-align:right;font-variant-numeric:tabular-nums;
+    font-size:11px;font-weight:700;color:#94a3b8;
+}
+.rfid-view-switch button[aria-selected="true"] .n{color:#334155}
+/* Zero is still worth showing - it tells the registrar the group is empty
+   before they click - but it should not compete for attention. */
+.rfid-view-switch button.is-empty .n{opacity:.6}
+
+/* The header becomes a row so the switch sits opposite the heading instead of
+   stacking under it. The heading itself is a plain block with no display
+   value, which is why the control dropped to its own line. */
+body[data-page="rfid"] .rfid-table-header{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+}
+@media(max-width:640px){
+    body[data-page="rfid"] .rfid-table-header{flex-direction:column;align-items:stretch;gap:10px}
+    .rfid-view-switch{width:100%}
+    .rfid-view-switch button{flex:1;justify-content:center}
+}
 
 /* -- Empty state -- */
 .rc-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:220px;padding:38px 20px;text-align:center}
@@ -1461,20 +1486,22 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
     <!-- Assigned / Status Cards Table -->
     <div class="rfid-table-wrapper">
         <div class="rfid-table-header">
-            <div>
-                <h3><i class="fas fa-credit-card" style="color:#2563eb;"></i>
-                    <span id="rfidTableHeading">Live Cards</span>
-                    <span class="rfid-table-count" id="rfidViewCount"><?= count($tableCards) ?></span>
-                </h3>
-                <p id="rfidTableSubheading">Cards in use and still being tracked</p>
+            <!-- No count badge here on purpose. The switch already carries both
+                 counts, and the stat row above already carries the total; a third
+                 number made the header read "10" under a "11 TOTAL CARDS" tile,
+                 which looked like a bug rather than a scope difference. -->
+            <h3><i class="fas fa-credit-card" style="color:#2563eb;"></i> Cards</h3>
+            <div class="rfid-view-switch" role="tablist" aria-label="Which cards to show">
+                <button type="button" role="tab" data-view="active" aria-selected="true">
+                    <i class="fas fa-id-card"></i> Live
+                    <span class="n" id="rfidCountActive"><?= count($tableCards) ?></span>
+                </button>
+                <button type="button" role="tab" data-view="retired" aria-selected="false"
+                        class="<?= $retiredCount === 0 ? 'is-empty' : '' ?>">
+                    <i class="fas fa-box-archive"></i> Retired
+                    <span class="n" id="rfidCountRetired"><?= $retiredCount ?></span>
+                </button>
             </div>
-            <button type="button" class="rfid-view-toggle" id="rfidViewToggle"
-                    aria-controls="rfidTableBody" aria-pressed="false"
-                    title="Show cards that are lost, archived or inactive">
-                <i class="fas fa-box-archive"></i>
-                <span id="rfidViewToggleLabel">Show retired</span>
-                <span class="rfid-view-toggle-count"><?= $retiredCount ?></span>
-            </button>
         </div>
         <div class="rfid-table-wrap">
         <table>
@@ -2288,11 +2315,7 @@ const showingCount = document.getElementById('showingCount');
 const totalCountEl = document.getElementById('totalCount');
 const statusFilter = document.getElementById('statusFilter');
 const resetFilterBtn = document.getElementById('resetFilterBtn');
-const viewToggle = document.getElementById('rfidViewToggle');
-const viewToggleLabel = document.getElementById('rfidViewToggleLabel');
-const viewHeading = document.getElementById('rfidTableHeading');
-const viewSubheading = document.getElementById('rfidTableSubheading');
-const viewCount = document.getElementById('rfidViewCount');
+const viewSwitch = document.querySelector('.rfid-view-switch');
 const countNoun = document.getElementById('totalCountNoun');
 
 let rfidView = 'active';
@@ -2301,8 +2324,8 @@ let rfidView = 'active';
 const RFID_RETIRED_STATUSES = ['lost', 'archived', 'inactive'];
 
 const RFID_VIEW_COPY = {
-    active:  { label: 'Live Cards',    sub: 'Cards in use and still being tracked', back: 'Show retired', noun: 'live cards' },
-    retired: { label: 'Retired Cards', sub: 'Lost, archived or inactive - kept for the record', back: 'Show live', noun: 'retired cards' }
+    active:  { noun: 'live cards' },
+    retired: { noun: 'retired cards' }
 };
 
 // Cards carry data-retired="1" when they are lost, archived or inactive. Both
@@ -2338,25 +2361,37 @@ function applyRfidSearch() {
 
     if (showingCount) showingCount.textContent = visible;
     if (totalCountEl) totalCountEl.textContent = inView;
-    if (viewCount) viewCount.textContent = inView;
 }
 
 function setRfidView(view) {
     rfidView = view;
-    const copy = RFID_VIEW_COPY[view];
-    if (viewHeading) viewHeading.textContent = copy.label;
-    if (viewSubheading) viewSubheading.textContent = copy.sub;
-    if (countNoun) countNoun.textContent = copy.noun;
-    if (viewToggleLabel) viewToggleLabel.textContent = copy.back;
-    if (viewToggle) {
-        viewToggle.setAttribute('aria-pressed', view === 'retired' ? 'true' : 'false');
-        viewToggle.classList.toggle('is-retired', view === 'retired');
+    // The segments are the only place the state is shown. The heading stays
+    // "Cards" and the badge stays the total, so nothing else has to relabel.
+    if (viewSwitch) {
+        viewSwitch.querySelectorAll('button[data-view]').forEach(btn => {
+            const on = btn.getAttribute('data-view') === view;
+            btn.setAttribute('aria-selected', on ? 'true' : 'false');
+            btn.tabIndex = on ? 0 : -1;
+        });
     }
+    if (countNoun) countNoun.textContent = RFID_VIEW_COPY[view].noun;
     applyRfidSearch();
 }
 
-if (viewToggle) {
-    viewToggle.addEventListener('click', () => setRfidView(rfidView === 'active' ? 'retired' : 'active'));
+if (viewSwitch) {
+    viewSwitch.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-view]');
+        if (btn) setRfidView(btn.getAttribute('data-view'));
+    });
+    // Left/right arrows move between segments, as a tablist should.
+    viewSwitch.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        e.preventDefault();
+        const next = rfidView === 'active' ? 'retired' : 'active';
+        setRfidView(next);
+        const btn = viewSwitch.querySelector('button[data-view="' + next + '"]');
+        if (btn) btn.focus();
+    });
 }
 if (rfidSearchInput) rfidSearchInput.addEventListener('input', applyRfidSearch);
 if (statusFilter) statusFilter.addEventListener('change', () => {

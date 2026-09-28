@@ -146,6 +146,7 @@ final class RfidRetiredViewTest extends TestCase
     /** Every row must carry the flag the view filter keys off. */
     public function testEveryRenderedCardRowCarriesTheRetiredFlag(): void
     {
+
         $page = self::page();
         self::assertStringContainsString(
             'data-retired="<?= $isRetired ? \'1\' : \'0\' ?>"',
@@ -158,5 +159,48 @@ final class RfidRetiredViewTest extends TestCase
             'The row flag must be derived from $RETIRED_STATUSES, not hardcoded.'
         );
     }
-}
 
+
+    /**
+     * The view control is a two-segment switch, not a button that relabels
+     * itself. A single control has to read "Show retired" and then "Show live",
+     * so the reader re-reads it on every click and the retired count stays
+     * hidden until they go looking for it. Both segments must therefore be
+     * present at once, each carrying its own count.
+     */
+    public function testTheViewControlIsATwoSegmentSwitchNotARelabellingButton(): void
+    {
+        $page = self::page();
+
+        self::assertStringContainsString('class="rfid-view-switch"', $page, 'The view control should be a segmented switch.');
+        self::assertStringNotContainsString('rfid-view-toggle', $page, 'The old single relabelling button should be gone.');
+
+        foreach (['active' => 'Live', 'retired' => 'Retired'] as $view => $label) {
+            self::assertMatchesRegularExpression(
+                '/data-view="' . $view . '"[^>]*>.*?' . $label . '/s',
+                $page,
+                "The switch is missing its '$view' segment."
+            );
+        }
+
+        // Both counts are rendered server-side, so neither group is a blind spot.
+        self::assertStringContainsString('id="rfidCountActive"', $page);
+        self::assertStringContainsString('id="rfidCountRetired"', $page);
+    }
+
+    /**
+     * The header is a plain block by default, so a sibling control drops onto
+     * its own line underneath the heading. It has to be a flex row, or the
+     * switch ends up stacked and looks like an orphan.
+     */
+    public function testTheTableHeaderLaysOutAsARowSoTheSwitchSitsOppositeTheHeading(): void
+    {
+        $page = self::page();
+        self::assertMatchesRegularExpression(
+            '/body\[data-page="rfid"\] \.rfid-table-header\{[^}]*display:flex[^}]*justify-content:space-between/s',
+            $page,
+            'The table header must be a flex row with the switch pushed to the right, '
+            . 'otherwise the switch stacks under the heading.'
+        );
+    }
+}
