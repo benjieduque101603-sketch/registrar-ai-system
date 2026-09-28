@@ -209,14 +209,6 @@ if ($USER_ROLE === 'student') {
             <div class="brand-title">Registrar</div>
         </div>
 
-        <!-- Masterlist is the main working list for the office, so it
-             sits directly under Dashboard rather than part-way down the
-             group where it was easy to miss. -->
-        <a href="<?= $APP_ROOT ?>registrar/masterlist.php" class="sidebar-item <?= $ACTIVE_NAV === 'masterlist' ? 'active' : '' ?>">
-            <i class="fa-solid fa-table-list"></i>
-            <span class="sidebar-text">Masterlist</span>
-        </a>
-
         <a href="<?= $APP_ROOT ?>registrar/students.php" class="sidebar-item <?= $ACTIVE_NAV === 'students' ? 'active' : '' ?>">
             <i class="fa-solid fa-user-graduate"></i>
             <span class="sidebar-text">Students</span>
@@ -246,6 +238,11 @@ if ($USER_ROLE === 'student') {
         <a href="<?= $APP_ROOT ?>registrar/queue.php" class="sidebar-item <?= $ACTIVE_NAV === 'queue' ? 'active' : '' ?>">
             <i class="fa-solid fa-display"></i>
             <span class="sidebar-text">Queue</span>
+        </a>
+
+        <a href="<?= $APP_ROOT ?>registrar/masterlist.php" class="sidebar-item <?= $ACTIVE_NAV === 'masterlist' ? 'active' : '' ?>">
+            <i class="fa-solid fa-table-list"></i>
+            <span class="sidebar-text">Masterlist</span>
         </a>
 
         <a href="<?= $APP_ROOT ?>registrar/file-storage.php" class="sidebar-item <?= $ACTIVE_NAV === 'filestorage' ? 'active' : '' ?>">

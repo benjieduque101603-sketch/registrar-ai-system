@@ -18,18 +18,18 @@ require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/functions.php';
 
 $db = Database::getInstance();
-$maxPerSection = defined('MAX_STUDENTS_PER_SECTION') ? (int) MAX_STUDENTS_PER_SECTION : 50;
 
 // ─── FILTERS ────────────────────────────────────────────────
 $filterCourse     = isset($_GET['course']) ? trim((string) $_GET['course']) : '';
 $filterYear       = isset($_GET['year_level']) ? trim((string) $_GET['year_level']) : '';
 $filterSchoolYear = isset($_GET['school_year']) ? trim((string) $_GET['school_year']) : '';
 $filterSemester   = isset($_GET['semester']) ? trim((string) $_GET['semester']) : '';
-$filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
 $filterStatus     = isset($_GET['status']) ? trim((string) $_GET['status']) : '';
 
-// Only students with an assigned section appear in the masterlist view.
-$sql = "SELECT * FROM students WHERE section IS NOT NULL AND TRIM(section) != ''";
+// Every student belongs on the masterlist. Section codes are written by the
+// department that assigns them, not by the registrar, so a blank section is
+// the normal state here and must never hide a student.
+$sql = "SELECT * FROM students WHERE 1=1";
 $params = [];
 if ($filterCourse !== '') {
     $sql .= " AND TRIM(course) = ?";
@@ -47,15 +47,11 @@ if ($filterSemester !== '') {
     $sql .= " AND semester = ?";
     $params[] = $filterSemester;
 }
-if ($filterSection !== '') {
-    $sql .= " AND TRIM(section) = ?";
-    $params[] = $filterSection;
-}
 if ($filterStatus !== '') {
     $sql .= " AND status = ?";
     $params[] = $filterStatus;
 }
-$sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, last_name ASC, first_name ASC";
+$sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, last_name ASC, first_name ASC";
 
 $students = $db->fetchAll($sql, $params);
 
@@ -70,11 +66,61 @@ foreach ($students as &$row) {
 }
 unset($row);
 
-$groups = filterAssignedMasterlistGroups(groupStudentsForMasterlist($students));
+// ─── BLOCKS: course + year level, never section ──────────────
+// A block is what the registrar can actually vouch for: the program and the
+// year level. Section codes are the receiving department's to write, so they
+// are not part of the key - a block is a group to be sectioned, not a section.
+// The acronym (courseAcronym) leads the heading because the long program name
+// is a whole line of its own at heading size; the full name rides along in the
+// title attribute.
+$blocks = [];
+foreach ($students as $student) {
+    $course = trim((string) ($student['course'] ?? ''));
+    $year   = trim((string) ($student['year_level'] ?? ''));
+    $key    = $course . "\x1F" . $year;
 
-$unassignedCount = (int) $db->fetchColumn(
-    "SELECT COUNT(*) FROM students WHERE section IS NULL OR TRIM(section) = ''"
-);
+    if (!isset($blocks[$key])) {
+        $blocks[$key] = [
+            'course'     => $course,
+            'year_level' => $year,
+            'acronym'    => courseAcronym($course),
+            'students'   => [],
+        ];
+    }
+    $blocks[$key]['students'][] = $student;
+}
+
+// ─── TABLES: one per MAX_STUDENTS_PER_SECTION students ───────
+// 50 is not a cap this page enforces, it is the size of one list the
+// department can act on. So a block that runs past 50 does not overflow into
+// one long table - it starts a new one, and the new one is a separate sheet
+// that can be sent on its own. 91 students means "Table 1 of 2" (50) and
+// "Table 2 of 2" (41), two lists, each within the cap.
+//
+// No padding. A block with 41 students is a 41-row table, not a 50-row one
+// with 9 empty lines: a numbered table holding one student reads as students
+// that failed to load, and an empty row is not a student. The last table is
+// simply short, and says so.
+$sectionCap = defined('MAX_STUDENTS_PER_SECTION') ? max(1, (int) MAX_STUDENTS_PER_SECTION) : 50;
+$tableCount = 0;
+
+foreach ($blocks as &$block) {
+    $chunked = array_chunk($block['students'], $sectionCap);
+    $block['tables'] = [];
+    foreach ($chunked as $idx => $chunk) {
+        $block['tables'][] = [
+            'rows' => $chunk,
+            'n'    => count($chunk),                       // how many rows this table has
+            'no'   => $idx + 1,                            // "Table 2 of 2"
+            'total' => count($chunked),
+        ];
+        $tableCount++;
+    }
+}
+unset($block);
+
+$totalStudents = count($students);
+$totalBlocks   = count($blocks);
 
 // Dropdown data
 $courses = $db->fetchAll(
@@ -90,29 +136,6 @@ $schoolYears = $db->fetchAll(
 );
 $statusOptions = ['enrolled', 'active', 'probation', 'at-risk', 'loa', 'graduated', 'transferred', 'dropped'];
 
-// Section summaries (all students, not the filtered view) for the target-section picker
-$sectionSummaries = $db->fetchAll(
-    "SELECT TRIM(course) AS course, year_level, semester, TRIM(section) AS section, COUNT(*) AS count
-     FROM students
-     WHERE section IS NOT NULL AND TRIM(section) != ''
-     GROUP BY TRIM(course), year_level, semester, TRIM(section)
-     ORDER BY TRIM(course), year_level, section"
-);
-
-// Lightweight candidate list for the assign-existing-students modal.
-// A section code is derived from the year level ([year][sem][###]), so a
-// student with no year level cannot be placed in a section and must not be
-// offered as pickable. Set their year level first, then they become eligible.
-$assignableStudents = $db->fetchAll(
-    "SELECT id, first_name, last_name, student_number, course, year_level, semester, section, status
-     FROM students
-     WHERE year_level IS NOT NULL AND TRIM(IFNULL(year_level, '')) != ''
-     ORDER BY last_name, first_name"
-);
-
-// Offered courses (shared with students.php)
-$offeredCourses = function_exists('getOfferedCourses') ? getOfferedCourses() : $courses;
-
 // RFID lookup for profile modal (student_id → card info)
 $rfidCards = $db->fetchAll("SELECT student_id, card_uid, status, expiry_date FROM rfid_cards");
 $rfidMap = [];
@@ -121,11 +144,11 @@ foreach ($rfidCards as $rc) {
 }
 
 $page_title = 'Masterlist';
-$page_description = 'Enrolled student masterlist and section management';
+$page_description = 'Enrolled student masterlist, prepared for section assignment by the receiving department';
 $body_page = 'masterlist';
 $APP_ROOT = '../';
 $ACTIVE_NAV = 'masterlist';
-$assignedSuccess = isset($_GET['assigned']) && $_GET['assigned'] === '1';
+$prepared = isset($_GET['prepared']) && $_GET['prepared'] === '1';
 
 include '../includes/header.php';
 include '../includes/sidebar.php';
@@ -157,6 +180,24 @@ body[data-page="masterlist"] .masterlist-section-block>div:first-child{backgroun
 body[data-page="masterlist"] .masterlist-table th{background:#f8fafc!important;color:#475569!important;padding:11px 12px!important;font-size:10px!important;letter-spacing:.05em}
 body[data-page="masterlist"] .masterlist-table td{padding:10px 12px!important}
 body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff!important}
+/* The block heading. A block is a program-year cohort, so the heading names
+   only that - the section code is the receiving department's to write, and
+   putting it in the heading would claim a section that does not exist yet. */
+.ml-block-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 16px;background:#f8faff;border-bottom:1px solid #e5e7eb}
+.ml-block-head h2{display:flex;align-items:center;gap:9px;margin:0;font-size:15px;font-weight:800;letter-spacing:-.01em;color:#172554}
+.ml-block-head h2 i{color:#2563eb}
+.ml-block-acronym{display:inline-block;padding:2px 8px;border-radius:7px;background:#1d4ed8;color:#fff;font-size:11.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+/* The Section Code column is a form field, not a value. It is drawn as an
+   empty ruled box: visibly writable, and clearly holding nothing yet. The
+   dashed rule says "to be filled in" - a solid one would read as data. */
+.ml-section-slot{width:118px;min-width:118px}
+.ml-section-slot span{display:block;min-height:20px;padding:2px 0 3px;border-bottom:1px dashed #cbd5e1}
+/* "Table 2 of 2" — only shown when a block runs past the cap and starts a new
+   list. Amber so it reads as a continuation of the block above, not as a
+   heading in its own right. */
+.ml-table-tag{display:flex;align-items:center;gap:8px;padding:7px 13px;background:#fefce8;border-bottom:1px solid #fde68a;color:#854d0e;font-size:11.5px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
+.ml-table-tag i{color:#d97706}
+.ml-table-tag span{font-weight:600;letter-spacing:0;text-transform:none;color:#a16207}
 @media(max-width:640px){.masterlist-header{padding:21px 18px}.masterlist-header h1{font-size:25px}.masterlist-actionbar{flex-direction:column}.masterlist-action-group{width:100%}.masterlist-action-buttons .btn{flex:1 1 100%;justify-content:center}.masterlist-toolbar{align-items:stretch}.masterlist-search{flex-basis:100%}.masterlist-ai,.masterlist-filter-btn{justify-content:center}}
 </style>
 
@@ -165,20 +206,17 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         <div>
             <div class="masterlist-kicker"><i class="fas fa-table-list"></i> Registrar directory</div>
             <h1>Masterlist</h1>
-            <p>Search, filter, and manage enrolled students (max <?= (int) $maxPerSection ?> students per section).</p>
+            <p>Search, filter, and send the full student list. Section codes are assigned by the department that receives this list.</p>
         </div>
     </header>
 
-    <!-- Action bar: section tools + output -->
+    <!-- Action bar: list tools + output -->
     <section class="masterlist-actionbar" aria-label="Masterlist actions">
         <div class="masterlist-action-group">
-            <span class="masterlist-action-label">Section tools</span>
+            <span class="masterlist-action-label">List tools</span>
             <div class="masterlist-action-buttons">
-                <button type="button" class="btn btn-primary" id="btnCreateSection" title="Create a section manually, then add or assign students to it">
-                    <i class="fas fa-plus-circle"></i> Create Section
-                </button>
-                <button type="button" class="btn btn-secondary" id="btnAutoAssign" title="Fill existing sections, create new ones only when needed (<?= (int) $maxPerSection ?> max each)">
-                    <i class="fas fa-wand-magic-sparkles"></i> Auto-assign
+                <button type="button" class="btn btn-primary" id="btnPrepareList" title="Show every student, with no filters applied, ready to hand off for section assignment">
+                    <i class="fas fa-list-check"></i> Prepare Full List
                 </button>
                 <button class="btn btn-secondary" onclick="openGenerateModal()">
                     <i class="fas fa-sliders"></i> Generate
@@ -206,9 +244,9 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         </div>
     </section>
 
-    <?php if ($assignedSuccess): ?>
+    <?php if ($prepared): ?>
         <div class="card" style="margin-bottom: 16px; padding: 12px 16px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <i class="fas fa-check-circle"></i> Sections updated. Each course/year block now has up to <?= (int) $maxPerSection ?> students per section.
+            <i class="fas fa-check-circle"></i> Full list prepared. It is sorted by course and year, ready to hand off for section assignment.
         </div>
     <?php endif; ?>
 
@@ -223,16 +261,14 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         </button>
         <button type="button" class="btn btn-primary masterlist-filter-btn" onclick="openFilterSearchModal()">
             <i class="fas fa-sliders"></i> Filter
-            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterSection !== '' || $filterStatus !== ''): ?>
+            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterStatus !== ''): ?>
                 <span style="background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;">Active</span>
             <?php endif; ?>
         </button>
-        <?php if (!empty($groups)): ?>
         <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#475569;cursor:pointer;">
             <input type="checkbox" id="selectAllPage" style="width:16px;height:16px;accent-color:#2563eb;"> Select all shown
         </label>
-        <span style="font-size:13px;color:#64748b;">Showing <strong id="showingCount"><?= count($students) ?></strong> student(s)</span>
-        <?php endif; ?>
+        <span style="font-size:13px;color:#64748b;">Showing <strong id="showingCount"><?= $totalStudents ?></strong> student(s)</span>
     </section>
 
     <!-- AI interpretation banner (below the search bar) -->
@@ -251,67 +287,46 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
     </div>
 
     <div id="masterlistContent">
-        <?php if (empty($groups)): ?>
+        <?php if (empty($students)): ?>
             <div class="card" style="box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                 <div style="padding: 48px 24px; text-align: center; color: #64748b;">
-                    <i class="fas fa-layer-group" style="font-size:40px;color:#e2e8f0;display:block;margin-bottom:14px;"></i>
-                    <?php if ($unassignedCount > 0 && $filterCourse === '' && $filterYear === '' && $filterSchoolYear === '' && $filterSemester === '' && $filterSection === '' && $filterStatus === ''): ?>
-                        <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No sections yet</p>
-                        <p style="margin:0 0 16px;max-width:420px;margin-left:auto;margin-right:auto;line-height:1.5;">
-                            The masterlist view appears only after sections are created. Use <strong>Create Section</strong> or <strong>Auto-assign</strong> to assign students.
-                        </p>
-                        <p style="font-size:13px;color:#94a3b8;margin:0 0 20px;">
-                            <i class="fas fa-user-clock"></i> <?= $unassignedCount ?> student(s) without a section yet
-                        </p>
-                        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-                            <button type="button" class="btn btn-primary" onclick="document.getElementById('btnCreateSection').click()"><i class="fas fa-plus-circle"></i> Create Section</button>
-                            <button type="button" class="btn btn-secondary" onclick="document.getElementById('btnAutoAssign').click()"><i class="fas fa-wand-magic-sparkles"></i> Auto-assign</button>
-                        </div>
-                    <?php else: ?>
-                        <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No sections found</p>
-                        <p style="margin:0;">No sections match your filters, or no students have been assigned to a section yet.</p>
-                    <?php endif; ?>
+                    <i class="fas fa-users-slash" style="font-size:40px;color:#e2e8f0;display:block;margin-bottom:14px;"></i>
+                    <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No students found</p>
+                    <p style="margin:0;">No students match your filters. Clear the filters to see the full list.</p>
                 </div>
             </div>
         <?php else: ?>
-            <?php foreach ($groups as $group):
-                $count = count($group['students']);
-                $overCap = $count > $maxPerSection;
-                $sectionTitle = htmlspecialchars($group['course']) . ' — Year ' . htmlspecialchars($group['year_level'])
-                    . ' — Section ' . htmlspecialchars($group['section']);
-                $groupAdviser = '';
-                $groupFirst = null;
-                foreach ($group['students'] as $st) {
-                    if ($groupFirst === null) $groupFirst = $st;
-                    if (!empty($st['adviser_name'])) { $groupAdviser = $st['adviser_name']; break; }
-                }
-                $gCourse  = $groupFirst['course']  ?? $group['course'];
-                $gYear    = $groupFirst['year_level'] ?? $group['year_level'];
-                $gSem     = $groupFirst['semester'] ?? '';
-                $gSy      = $groupFirst['school_year'] ?? '';
-                $gAdviserId = $groupFirst['adviser_id'] ?? '';
-            ?>
-                <div class="card masterlist-section-block" style="margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);">
-                    <div style="padding: 14px 16px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                        <h2 style="margin: 0; font-size: 15px; font-weight: 700; color: #0f172a;">
-                            <i class="fas fa-users" style="color: #2563eb; margin-right: 8px;"></i><?= $sectionTitle ?>
+            <?php foreach ($blocks as $block): ?>
+                <div class="card masterlist-section-block" style="margin-bottom: 16px;">
+                    <!-- Generic heading on purpose: "BSIT - Year 1", no section.
+                         No section exists yet - the receiving department splits
+                         the block when it writes the codes. -->
+                    <div class="ml-block-head">
+                        <h2 title="<?= htmlspecialchars($block['course'] !== '' ? $block['course'] : 'No program recorded') ?>">
+                            <i class="fas fa-users"></i>
+                            <span class="ml-block-acronym"><?= htmlspecialchars($block['acronym'] !== '' ? $block['acronym'] : 'N/A') ?></span>
+                            <?= htmlspecialchars('Year ' . ($block['year_level'] !== '' ? $block['year_level'] : '—')) ?>
                         </h2>
-                        <span class="badge <?= $overCap ? 'badge-warning' : 'badge-success' ?>" style="font-size: 12px;">
-                            <?= $count ?> / <?= (int) $maxPerSection ?> students
-                            <?php if ($overCap): ?> — over capacity<?php endif; ?>
-                        </span>
-                        <?php if ($groupAdviser !== ''): ?>
-                            <span style="font-size: 12px; color: #475569;"><i class="fas fa-chalkboard-user" style="color: #7c3aed; margin-right: 6px;"></i>Adviser: <strong><?= htmlspecialchars($groupAdviser) ?></strong></span>
-                        <?php endif; ?>
-                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='openSectionWorkspace(<?= json_encode(['course' => $gCourse, 'year_level' => $gYear, 'semester' => $gSem, 'school_year' => $gSy, 'adviser_id' => $gAdviserId, 'section' => $group['section']], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'><i class="fas fa-user-plus"></i> Add Student</button>
-                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='openEditSection(<?= json_encode(['course' => $gCourse, 'year_level' => $gYear, 'semester' => $gSem, 'school_year' => $gSy, 'adviser_id' => $gAdviserId, 'section' => $group['section']], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)' title="Edit section"><i class="fas fa-pen"></i> Edit</button>
-                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='handoffGroup(<?= htmlspecialchars(json_encode($sectionTitle), ENT_QUOTES) ?>)' title="Hand off this section to the CMS (Academic Strand module)"><i class="fas fa-paper-plane"></i> HAND-OFF</button>
+                        <span class="badge <?= count($block['students']) > (int) $sectionCap ? 'badge-warning' : 'badge-success' ?>" style="font-size: 12px;"><?= count($block['students']) ?> students</span>
+                        <span style="font-size: 12px; color: #475569;"><i class="fas fa-circle-info" style="color: #2563eb; margin-right: 6px;"></i>Section codes are left blank for the receiving department to fill in</span>
                     </div>
-                    <div style="overflow-x: auto; border-radius: 12px; overflow: hidden;">
+                    <?php foreach ($block['tables'] as $tbl): ?>
+                    <div style="margin-bottom: 10px; overflow-x: auto; border-radius: 12px; overflow: hidden;">
+                        <?php if (count($block['tables']) > 1): ?>
+                            <!-- A block past 50 becomes several tables. The tag is
+                                 what tells "Table 2 of 2" apart from a second
+                                 block that happens to share the heading, and it
+                                 carries the row count so the short last table
+                                 does not look like a load error. -->
+                            <div class="ml-table-tag">
+                                <i class="fas fa-table"></i> Table <?= (int) $tbl['no'] ?> of <?= (int) $tbl['total'] ?>
+                                <span><?= (int) $tbl['n'] ?> students</span>
+                            </div>
+                        <?php endif; ?>
                         <table class="masterlist-table" style="width: 100%; border-collapse: collapse; font-size: 13px; word-wrap: break-word; word-break: break-word;">
                             <thead>
                                 <tr style="background: #1a2d4a; color: white;">
-                                    <th style="padding: 10px 12px; text-align: center; width: 34px;"><input type="checkbox" class="block-select-all" style="width:15px;height:15px;accent-color:#2563eb;" title="Select this block"></th>
+                                    <th style="padding: 10px 12px; text-align: center; width: 34px;"><input type="checkbox" class="block-select-all" style="width:15px;height:15px;accent-color:#2563eb;" title="Select all"></th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">#</th>
                                     <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="student_number"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Student ID</th>
                                     <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="name"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Name</th>
@@ -319,13 +334,18 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                     <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="year_level"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Year</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">S.Y.</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Sem</th>
-                                    <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="section"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Section</th>
+                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Section Code</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Adviser</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php $i = 1; foreach ($group['students'] as $student): ?>
+                                <?php // Numbering restarts at 1 in every table, because
+                                     // each table is its own list. Carrying 51-91
+                                     // into "Table 2 of 2" would imply the two tables
+                                     // are fragments of one numbered sheet, when
+                                     // they are two separate lists. ?>
+                                <?php $i = 1; foreach ($tbl['rows'] as $student): ?>
                                     <tr style="border-bottom: 1px solid #e2e8f0;" data-student-id="<?= (int)$student['id'] ?>">
                                         <td style="padding: 8px 12px; text-align: center;"><input type="checkbox" class="student-cb" value="<?= (int)$student['id'] ?>" style="width:15px;height:15px;accent-color:#2563eb;"></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= $i++ ?></td>
@@ -335,7 +355,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['year_level'] ?? 'N/A') ?></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['school_year'] ?? '—') ?></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['semester'] ?? '—') ?></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['section'] ?? '—') ?>"><?= htmlspecialchars($student['section'] ?? '—') ?></td>
+                                        <td class="ml-section-slot" style="padding: 8px 12px; white-space: nowrap;" title="Assigned by the receiving department"><span></span></td>
                                         <td style="padding: 8px 12px; max-width: 150px; white-space: normal; word-break: break-word; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['adviser_name'] ?? '—') ?>"><?= htmlspecialchars($student['adviser_name'] ?? '—') ?></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;">
                                             <span class="badge badge-<?= in_array($student['status'], ['active', 'enrolled'], true) ? 'success' : ($student['status'] === 'at-risk' || $student['status'] === 'probation' ? 'warning' : 'neutral') ?>">
@@ -347,16 +367,17 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                             </tbody>
                         </table>
                     </div>
+                    <?php endforeach; ?>
                 </div>
             <?php endforeach; ?>
         <?php endif; ?>
     </div>
 
-    <?php if (!empty($groups)): ?>
+    <?php if (!empty($students)): ?>
     <div class="card" style="margin-top: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
         <div class="table-footer">
             <div class="info-text">
-                Total: <strong><?= count($students) ?></strong> students in <strong><?= count($groups) ?></strong> section group(s)
+                Total: <strong><?= $totalStudents ?></strong> student(s) in <strong><?= $totalBlocks ?></strong> program-year block(s), listed in <strong><?= $tableCount ?></strong> list(s) of up to <?= (int) $sectionCap ?> — section codes are assigned by the receiving department
             </div>
         </div>
     </div>
@@ -404,9 +425,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                             <option value="summer" <?= $filterSemester === 'summer' ? 'selected' : '' ?>>Summer</option>
                         </select>
                     </div>
-                    <div class="form-group"><label>Section</label>
-                        <input type="text" name="section" id="filterSection" class="form-control" placeholder="A" value="<?= htmlspecialchars($filterSection) ?>">
-                    </div>
                     <div class="form-group"><label>Status</label>
                         <select name="status" id="filterStatus" class="form-control">
                             <option value="">All statuses</option>
@@ -420,7 +438,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeFilterSearchModal()">Cancel</button>
-            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterSection !== '' || $filterStatus !== ''): ?>
+            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterStatus !== ''): ?>
                 <a class="btn btn-light" href="masterlist.php">Clear</a>
             <?php endif; ?>
             <button type="submit" form="filterSearchForm" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
@@ -439,7 +457,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                     <div class="form-group"><label>Semester</label><select id="genSemester" class="form-control"><option value="">All</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
                     <div class="form-group"><label>Course</label><select id="genCourse" class="form-control"><option value="">All courses</option><?php foreach ($courses as $row): ?><option value="<?= htmlspecialchars($row['course']) ?>"><?= htmlspecialchars($row['course']) ?></option><?php endforeach; ?></select></div>
                     <div class="form-group"><label>Year Level</label><select id="genYear" class="form-control"><option value="">All years</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
-                    <div class="form-group"><label>Section</label><input type="text" id="genSection" class="form-control" placeholder="A, B, C…"></div>
                     <div class="form-group"><label>Status</label><select id="genStatus" class="form-control"><option value="">All statuses</option><?php foreach ($statusOptions as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></div>
                 </div>
                 <p style="font-size:12px;color:#94a3b8;margin-top:8px;"><i class="fas fa-info-circle"></i> Course serves as the department filter. Leave fields blank to include all.</p>
@@ -488,107 +505,16 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
     </div>
 </div>
 
-<!-- Create Section Modal -->
-<div class="modal-overlay" id="createSectionModal">
-    <div class="modal-content" style="max-width: 560px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-plus-circle" style="color:#2563eb;"></i> Create Section</h2><button class="modal-close" onclick="closeCreateSectionModal()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                <div class="form-group"><label>Course</label><select id="csCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Year Level</label><select id="csYear" class="form-control"><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div>
-                <div class="form-group"><label>Semester</label><select id="csSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
-                <div class="form-group"><label>School Year</label><input type="text" id="csSchoolYear" class="form-control" placeholder="2026-2027" value="<?= date('Y') . '-' . (date('Y') + 1) ?>" list="csSyOptions"><datalist id="csSyOptions"><?php foreach ($schoolYears as $row): ?><option value="<?= htmlspecialchars($row['school_year']) ?>"><?php endforeach; ?></datalist></div>
-                <div class="form-group"><label>Adviser</label><select id="csAdviser" class="form-control"><option value="">None</option><?php foreach ($advisers as $ad): ?><option value="<?= (int)$ad['id'] ?>"><?= htmlspecialchars($ad['full_name']) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Section Code</label><div style="display:flex;gap:8px;align-items:center;"><div id="csCode" style="font-size:16px;font-weight:700;color:#2563eb;min-width:80px;">—</div><input type="text" id="csCodeOverride" class="form-control" placeholder="Override code" style="max-width:120px;" title="Optional: set a specific code"></div></div>
-            </div>
-            <p id="csError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeCreateSectionModal()">Cancel</button>
-            <button class="btn btn-primary" id="csCreateBtn" onclick="createSectionAndOpen()"><i class="fas fa-user-check"></i> Create Section & Assign Students</button>
-        </div>
-    </div>
-</div>
-
-<!-- Edit Section Modal -->
-<div class="modal-overlay" id="editSectionModal">
-    <div class="modal-content" style="max-width: 560px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-pen" style="color:#b45309;"></i> Edit Section</h2><button class="modal-close" onclick="closeEditSection()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <p id="esEditInfo" style="font-size:13px;color:#64748b;margin-bottom:14px;">Editing section <strong id="esOldSection">—</strong>. Changes apply to <strong id="esStudentCount">0</strong> student(s) in this section.</p>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                <div class="form-group"><label>Section Code</label><input type="text" id="esSection" class="form-control" placeholder="11001"></div>
-                <div class="form-group"><label>School Year</label><input type="text" id="esSchoolYear" class="form-control" placeholder="2026-2027" list="csSyOptions"></div>
-                <div class="form-group"><label>Course</label><select id="esCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Year Level</label><select id="esYear" class="form-control"><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div>
-                <div class="form-group"><label>Semester</label><select id="esSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
-                <div class="form-group"><label>Adviser</label><select id="esAdviser" class="form-control"><option value="">None</option><?php foreach ($advisers as $ad): ?><option value="<?= (int)$ad['id'] ?>"><?= htmlspecialchars($ad['full_name']) ?></option><?php endforeach; ?></select></div>
-            </div>
-            <p id="esError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeEditSection()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveEditSection()"><i class="fas fa-save"></i> Save Changes</button>
-        </div>
-    </div>
-</div>
-
-<!-- Section Workspace Modal -->
-<div class="modal-overlay" id="sectionWorkspaceModal">
-    <div class="modal-content" style="max-width: 720px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-users" style="color:#2563eb;"></i> <span id="wsTitle">Section</span></h2><button class="modal-close" onclick="closeSectionWorkspace()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
-                <div style="flex:1;min-width:200px;position:relative;"><i class="fas fa-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:13px;"></i><input type="text" id="wsAssignSearch" class="form-control" style="padding-left:34px;" placeholder="Search students…"></div>
-                <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#475569;cursor:pointer;"><input type="checkbox" id="wsIncludeOthers" style="width:15px;height:15px;accent-color:#2563eb;"> Include already-assigned</label>
-            </div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
-                <div style="flex:1;min-width:200px;"><label style="display:block;font-size:11px;color:#64748b;margin-bottom:3px;font-weight:600;">Assign to section</label><input type="text" id="wsTargetSection" class="form-control" readonly></div>
-                <button class="btn btn-primary" onclick="assignSelectedToSection()"><i class="fas fa-user-check"></i> Assign Selected</button>
-            </div>
-            <p style="font-size:12px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-info-circle"></i> Showing students without a section. Check "Include already-assigned" to see everyone.</p>
-            <div id="wsAssignList" style="max-height:320px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:10px;"></div>
-        </div>
-    </div>
-</div>
-
 <script>
-const MAX_PER_SECTION = <?= (int) $maxPerSection ?>;
 const RFID_MAP = <?= json_encode(array_map(fn($c) => ['card_uid' => $c['card_uid'], 'status' => $c['status'], 'expiry_date' => $c['expiry_date']], $rfidMap)) ?>;
 const ADVISER_NAMES = <?= json_encode($adviserNames) ?>;
-const OFFERED_COURSES = <?= json_encode(array_keys($offeredCourses)) ?>;
-const SECTION_SUMMARIES = <?= json_encode($sectionSummaries) ?>;
-const ASSIGNABLE_STUDENTS = <?= json_encode($assignableStudents) ?>;
 
-// ─── AUTO-ASSIGN ─────────────────────────────────────────────
-document.getElementById('btnAutoAssign')?.addEventListener('click', async function () {
-    const ok = await confirmAction({
-        title: 'Assign section codes',
-        body: 'Assign section codes (11001, 12001, 21001…) by course, year, and semester? ' +
-              'Each section will have at most <strong>' + MAX_PER_SECTION + '</strong> students.',
-        confirmLabel: 'Assign codes'
-    });
-    if (!ok) return;
-    const btn = this;
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Assigning…';
-    try {
-        const response = await fetch('../api/masterlist.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'assign_sections', max_per_section: MAX_PER_SECTION })
-        });
-        const data = await response.json();
-        if (!data.success) { showToast(data.message || 'Failed to assign sections.', 'error'); return; }
-        const params = new URLSearchParams(window.location.search);
-        params.set('assigned', '1');
-        window.location.href = 'masterlist.php?' + params.toString();
-    } catch (err) {
-        showToast('Network error. Please try again.', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-wand-magic-sparkles"></i> Auto-assign';
-    }
+// ─── PREPARE FULL LIST ───────────────────────────────────────
+// Clears every filter so the whole roster is on screen, ready to hand off.
+// The registrar does not write section codes — the receiving department does.
+// The blocks are handed off whole; nothing here cuts them into lists.
+document.getElementById('btnPrepareList')?.addEventListener('click', function () {
+    window.location.href = 'masterlist.php?prepared=1';
 });
 
 // ─── SEARCH (client-side) ────────────────────────────────────
@@ -602,10 +528,18 @@ searchInput?.addEventListener('input', function () {
         row.style.display = show ? '' : 'none';
         if (show) visible++;
     });
+    // A block whose every row was filtered out must go with them, otherwise
+    // the heading is left sitting above nothing — it would read as a cohort
+    // that still has students in it.
+    document.querySelectorAll('#masterlistContent .masterlist-section-block').forEach(block => {
+        const shown = Array.from(block.querySelectorAll('tbody tr'))
+            .filter(r => r.style.display !== 'none').length;
+        block.style.display = shown ? '' : 'none';
+    });
     document.getElementById('showingCount').textContent = visible;
 });
 
-// ─── SORT (within each section block) ────────────────────────
+// ─── SORT (within the table) ─────────────────────────────────
 document.querySelectorAll('#masterlistContent .masterlist-table th[data-sort]').forEach(th => {
     th.addEventListener('click', function () {
         const key = this.dataset.sort;
@@ -622,7 +556,7 @@ document.querySelectorAll('#masterlistContent .masterlist-table th[data-sort]').
 });
 function rowSortKey(row, key) {
     const cells = row.querySelectorAll('td');
-    const idx = { name: 3, student_number: 2, course: 4, year_level: 5, section: 8 }[key] ?? 2;
+    const idx = { name: 3, student_number: 2, course: 4, year_level: 5 }[key] ?? 2;
     const v = cells[idx] ? cells[idx].textContent.trim() : '';
     if (key === 'year_level') return String(parseInt(v) || 0).padStart(3, '0');
     return v.toLowerCase();
@@ -644,7 +578,6 @@ function applyGenerate() {
     set('genSemester', 'semester');
     set('genCourse', 'course');
     set('genYear', 'year_level');
-    set('genSection', 'section');
     set('genStatus', 'status');
     window.location.href = 'masterlist.php?' + p.toString();
 }
@@ -714,14 +647,14 @@ function collectRowData(rows) {
 }
 function exportCSV(rows) {
     rows = rows || Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    let csv = 'Student ID,Name,Course,Year,S.Y.,Semester,Section,Adviser,Status\n';
+    let csv = 'Student ID,Name,Course,Year,S.Y.,Semester,Section Code,Adviser,Status\n';
     const escape = v => '"' + String(v).replace(/"/g, '""') + '"';
     collectRowData(rows).forEach(r => csv += r.map(escape).join(',') + '\n');
-    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'masterlist-by-section.csv');
+    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'masterlist-full-list.csv');
 }
 function exportExcel() {
     const rows = Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr><th>#</th><th>Student ID</th><th>Name</th><th>Course</th><th>Year</th><th>S.Y.</th><th>Sem</th><th>Section</th><th>Adviser</th><th>Status</th></tr>';
+    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr><th>#</th><th>Student ID</th><th>Name</th><th>Course</th><th>Year</th><th>S.Y.</th><th>Sem</th><th>Section Code</th><th>Adviser</th><th>Status</th></tr>';
     rows.forEach(row => {
         const cols = row.querySelectorAll('td');
         if (cols.length < 11) return;
@@ -755,6 +688,9 @@ function printRows(rows) {
     w.document.write('table { width:100%; border-collapse:collapse; margin-bottom:6px; }');
     w.document.write('th,td { padding:5px 7px; border:1px solid #999; text-align:left; font-size:10px; }');
     w.document.write('th { background:#eef2f7; color:#0f172a; font-weight:700; }');
+    // The Section Code cell is printed as an empty ruled box, the same as on
+    // screen: the department fills it in by hand on the printed sheet.
+    w.document.write('td.code { width:90px; } td.code span { display:block; height:13px; border-bottom:1px solid #666; }');
     w.document.write('.sig { display:flex; justify-content:space-between; margin-top:26px; padding-top:6px; }');
     w.document.write('.sig .box { text-align:center; width:44%; }');
     w.document.write('.sig .line { border-top:1px solid #0f172a; margin-top:28px; padding-top:4px; font-size:10px; }');
@@ -765,17 +701,52 @@ function printRows(rows) {
         '<div class="title">OFFICIAL MASTERLIST OF STUDENTS' + (sy ? ' — S.Y. ' + sy : '') + '</div></div></div>');
 
     if (rows && rows.length) {
+        // Group by the block each row came from, so the printed sheet keeps
+        // the on-screen blocks. Print used to emit one single-row table per
+        // student, which both lost the grouping and pulled the wrong cells:
+        // t(6)/t(7) are S.Y. and Semester, not section and gender, so the old
+        // headings printed a school year where a section belonged.
+        const blockTitleOf = block => {
+            const h = block && block.querySelector('.ml-block-head h2');
+            return h ? h.textContent.replace(/\s+/g, ' ').trim() : '';
+        };
+        // A block past the cap is several tables, and the printed sheet has to
+        // break the same way the screen does — otherwise a 91-student block
+        // prints as one 91-row table, which is the very thing the split exists
+        // to prevent. The key is block + table, so each printed table carries
+        // its own heading and the count that says how many rows it has.
+        const groupKeyOf = row => {
+            const block = row.closest('.masterlist-section-block');
+            const title = blockTitleOf(block) || 'Unassigned program';
+            const tables = block ? block.querySelectorAll('table') : [];
+            if (tables.length < 2) return title;
+            const table = row.closest('table');
+            let index = 0;
+            tables.forEach((t, i) => { if (t === table) index = i; });
+            return title + ' — Table ' + (index + 1) + ' of ' + tables.length;
+        };
+        const groups = new Map();
         rows.forEach(row => {
-            const cols = row.querySelectorAll('td');
-            if (cols.length < 11) return;
-            const t = i => cols[i].textContent.trim();
-            const course = t(4), year = t(5), section = t(6), name = t(3), sn = t(2), gender = t(7), status = t(8);
-            w.document.write('<h3>' + course + ' — Year ' + (year || '—') + ' · Section ' + (section || '—') + '</h3>');
-            w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Gender</th><th>Status</th></tr>');
-            // Single row per matched row
-            w.document.write('<tr><td>1</td><td>' + sn + '</td><td>' + name + '</td><td>' + gender + '</td><td>' + status + '</td></tr></table>');
+            const key = groupKeyOf(row);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(row);
         });
-        if (!rows.length) w.document.write('<p>No records to print.</p>');
+
+        groups.forEach((groupRows, title) => {
+            w.document.write('<h3>' + title + '</h3>');
+            w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Course</th><th>Year</th><th>Section Code</th><th>Adviser</th><th>Status</th></tr>');
+            // Numbering restarts per printed table, matching the screen: each
+            // table is its own list, not a page of a longer numbered run.
+            let seq = 0;
+            groupRows.forEach(row => {
+                const cols = row.querySelectorAll('td');
+                if (cols.length < 11) return;
+                const t = i => cols[i].textContent.trim();
+                w.document.write('<tr><td>' + (++seq) + '</td><td>' + t(2) + '</td><td>' + t(3) + '</td><td>' + t(4) +
+                    '</td><td>' + t(5) + '</td><td class="code"><span></span></td><td>' + t(9) + '</td><td>' + t(10) + '</td></tr>');
+            });
+            w.document.write('</table>');
+        });
     } else {
         w.document.write('<p>No records to print.</p>');
     }
@@ -864,242 +835,6 @@ function loadRfid(sid) {
 
 function ucfirst(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-let wsContext = null;
-
-// ─── CREATE SECTION MODAL ────────────────────────────────────
-document.getElementById('btnCreateSection').addEventListener('click', openCreateSectionModal);
-
-function openCreateSectionModal() {
-    document.getElementById('csCourse').value = '';
-    document.getElementById('csYear').value = '';
-    document.getElementById('csSemester').value = '';
-    document.getElementById('csCodeOverride').value = '';
-    document.getElementById('csError').style.display = 'none';
-    document.getElementById('csCode').textContent = '—';
-    document.getElementById('createSectionModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeCreateSectionModal() {
-    document.getElementById('createSectionModal').classList.remove('active');
-    document.body.style.overflow = '';
-}
-document.getElementById('createSectionModal').addEventListener('click', function (e) { if (e.target === this) closeCreateSectionModal(); });
-
-// Live "next section code" preview when course/year/semester change
-['csCourse', 'csYear', 'csSemester'].forEach(id => {
-    document.getElementById(id).addEventListener('change', refreshSectionCode);
-});
-async function refreshSectionCode() {
-    const course = document.getElementById('csCourse').value;
-    const year = document.getElementById('csYear').value;
-    const sem = document.getElementById('csSemester').value;
-    const codeEl = document.getElementById('csCode');
-    if (!course || !year || !sem) { codeEl.textContent = '—'; return; }
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'next_section', course, year_level: parseInt(year), semester: sem })
-        });
-        const d = await r.json();
-        if (d.success) codeEl.textContent = d.code;
-    } catch (e) {}
-}
-
-function createSectionAndOpen() {
-    const course = document.getElementById('csCourse').value;
-    const year = document.getElementById('csYear').value;
-    const sem = document.getElementById('csSemester').value;
-    const schoolYear = document.getElementById('csSchoolYear').value.trim();
-    const adviserId = document.getElementById('csAdviser').value;
-    const override = document.getElementById('csCodeOverride').value.trim();
-    const errorEl = document.getElementById('csError');
-
-    if (!course || !year || !sem) {
-        errorEl.textContent = 'Please select course, year level, and semester.';
-        errorEl.style.display = 'block';
-        return;
-    }
-    let code = override || document.getElementById('csCode').textContent;
-    if (code === '—' || code === '') {
-        errorEl.textContent = 'Could not determine the section code.';
-        errorEl.style.display = 'block';
-        return;
-    }
-    closeCreateSectionModal();
-    openSectionWorkspace({
-        course, year_level: parseInt(year), semester: sem,
-        school_year: schoolYear, adviser_id: adviserId || '', section: code
-    });
-}
-
-// ─── EDIT SECTION ────────────────────────────────────────────
-let editSectionContext = null;
-
-function openEditSection(ctx) {
-    editSectionContext = ctx;
-    document.getElementById('esOldSection').textContent = ctx.section;
-    document.getElementById('esSection').value = ctx.section;
-    document.getElementById('esSchoolYear').value = ctx.school_year || '';
-    document.getElementById('esCourse').value = ctx.course || '';
-    document.getElementById('esYear').value = ctx.year_level || '';
-    document.getElementById('esSemester').value = ctx.semester || '';
-    document.getElementById('esAdviser').value = ctx.adviser_id || '';
-    // Estimate student count from ASSIGNABLE_STUDENTS (may be filtered view; fine as an estimate)
-    const cnt = ASSIGNABLE_STUDENTS.filter(s =>
-        (s.course || '') === ctx.course && String(s.year_level || '') === String(ctx.year_level || '') && (s.section || '') === ctx.section
-    ).length;
-    document.getElementById('esStudentCount').textContent = cnt || '?';
-    document.getElementById('esError').style.display = 'none';
-    document.getElementById('editSectionModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeEditSection() {
-    document.getElementById('editSectionModal').classList.remove('active');
-    document.body.style.overflow = '';
-    editSectionContext = null;
-}
-document.getElementById('editSectionModal').addEventListener('click', function (e) { if (e.target === this) closeEditSection(); });
-
-async function saveEditSection() {
-    if (!editSectionContext) return;
-    const ctx = editSectionContext;
-    const newSection = document.getElementById('esSection').value.trim();
-    const newCourse = document.getElementById('esCourse').value;
-    const newYear = document.getElementById('esYear').value;
-    const newSem = document.getElementById('esSemester').value;
-    const newSy = document.getElementById('esSchoolYear').value.trim();
-    const newAdviser = document.getElementById('esAdviser').value;
-    const errEl = document.getElementById('esError');
-
-    if (!newSection || !newCourse || !newYear || !newSem) {
-        errEl.textContent = 'Section code, course, year, and semester are required.';
-        errEl.style.display = 'block';
-        return;
-    }
-    if (!await confirmAction({
-        title: 'Update section',
-        body: 'Update section <strong>' + escText(ctx.section) + '</strong> to <strong>' + escText(newSection) +
-              '</strong>? This changes all students in the section.',
-        confirmLabel: 'Update section'
-    })) return;
-
-    const btn = event.target;
-    btn.disabled = true;
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'edit_section',
-                old_course: ctx.course, old_year_level: ctx.year_level, old_semester: ctx.semester, old_section: ctx.section,
-                course: newCourse, year_level: newYear, semester: newSem, section: newSection, school_year: newSy, adviser_id: newAdviser || null
-            })
-        });
-        const d = await r.json();
-        if (d.success) {
-            showToast(d.message || 'Section updated.', 'success');
-            window.location.reload();
-        } else {
-            errEl.textContent = d.message || 'Failed to update section.';
-            errEl.style.display = 'block';
-            btn.disabled = false;
-        }
-    } catch (e) {
-        showToast('Network error.', 'error');
-        btn.disabled = false;
-    }
-}
-
-// ─── SECTION WORKSPACE ───────────────────────────────────────
-function openSectionWorkspace(ctx) {
-    wsContext = ctx;
-    document.getElementById('wsTitle').textContent = ctx.course + ' — Year ' + ctx.year_level + ' — Sem ' + (ctx.semester || '1st') + ' — Section ' + ctx.section;
-
-    // Lock the target to the existing section that was clicked — no new sections here.
-    document.getElementById('wsTargetSection').value = ctx.section + ' — ' + ctx.course + ' · Y' + (ctx.year_level || '?') + ' · ' + (ctx.semester || '1st');
-
-    document.getElementById('wsAssignSearch').value = '';
-    document.getElementById('wsIncludeOthers').checked = false;
-    renderAssignList();
-    document.getElementById('sectionWorkspaceModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeSectionWorkspace() {
-    document.getElementById('sectionWorkspaceModal').classList.remove('active');
-    document.body.style.overflow = '';
-}
-document.getElementById('sectionWorkspaceModal').addEventListener('click', function (e) { if (e.target === this) closeSectionWorkspace(); });
-
-// ── Assign Existing Students ────────────────────────────────
-function renderAssignList() {
-    const q = (document.getElementById('wsAssignSearch').value || '').toLowerCase().trim();
-    const includeAssigned = document.getElementById('wsIncludeOthers').checked;
-    const listEl = document.getElementById('wsAssignList');
-    let students = ASSIGNABLE_STUDENTS;
-
-    // Default: only students WITHOUT a section. Checkbox reveals already-assigned.
-    if (!includeAssigned) {
-        students = students.filter(s => !(s.section || '').trim());
-    }
-    // Match the workspace's course/year unless the user searched or wants everyone
-    if (!q && !includeAssigned && wsContext) {
-        students = students.filter(s =>
-            (!(s.course || '').trim() || (s.course || '') === wsContext.course) &&
-            String(s.year_level) === String(wsContext.year_level)
-        );
-    }
-    if (q) {
-        students = students.filter(s => ((s.first_name + ' ' + s.last_name + ' ' + s.student_number).toLowerCase().includes(q)));
-    }
-    if (!students.length) {
-        listEl.innerHTML = '<p style="text-align:center;color:#94a3b8;padding:30px;">No students without a section found.</p>';
-        return;
-    }
-    let html = '<table style="width:100%;font-size:12px;border-collapse:collapse;"><tr style="background:#f8fafc;color:#64748b;font-weight:600;"><th style="padding:8px;"></th><th style="padding:8px;text-align:left;">Student</th><th style="padding:8px;text-align:left;">Course</th><th style="padding:8px;text-align:left;">Yr</th><th style="padding:8px;text-align:left;">Section</th></tr>';
-    students.forEach(s => {
-        html += '<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px;"><input type="checkbox" class="ws-assign-cb" value="' + s.id + '" style="width:15px;height:15px;accent-color:#2563eb;"></td><td style="padding:6px;"><strong>' + s.first_name + ' ' + s.last_name + '</strong><br><span style="color:#94a3b8;">' + (s.student_number || '') + '</span></td><td style="padding:6px;">' + (s.course || '—') + '</td><td style="padding:6px;">' + (s.year_level || '—') + '</td><td style="padding:6px;">' + (s.section || '—') + '</td></tr>';
-    });
-    html += '</table>';
-    listEl.innerHTML = html;
-}
-document.getElementById('wsAssignSearch').addEventListener('input', renderAssignList);
-document.getElementById('wsIncludeOthers').addEventListener('change', renderAssignList);
-
-async function assignSelectedToSection() {
-    const ids = Array.from(document.querySelectorAll('.ws-assign-cb:checked')).map(cb => cb.value);
-    if (!ids.length) { showToast('Select at least one student.', 'warning'); return; }
-    if (!wsContext || !wsContext.section) { showToast('No target section. Open this from a section card.', 'warning'); return; }
-    const section = wsContext.section;
-    const ctx = {
-        course: wsContext.course || '',
-        year_level: wsContext.year_level || '',
-        semester: wsContext.semester || '',
-        school_year: wsContext.school_year || '',
-        adviser_id: wsContext.adviser_id || ''
-    };
-    if (!await confirmAction({
-        title: 'Assign to section',
-        body: 'Assign <strong>' + ids.length + '</strong> student' + (ids.length === 1 ? '' : 's') +
-              ' to section <strong>' + escText(section) + '</strong>? They will be moved to ' +
-              escText(ctx.course || "the section's course") + ' / Year ' + escText(ctx.year_level || '?') + '.',
-        confirmLabel: 'Assign'
-    })) return;
-    const btn = event.target;
-    btn.disabled = true;
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'bulk_assign_section', ids, section, course: ctx.course, year_level: ctx.year_level, semester: ctx.semester, school_year: ctx.school_year, adviser_id: ctx.adviser_id })
-        });
-        const d = await r.json();
-        showToast(d.message || 'Assigned.', d.success ? 'success' : 'error');
-        if (d.success) window.location.reload();
-    } catch (e) {
-        showToast('Error.', 'error');
-    } finally {
-        btn.disabled = false;
-    }
-}
-
 // ─── ESC CLOSE ───────────────────────────────────────────────
 // ??? SEARCH & FILTER MODAL ????????????????????????????????
 // SMART SEARCH: natural language -> masterlist filters
@@ -1178,7 +913,7 @@ function closeFilterSearchModal() {
 document.getElementById('filterSearchModal').addEventListener('click', function (e) { if (e.target === this) closeFilterSearchModal(); });
 
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeViewModal(); closeGenerateModal(); closeFilterSearchModal(); closeCreateSectionModal(); closeSectionWorkspace(); closeEditSection(); }
+    if (e.key === 'Escape') { closeViewModal(); closeGenerateModal(); closeFilterSearchModal(); }
 });
 
 // ---- SEND LIST / HAND-OFF (CMS) ----
@@ -1196,16 +931,6 @@ async function sendList() {
     })) return;
     handoffApi({ program: '' }).then(d => {
         showToast(d.message || (d.success ? 'Sent.' : 'Failed.'), d.success ? 'success' : 'error');
-    }).catch(() => { showToast('Network error.', 'error'); });
-}
-async function handoffGroup(label) {
-    if (!await confirmAction({
-        title: 'Hand off section',
-        body: 'Hand off this section to the CMS?<br><br>' + escText(label),
-        confirmLabel: 'Hand off'
-    })) return;
-    handoffApi({ program: label }).then(d => {
-        showToast(d.message || (d.success ? 'Handed off.' : 'Failed.'), d.success ? 'success' : 'error');
     }).catch(() => { showToast('Network error.', 'error'); });
 }</script>
 
