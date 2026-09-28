@@ -243,5 +243,65 @@ if ($auditStart !== false && $auditEnd !== false) {
     }
 }
 
+// ── Structural sanity ────────────────────────────────────────────────
+// The page's own arithmetic and its own script were both correct while
+// the layout was completely broken: the <main class="dashboard-main">
+// wrapper had been lost, so the content sat under the sidebar and every
+// other check still passed. These assertions are the ones that would
+// have noticed.
+function structure(string $label, bool $ok): void {
+    global $fail;
+    if ($ok) {
+        printf("  ok    %s\n", $label);
+    } else {
+        $fail++;
+        printf("  FAIL  %s\n", $label);
+    }
+}
+
+// .dashboard-main carries `margin-left: var(--sidebar-width)`. Without it
+// the whole page renders underneath the sidebar, which is the single most
+// visible failure this page can have.
+structure(
+    'the page opens a .dashboard-main wrapper',
+    (bool) preg_match('/<main\b[^>]*class="[^"]*\bdashboard-main\b/', $html)
+);
+structure(
+    'that wrapper is closed',
+    substr_count($html, '<main') === substr_count($html, '</main>')
+);
+structure(
+    'the page uses the shared .dashboard-container',
+    str_contains($html, 'dashboard-container')
+);
+
+// A PHP comment left between the tags is rendered as visible text. This
+// is not hypothetical: a one-line comment opener that lost its tags did
+// exactly that, and the prose appeared on the page.
+if (preg_match('/^<p>\s*Grade entry/m', $html) || preg_match('/Read-only\. It reports what is missing/', $html)) {
+    $fail++;
+    printf("  FAIL  comment text is being rendered onto the page\n");
+} else {
+    printf("  ok    no comment prose leaks into the output\n");
+}
+
+// The dialogs must be the shared overlay, not a private one, and the
+// scrim must not carry a width cap: .modal-overlay is `inset: 0`, and a
+// max-width on it leaves the right-hand side of the page undimmed.
+structure(
+    'both dialogs use the shared .modal-overlay',
+    substr_count($html, 'modal-overlay ah-dialog') === 2
+);
+$css = file_get_contents(__DIR__ . '/../css/academic-history.css');
+structure(
+    'the dialog scrim is not width-capped',
+    !preg_match('/^\.ah-dialog\s*\{[^}]*max-width/m', $css)
+);
+structure(
+    'the stylesheet is linked, not inlined',
+    (bool) preg_match('/academic-history\.css/', $html)
+    && !preg_match('/<style>[\s\S]*\.ah-header\s*\{/', $html)
+);
+
 printf("\n  %d failed\n", $fail);
 exit($fail === 0 ? 0 : 1);

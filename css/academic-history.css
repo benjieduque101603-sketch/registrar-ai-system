@@ -173,7 +173,11 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
     padding: 13px 16px; border-top: 1px solid #e5e7eb;
     background: #f8faff; color: var(--ah-quiet); font-size: 11px;
 }
-.ah-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* The roster is a wide table. min-width:0 is what makes the horizontal
+   scroll work: without it the panel refuses to shrink below the table's
+   900px and the whole page scrolls sideways instead of the table
+   scrolling inside the panel. */
+.ah-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; min-width: 0; }
 .ah-panel .table { min-width: 900px; }
 .ah-panel .table th {
     padding: 13px 15px; background: #f8fafc; color: #475569;
@@ -232,12 +236,22 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
    The overlay base is display:none and toggled with .active, so the
    hidden state is a missing class, not [hidden]. The grade dialog
    holds a form and is taller; the audit holds a list to read. */
-.ah-dialog { max-width: 940px; }
+/* The scrim must stay full-bleed: .modal-overlay is `position: fixed;
+   inset: 0`, and a max-width here would cap the dimmed backdrop at
+   940px, leaving the right-hand side of the page undimmed and still
+   visible behind an "open" dialog. The width cap belongs to the card. */
 .ah-dialog .modal-content {
     display: flex; flex-direction: column; max-height: 92vh; overflow: hidden;
+    /* min-width:0 lets the card shrink below its content. The grade grid is
+       a table with real inputs in it, and without this the card is sized by
+       that min-content and pushes past a phone viewport, so the dialog
+       spills off the right edge of the screen. */
+    width: 100%; max-width: 940px; min-width: 0;
     border: 1px solid #c7d7fe; border-radius: 22px;
     box-shadow: 0 28px 80px rgba(15, 23, 42, .24);
 }
+/* The audit drawer is a list to read, and reads better narrower. */
+#auditModal .modal-content { max-width: 720px; }
 .ah-dialog-head {
     flex: 0 0 auto; display: flex; align-items: flex-start; gap: 12px;
     padding: 19px 22px; background: linear-gradient(135deg, #eff6ff, #fff);
@@ -310,7 +324,12 @@ body[data-page="academic"] .dashboard-container { max-width: 1460px; }
    A rating outside 1.00-5.00 is marked invalid in the field itself,
    not only in the bar at the foot. The reason then travels with the
    cell the user is actually looking at. */
-.ah-grid { width: 100%; border-collapse: collapse; margin-top: 14px; }
+/* The grid is five columns of inputs. Below the tablet that is wider than
+   the card, so it keeps a floor and scrolls sideways inside the dialog
+   body, exactly as the roster does inside its panel. The alternative,
+   squeezing the inputs until they are unusable, is worse than a
+   scrollbar. */
+.ah-grid { width: 100%; border-collapse: collapse; margin-top: 14px; min-width: 430px; }
 .ah-grid th {
     padding: 11px 13px; text-align: left; background: #f8fafc; color: #475569;
     font-size: 9.5px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase;

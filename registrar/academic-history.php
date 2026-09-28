@@ -300,6 +300,9 @@ include '../includes/header.php';
 include '../includes/sidebar.php';
 ?>
 
+<main class="dashboard-main">
+<div class="dashboard-container">
+
 <header class="ah-header">
     <div>
         <div class="ah-kicker"><i class="fa-solid fa-clipboard-check"></i> Term grading</div>
@@ -536,12 +539,12 @@ include '../includes/sidebar.php';
 </div>
 </main>
 
-<?php // ah_initials() is defined above, next to the payload that uses it. ?>
-
-// Ã¢â€â‚¬Ã¢â€â‚¬ Grade entry Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-// One student's term. The GWA preview below the grid is recomputed as
-// the user types, using the same weighting the server will apply, so
-// what they see before saving is what gets stored.
+<?php
+// ah_initials() is defined above, next to the payload that uses it.
+//
+// Grade entry: one student's term. The GWA preview below the grid is
+// recomputed as the user types, using the same weighting the server will
+// apply, so what they see before saving is what gets stored.
 ?>
 <div class="modal-overlay ah-dialog" id="gradeModal" role="dialog" aria-modal="true" aria-labelledby="gradeModalTitle">
     <div class="modal-content">
@@ -599,13 +602,12 @@ include '../includes/sidebar.php';
     </div>
 </div>
 
-/*
-   -- Pre-close audit --------------------------------------
-   Read-only. It reports what is missing or inconsistent and stops
-     there: it assigns no grade, changes no status, and writes nothing.
-     The GWA-at-3.00 finding is a question about the status rules, not
-     a decision about this student.
-*/
+<?php
+// The pre-close audit. Read-only: it reports what is missing or
+// inconsistent and stops there. It assigns no grade, changes no status,
+// and writes nothing. The GWA-at-3.00 finding is a question about the
+// status rules, not a decision about this student.
+?>
 <div class="modal-overlay ah-dialog" id="auditModal" role="dialog" aria-modal="true" aria-labelledby="auditModalTitle">
     <div class="modal-content">
         <div class="ah-dialog-head">
@@ -854,9 +856,9 @@ async function saveGrades() {
     }
 }
 
-/* â”€â”€ The pre-close audit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Rendered from the server's findings. The drawer only presents them;
-   it decides nothing, and nothing in this path writes a record. */
+/* The pre-close audit. Rendered from the server's findings. The drawer
+   only presents them; it decides nothing, and nothing in this path
+   writes a record. */
 function findingHtml(f, sev) {
     const icon = sev === 'blocking' ? 'fa-circle-exclamation' : 'fa-circle-info';
     return '<div class="ah-finding" data-sev="' + sev + '">' +
