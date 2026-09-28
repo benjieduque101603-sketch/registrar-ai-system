@@ -864,7 +864,7 @@ function getStudentStatusLabel($status) {
  * Used whenever a student's status changes (quick dropdown, bulk update,
  * restore). Keeps the dashboard "Recent Activity" and AI insights fed.
  */
-function trackStatusChange($studentId, $newStatus, $reason = null) {
+function trackStatusChange($studentId, $newStatus, $reason = null, array $meta = []) {
     try {
         $db = Database::getInstance();
         $old = $db->fetchOne("SELECT status FROM students WHERE id = ?", [intval($studentId)]);
@@ -872,14 +872,41 @@ function trackStatusChange($studentId, $newStatus, $reason = null) {
         if ($oldStatus === $newStatus) {
             return false; // nothing changed
         }
-        $db->insert('status_tracker', [
+        // A leave of absence has to end. The window columns make that
+        // possible; they are not part of the base schema on every server,
+        // so they are written only when present rather than assumed. A
+        // missing end_date costs a later review its expiry date, which is
+        // recoverable; a failed insert would lose the whole status change.
+        $row = [
             'student_id'      => intval($studentId),
             'previous_status' => $oldStatus,
             'current_status'  => $newStatus,
             'reason'          => $reason,
             'changed_by'      => $_SESSION['user_id'] ?? null,
-            'created_at'      => date('Y-m-d H:i:s')
-        ]);
+            'created_at'      => date('Y-m-d H:i:s'),
+        ];
+        static $cols = null;
+        if ($cols === null) {
+            $cols = [];
+            try {
+                $cols = array_column(
+                    $db->fetchAll('SHOW COLUMNS FROM status_tracker'),
+                    'Field'
+                );
+            } catch (Exception $e) {
+                $cols = [];
+            }
+        }
+        if (!empty($meta['effective_date']) && in_array('effective_date', $cols, true)) {
+            $row['effective_date'] = $meta['effective_date'];
+        }
+        if (array_key_exists('end_date', $meta) && in_array('end_date', $cols, true)) {
+            // An explicit null clears the window; an absent key leaves any
+            // existing value alone. Conflating the two would silently drop a
+            // registrar's expiry date.
+            $row['end_date'] = $meta['end_date'] ?: null;
+        }
+        $db->insert('status_tracker', $row);
         return true;
     } catch (Exception $e) {
         // Silent fail — never block the status update because logging broke.

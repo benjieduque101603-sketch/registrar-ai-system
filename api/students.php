@@ -459,16 +459,42 @@ try {
 
     // ─── BULK STATUS UPDATE ────────────────────────────────────
     if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'bulk-status') {
-        $input = json_decode(file_get_contents('php://input'), true);
-        $ids = $input['ids'] ?? [];
+        $input  = json_decode(file_get_contents('php://input'), true);
+        $ids    = $input['ids'] ?? [];
         $status = $input['status'] ?? '';
         if (empty($ids) || !$status) {
             echo json_encode(['success' => false, 'message' => 'Invalid request.']);
             exit;
         }
+        // A reason is now required, because the journal is the only record
+        // of why a status changed and "Bulk status update" is not one. It
+        // was optional here and the desk's Apply button never sent one, so
+        // every recommendation applied from the status page was logged
+        // with a null reason — the audit trail could show that a student
+        // changed and nothing about why.
+        $reason = trim((string) ($input['reason'] ?? ''));
+        if ($reason === '') {
+            echo json_encode(['success' => false, 'message' => 'A reason is required for the status history.']);
+            exit;
+        }
+        $meta = [];
+        foreach (['effective_date', 'end_date'] as $d) {
+            if (array_key_exists($d, $input)) {
+                $v = trim((string) $input[$d]);
+                if ($v !== '') {
+                    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) {
+                        echo json_encode(['success' => false, 'message' => 'Invalid ' . str_replace('_', ' ', $d) . '.']);
+                        exit;
+                    }
+                    $meta[$d] = $v;
+                } else {
+                    $meta[$d] = null;
+                }
+            }
+        }
         foreach ($ids as $sid) {
             $db->update('students', ['status' => $status], 'id = ?', [intval($sid)]);
-            trackStatusChange(intval($sid), $status, 'Bulk status update');
+            trackStatusChange(intval($sid), $status, $reason, $meta);
         }
         echo json_encode(['success' => true, 'message' => count($ids) . ' student(s) updated.']);
         exit;

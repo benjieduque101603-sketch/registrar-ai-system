@@ -6,9 +6,17 @@
 //    action=quality           → deterministic student-record quality queue
 //    action=quality_summary   → AI explanation of one student's detected issues
 //    action=apply_safe_repairs → apply registrar-confirmed safe corrections
-//    action=report            → AI population report
+//    action=case_brief        → read-only: one student's evidence + contradictions
+//    action=missed_checks     → read-only: contradictions across the whole roster
+//    action=student_risks     → attention level per student (rules own the level)
+//    action=status_recommendations → rule-detected transitions a person may make
 //  LLM responses are cached in ai_cache. Deterministic checks create findings;
 //  writes are limited to explicitly confirmed safe repairs.
+//
+//  Note on labelling: status_anomalies and student_risks are rules, not AI.
+//  The model is used to phrase what a rule found, never to decide whether a
+//  rule fires. status_recommendations is the only action that names a target
+//  status, and applying it is always a separate, confirmed request.
 // ============================================================
 
 require_once __DIR__ . '/../shared/security_headers.php';
@@ -28,6 +36,7 @@ require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/ai_client.php';
 require_once __DIR__ . '/../shared/normalize.php';
 require_once __DIR__ . '/../shared/student_quality.php';
+require_once __DIR__ . '/../shared/status_evidence.php';
 
 header('Content-Type: application/json');
 
@@ -265,39 +274,285 @@ switch ($action) {
         exit;
 
     // ─── STUDENT RISKS ──────────────────────────────────────
+    //
+    // Answers "which of these students is worth my attention", for the
+    // Risk column and the attention sort.
+    //
+    // Two changes from the version this replaces.
+    //
+    // It ran two queries per student inside the loop, on every page
+    // load, for every student in the roster — a thousand round trips
+    // before the table finished drawing. Both facts are now collected
+    // in one pass each and the rules run over memory.
+    //
+    // And the LLM no longer decides the risk level. It used to be handed
+    // the finished map and asked to reassess it, which meant a model
+    // could quietly promote a low risk to high on a hunch — or, with
+    // the gateway down, silently return the old numbers, so nobody
+    // could tell whether the column was live. The rules now own the
+    // level; the model is only allowed to add a clause of explanation.
     case 'student_risks':
+    case 'status_risks':   // alias: the page called this name and got "Unknown action"
         $ids = $input['student_ids'] ?? [];
-        if (!is_array($ids) || empty($ids)) { echo json_encode(['success'=>false,'message'=>'student_ids required.']); exit; }
-        $ids = array_map('intval', $ids);
-        $ph  = implode(',', array_fill(0, count($ids), '?'));
-        $rows = $db->fetchAll("SELECT s.id,s.first_name,s.last_name,s.status FROM students s WHERE s.id IN ($ph)", $ids);
+        if (!is_array($ids) || empty($ids)) {
+            // An empty list means "every student" — the page asks for the
+            // whole roster to paint the Risk column, and rejecting it for
+            // being empty is what left that column permanently blank.
+            $ids = array_map(fn($r) => (int) $r['id'], $db->fetchAll('SELECT id FROM students'));
+            if (!$ids) {
+                echo json_encode(['success' => true, 'data' => ['risks' => [], 'source' => 'rule']]);
+                exit;
+            }
+        }
+        $ids  = array_map('intval', $ids);
+        $ph   = implode(',', array_fill(0, count($ids), '?'));
+        $rows = $db->fetchAll(
+            "SELECT s.id, s.first_name, s.last_name, s.status
+             FROM students s WHERE s.id IN ($ph)",
+            $ids
+        );
+
+        // One query for every recent status change in the set.
+        $histBy = [];
+        $hist = $db->fetchAll(
+            "SELECT student_id, current_status, created_at
+             FROM status_tracker
+             WHERE student_id IN ($ph)
+             ORDER BY student_id, created_at DESC, id DESC",
+            $ids
+        );
+        foreach ($hist as $h) {
+            $k = (int) $h['student_id'];
+            if (!isset($histBy[$k])) $histBy[$k] = [];
+            if (count($histBy[$k]) < 10) $histBy[$k][] = $h;
+        }
+
+        // One query for every latest GWA.
+        $gwaBy = [];
+        $gwas = $db->fetchAll(
+            "SELECT h.student_id, h.gwa
+             FROM academic_history h
+             JOIN (
+                 SELECT student_id, MAX(id) AS mid
+                 FROM academic_history
+                 WHERE student_id IN ($ph) AND gwa IS NOT NULL
+                 GROUP BY student_id
+             ) latest ON latest.mid = h.id",
+            $ids
+        );
+        foreach ($gwas as $g) {
+            $gwaBy[(int) $g['student_id']] = (float) $g['gwa'];
+        }
+
         $rr = [];
         foreach ($rows as $s) {
             $sid = (int) $s['id'];
             $st  = strtolower(trim((string) ($s['status'] ?? '')));
-            $h   = $db->fetchAll("SELECT current_status,created_at FROM status_tracker WHERE student_id=? ORDER BY created_at DESC LIMIT 10", [$sid]);
-            $cc  = 0;
-            foreach ($h as $x) { $cs = strtolower((string)($x['current_status'] ?? '')); if (in_array($cs, ['at-risk','probation'])) $cc++; else break; }
+            $h   = $histBy[$sid] ?? [];
+
+            // A streak of consecutive at-risk/probation rows, counted from
+            // the most recent backwards and stopping at the first status
+            // that is neither.
+            $cc = 0;
+            foreach ($h as $x) {
+                $cs = strtolower((string) ($x['current_status'] ?? ''));
+                if (in_array($cs, ['at-risk', 'probation'], true)) $cc++;
+                else break;
+            }
             $last = $h[0]['created_at'] ?? null;
             $days = $last ? (int) floor((time() - strtotime($last)) / 86400) : 999;
-            $gwa  = $db->fetchColumn("SELECT gwa FROM academic_history WHERE student_id=? ORDER BY created_at DESC LIMIT 1", [$sid]);
-            $gwa  = $gwa ? (float) $gwa : null;
+            $gwa  = $gwaBy[$sid] ?? null;
+
             $r = 'low'; $reason = 'Stable, no red flags.';
-            if (in_array($st, ['at-risk','probation'])) { $r='high'; $reason="Currently $st"; if ($cc >= 2) $reason .= " for $cc periods"; $reason .= "."; }
-            elseif ($st === 'dropped')     { $r='medium'; $reason='Dropped.'; }
-            elseif ($gwa !== null && $gwa > 3.0) { $r='medium'; $reason="GWA $gwa above 3.0."; }
-            elseif ($days > 180)           { $r='medium'; $reason="No change for $days days."; }
-            $rr[$sid] = ['risk' => $r, 'reason' => $reason];
+            if (in_array($st, ['at-risk', 'probation'], true)) {
+                $r = 'high';
+                $reason = "Currently $st" . ($cc >= 2 ? " for $cc consecutive periods" : '') . '.';
+            } elseif ($st === 'dropped') {
+                $r = 'medium'; $reason = 'Dropped.';
+            } elseif ($gwa !== null && $gwa > 3.0) {
+                $r = 'medium'; $reason = 'GWA ' . $gwa . ' above 3.0.';
+            } elseif ($days > 180) {
+                $r = 'medium'; $reason = "No change for $days days.";
+            }
+            $rr[$sid] = [
+                'risk'   => $r,
+                'reason' => $reason,
+                'name'   => trim(($s['first_name'] ?? '') . ' ' . ($s['last_name'] ?? '')),
+            ];
         }
+
+        // The model may sharpen the wording. It may not change a level:
+        // an answer that disagrees with the rule's own level is discarded
+        // rather than merged, so a hallucinated "high" can never reorder
+        // the registrar's attention queue.
         $src = 'rule';
-        if (function_exists('aiGenerateJson') && count($ids) <= 20) {
-            $ai = aiGenerateJson("Assess risk per student. JSON: {\"risks\":{\"id\":{\"risk\":\"low\"|\"medium\"|\"high\",\"reason\":str}}}", json_encode($rr), [], ['max_tokens' => 1500]);
-            if (is_array($ai) && !empty($ai['risks'])) { $rr = $ai['risks']; $src = 'ai'; }
+        if (function_exists('aiGenerateJson') && count($rr) > 0 && count($rr) <= 20) {
+            $facts = [];
+            foreach ($rr as $k => $v) {
+                $facts[] = ['id' => (int) $k, 'risk' => $v['risk'], 'facts' => $v['reason']];
+            }
+            $ai = aiGenerateJson(
+                'Explain each student\'s risk level in one short clause, using only the facts given. '
+                    . 'You must return the SAME risk level you were given and must not change it. '
+                    . 'JSON: {"risks":{"id":{"risk":"low"|"medium"|"high","reason":str}}}',
+                json_encode($facts),
+                [],
+                ['max_tokens' => 1200, 'temperature' => 0.1]
+            );
+            if (is_array($ai) && !empty($ai['risks']) && is_array($ai['risks'])) {
+                foreach ($ai['risks'] as $k => $v) {
+                    $k = (int) $k;
+                    if (!isset($rr[$k]) || !is_array($v)) continue;
+                    $proposed = strtolower(trim((string) ($v['risk'] ?? '')));
+                    if ($proposed === $rr[$k]['risk'] && trim((string) ($v['reason'] ?? '')) !== '') {
+                        $rr[$k]['reason'] = (string) $v['reason'];
+                        $src = 'ai';
+                    }
+                }
+            }
         }
+
         echo json_encode(['success' => true, 'data' => ['risks' => $rr, 'source' => $src]]);
         exit;
 
-    // ─── STATUS ANOMALIES ──────────────────────────────────
+
+    // ─── ASSEMBLE A CASE (read-only, one student) ───────────────
+    //
+    // The replacement for the old "profile" action, which built its
+    // "AI brief" with sprintf() and never called a model at all.
+    //
+    // It gathers the evidence a registrar would otherwise have to pull
+    // from six tables by hand, runs the contradiction rules over it, and
+    // then asks the model one narrow question: what should this person
+    // look at before deciding? The model is given the findings as
+    // finished facts and may only phrase them — it cannot add a finding
+    // and cannot suggest a destination status.
+    case 'case_brief':
+        $studentId = (int) ($input['id'] ?? 0);
+        if (!$studentId) {
+            echo json_encode(['success' => false, 'message' => 'Student is required.']);
+            exit;
+        }
+        $ev  = statusStudentEvidence($studentId);
+        if (empty($ev['student'])) {
+            echo json_encode(['success' => false, 'message' => 'Student not found.']);
+            exit;
+        }
+        $finds = statusEvidenceFindings($ev);
+        $s     = $ev['student'];
+
+        $briefSource = 'rules';
+        $note = '';
+        if ($finds && function_exists('aiGenerate')) {
+            $facts = [
+                'student' => [
+                    'name'   => trim(($s['first_name'] ?? '') . ' ' . ($s['last_name'] ?? '')),
+                    'status' => $s['status'] ?? '',
+                    'course' => $s['course'] ?? '',
+                    'year'   => $s['year_level'] ?? '',
+                ],
+                'flags' => array_map(static fn(array $f): array => [
+                    'title'  => $f['title'],
+                    'detail' => $f['detail'],
+                ], $finds),
+            ];
+            $note = aiGenerate(
+                'You are briefing a college registrar on one student before they decide a status. '
+                    . 'In at most three sentences, state what the record shows and what the person should verify. '
+                    . 'Use only the flags given. Do not invent facts, do not speculate about intent, '
+                    . 'and do not recommend a status — the decision is theirs. If nothing is flagged, say so plainly.',
+                json_encode($facts),
+                ['max_tokens' => 220, 'temperature' => 0.1]
+            );
+            if (trim($note) !== '') $briefSource = 'ai';
+        }
+        if (trim($note) === '') {
+            $note = $finds
+                ? count($finds) . ' point' . (count($finds) === 1 ? '' : 's') . ' in this record need a decision.'
+                : 'Nothing in this record contradicts itself.';
+        }
+
+        echo json_encode(['success' => true, 'data' => [
+            'student'  => [
+                'id' => (int) $s['id'],
+                'name' => trim(($s['first_name'] ?? '') . ' ' . ($s['last_name'] ?? '')),
+                'student_number' => (string) ($s['student_number'] ?? ''),
+                'status' => (string) ($s['status'] ?? ''),
+                'course' => (string) ($s['course'] ?? ''),
+                'year_level' => $s['year_level'] ?? '',
+            ],
+            'note'     => $note,
+            'source'   => $briefSource,
+            'findings' => $finds,
+            'evidence' => [
+                'history'      => $ev['history'],
+                'discipline'   => $ev['discipline'],
+                'balance'      => (float) ($ev['finance']['balance'] ?? 0),
+                'grades'       => $ev['grades'],
+                'documents'    => $ev['documents'],
+                'has_guardian' => !empty($ev['guardian']),
+                'last_scan'    => $ev['activity']['last_scan'] ?? null,
+                'window'       => $ev['window'],
+            ],
+            // Surfaced rather than swallowed: on a server missing a
+            // migration, a section silently reading as "nothing found" is
+            // worse than a visible note that it could not be read.
+            'partial'   => !empty($ev['errors']),
+        ]]);
+        exit;
+
+    // ─── CHECK WHAT I MISSED (read-only, whole cohort) ─────────
+    //
+    // Runs the contradiction rules over every student and returns only
+    // the ones that trip something. Advisory by construction: the
+    // response carries no status field and offers no write path.
+    case 'missed_checks':
+        $limit = $input['student_ids'] ?? [];
+        if (!is_array($limit)) $limit = [];
+        $res = statusCohortFindings($limit);
+
+        // One sentence over the top, so the panel opens with the answer
+        // rather than making the reader count a badge.
+        $headline = '';
+        $source   = 'rules';
+        $n = count($res['findings']);
+        if ($n && function_exists('aiGenerate')) {
+            $titles = [];
+            foreach ($res['findings'] as $f) {
+                foreach ($f['issues'] as $i) {
+                    $titles[] = $i['title'];
+                }
+            }
+            $headline = aiGenerate(
+                'You are summarising an automated record check for a college registrar. In one sentence, '
+                    . 'say how many students have a contradiction worth a person\'s attention and name the '
+                    . 'single most common kind. Use only the counts given. Do not recommend any action — '
+                    . 'this only reports what the check found.',
+                json_encode([
+                    'scanned' => $res['scanned'],
+                    'flagged' => $n,
+                    'by_type' => array_count_values($titles),
+                ]),
+                ['max_tokens' => 120, 'temperature' => 0.1]
+            );
+            if (trim($headline) !== '') $source = 'ai';
+        }
+        if (trim($headline) === '') {
+            $headline = $n === 0
+                ? 'No contradictions found across ' . $res['scanned'] . ' students.'
+                : $n . ' of ' . $res['scanned'] . ' students have a record that contradicts itself.';
+        }
+
+        echo json_encode(['success' => true, 'data' => [
+            'headline' => $headline,
+            'source'   => $source,
+            'findings' => $res['findings'],
+            'scanned'  => $res['scanned'],
+            'partial'  => !empty($res['errors']),
+        ]]);
+        exit;
+
+    // ─── STATUS ANOMALIES (rule-based, not AI) ───────────────
     case 'status_anomalies':
         $anom = [];
         $freq = $db->fetchAll("SELECT st.student_id,s.first_name,s.last_name,s.student_number,COUNT(*) AS cnt FROM status_tracker st JOIN students s ON s.id=st.student_id WHERE st.created_at>=DATE_SUB(NOW(),INTERVAL 30 DAY) GROUP BY st.student_id HAVING cnt>=3");
