@@ -18,18 +18,17 @@ require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/functions.php';
 
 $db = Database::getInstance();
-$maxPerSection = defined('MAX_STUDENTS_PER_SECTION') ? (int) MAX_STUDENTS_PER_SECTION : 50;
 
 // ─── FILTERS ────────────────────────────────────────────────
 $filterCourse     = isset($_GET['course']) ? trim((string) $_GET['course']) : '';
 $filterYear       = isset($_GET['year_level']) ? trim((string) $_GET['year_level']) : '';
 $filterSchoolYear = isset($_GET['school_year']) ? trim((string) $_GET['school_year']) : '';
 $filterSemester   = isset($_GET['semester']) ? trim((string) $_GET['semester']) : '';
-$filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
 $filterStatus     = isset($_GET['status']) ? trim((string) $_GET['status']) : '';
 
-// Only students with an assigned section appear in the masterlist view.
-$sql = "SELECT * FROM students WHERE section IS NOT NULL AND TRIM(section) != ''";
+// Every enrolled student appears; grouping stops at course + year level
+// because sectioning belongs to another department.
+$sql = "SELECT * FROM students WHERE 1=1";
 $params = [];
 if ($filterCourse !== '') {
     $sql .= " AND TRIM(course) = ?";
@@ -47,15 +46,11 @@ if ($filterSemester !== '') {
     $sql .= " AND semester = ?";
     $params[] = $filterSemester;
 }
-if ($filterSection !== '') {
-    $sql .= " AND TRIM(section) = ?";
-    $params[] = $filterSection;
-}
 if ($filterStatus !== '') {
     $sql .= " AND status = ?";
     $params[] = $filterStatus;
 }
-$sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, last_name ASC, first_name ASC";
+$sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, last_name ASC, first_name ASC";
 
 $students = $db->fetchAll($sql, $params);
 
@@ -70,11 +65,7 @@ foreach ($students as &$row) {
 }
 unset($row);
 
-$groups = filterAssignedMasterlistGroups(groupStudentsForMasterlist($students));
-
-$unassignedCount = (int) $db->fetchColumn(
-    "SELECT COUNT(*) FROM students WHERE section IS NULL OR TRIM(section) = ''"
-);
+$groups = groupStudentsForMasterlist($students);
 
 // Dropdown data
 $courses = $db->fetchAll(
@@ -90,26 +81,6 @@ $schoolYears = $db->fetchAll(
 );
 $statusOptions = ['enrolled', 'active', 'probation', 'at-risk', 'loa', 'graduated', 'transferred', 'dropped'];
 
-// Section summaries (all students, not the filtered view) for the target-section picker
-$sectionSummaries = $db->fetchAll(
-    "SELECT TRIM(course) AS course, year_level, semester, TRIM(section) AS section, COUNT(*) AS count
-     FROM students
-     WHERE section IS NOT NULL AND TRIM(section) != ''
-     GROUP BY TRIM(course), year_level, semester, TRIM(section)
-     ORDER BY TRIM(course), year_level, section"
-);
-
-// Lightweight candidate list for the assign-existing-students modal.
-// A section code is derived from the year level ([year][sem][###]), so a
-// student with no year level cannot be placed in a section and must not be
-// offered as pickable. Set their year level first, then they become eligible.
-$assignableStudents = $db->fetchAll(
-    "SELECT id, first_name, last_name, student_number, course, year_level, semester, section, status
-     FROM students
-     WHERE year_level IS NOT NULL AND TRIM(IFNULL(year_level, '')) != ''
-     ORDER BY last_name, first_name"
-);
-
 // Offered courses (shared with students.php)
 $offeredCourses = function_exists('getOfferedCourses') ? getOfferedCourses() : $courses;
 
@@ -121,11 +92,10 @@ foreach ($rfidCards as $rc) {
 }
 
 $page_title = 'Masterlist';
-$page_description = 'Enrolled student masterlist and section management';
+$page_description = 'Enrolled student masterlist';
 $body_page = 'masterlist';
 $APP_ROOT = '../';
 $ACTIVE_NAV = 'masterlist';
-$assignedSuccess = isset($_GET['assigned']) && $_GET['assigned'] === '1';
 
 include '../includes/header.php';
 include '../includes/sidebar.php';
@@ -165,21 +135,15 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         <div>
             <div class="masterlist-kicker"><i class="fas fa-table-list"></i> Registrar directory</div>
             <h1>Masterlist</h1>
-            <p>Search, filter, and manage enrolled students (max <?= (int) $maxPerSection ?> students per section).</p>
+            <p>Search, filter, and manage enrolled students.</p>
         </div>
     </header>
 
-    <!-- Action bar: section tools + output -->
+    <!-- Action bar: view tools + output -->
     <section class="masterlist-actionbar" aria-label="Masterlist actions">
         <div class="masterlist-action-group">
-            <span class="masterlist-action-label">Section tools</span>
+            <span class="masterlist-action-label">Masterlist</span>
             <div class="masterlist-action-buttons">
-                <button type="button" class="btn btn-primary" id="btnCreateSection" title="Create a section manually, then add or assign students to it">
-                    <i class="fas fa-plus-circle"></i> Create Section
-                </button>
-                <button type="button" class="btn btn-secondary" id="btnAutoAssign" title="Fill existing sections, create new ones only when needed (<?= (int) $maxPerSection ?> max each)">
-                    <i class="fas fa-wand-magic-sparkles"></i> Auto-assign
-                </button>
                 <button class="btn btn-secondary" onclick="openGenerateModal()">
                     <i class="fas fa-sliders"></i> Generate
                 </button>
@@ -206,12 +170,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         </div>
     </section>
 
-    <?php if ($assignedSuccess): ?>
-        <div class="card" style="margin-bottom: 16px; padding: 12px 16px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <i class="fas fa-check-circle"></i> Sections updated. Each course/year block now has up to <?= (int) $maxPerSection ?> students per section.
-        </div>
-    <?php endif; ?>
-
     <!-- Toolbar: search bar + filter button -->
     <section class="masterlist-toolbar" aria-label="Masterlist filters">
         <div class="masterlist-search">
@@ -223,7 +181,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         </button>
         <button type="button" class="btn btn-primary masterlist-filter-btn" onclick="openFilterSearchModal()">
             <i class="fas fa-sliders"></i> Filter
-            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterSection !== '' || $filterStatus !== ''): ?>
+            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterStatus !== ''): ?>
                 <span style="background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;">Active</span>
             <?php endif; ?>
         </button>
@@ -255,57 +213,31 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
             <div class="card" style="box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                 <div style="padding: 48px 24px; text-align: center; color: #64748b;">
                     <i class="fas fa-layer-group" style="font-size:40px;color:#e2e8f0;display:block;margin-bottom:14px;"></i>
-                    <?php if ($unassignedCount > 0 && $filterCourse === '' && $filterYear === '' && $filterSchoolYear === '' && $filterSemester === '' && $filterSection === '' && $filterStatus === ''): ?>
-                        <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No sections yet</p>
-                        <p style="margin:0 0 16px;max-width:420px;margin-left:auto;margin-right:auto;line-height:1.5;">
-                            The masterlist view appears only after sections are created. Use <strong>Create Section</strong> or <strong>Auto-assign</strong> to assign students.
-                        </p>
-                        <p style="font-size:13px;color:#94a3b8;margin:0 0 20px;">
-                            <i class="fas fa-user-clock"></i> <?= $unassignedCount ?> student(s) without a section yet
-                        </p>
-                        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-                            <button type="button" class="btn btn-primary" onclick="document.getElementById('btnCreateSection').click()"><i class="fas fa-plus-circle"></i> Create Section</button>
-                            <button type="button" class="btn btn-secondary" onclick="document.getElementById('btnAutoAssign').click()"><i class="fas fa-wand-magic-sparkles"></i> Auto-assign</button>
-                        </div>
-                    <?php else: ?>
-                        <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No sections found</p>
-                        <p style="margin:0;">No sections match your filters, or no students have been assigned to a section yet.</p>
-                    <?php endif; ?>
+                    <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No students found</p>
+                    <p style="margin:0;">No students match your filters, or no students have been enrolled yet.</p>
                 </div>
             </div>
         <?php else: ?>
             <?php foreach ($groups as $group):
                 $count = count($group['students']);
-                $overCap = $count > $maxPerSection;
-                $sectionTitle = htmlspecialchars($group['course']) . ' — Year ' . htmlspecialchars($group['year_level'])
-                    . ' — Section ' . htmlspecialchars($group['section']);
+                $groupTitle = htmlspecialchars($group['course']) . ' — Year ' . htmlspecialchars($group['year_level']);
                 $groupAdviser = '';
-                $groupFirst = null;
                 foreach ($group['students'] as $st) {
-                    if ($groupFirst === null) $groupFirst = $st;
                     if (!empty($st['adviser_name'])) { $groupAdviser = $st['adviser_name']; break; }
                 }
-                $gCourse  = $groupFirst['course']  ?? $group['course'];
-                $gYear    = $groupFirst['year_level'] ?? $group['year_level'];
-                $gSem     = $groupFirst['semester'] ?? '';
-                $gSy      = $groupFirst['school_year'] ?? '';
-                $gAdviserId = $groupFirst['adviser_id'] ?? '';
             ?>
                 <div class="card masterlist-section-block" style="margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);">
                     <div style="padding: 14px 16px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                         <h2 style="margin: 0; font-size: 15px; font-weight: 700; color: #0f172a;">
-                            <i class="fas fa-users" style="color: #2563eb; margin-right: 8px;"></i><?= $sectionTitle ?>
+                            <i class="fas fa-users" style="color: #2563eb; margin-right: 8px;"></i><?= $groupTitle ?>
                         </h2>
-                        <span class="badge <?= $overCap ? 'badge-warning' : 'badge-success' ?>" style="font-size: 12px;">
-                            <?= $count ?> / <?= (int) $maxPerSection ?> students
-                            <?php if ($overCap): ?> — over capacity<?php endif; ?>
+                        <span class="badge badge-success" style="font-size: 12px;">
+                            <?= $count ?> student<?= $count === 1 ? '' : 's' ?>
                         </span>
                         <?php if ($groupAdviser !== ''): ?>
                             <span style="font-size: 12px; color: #475569;"><i class="fas fa-chalkboard-user" style="color: #7c3aed; margin-right: 6px;"></i>Adviser: <strong><?= htmlspecialchars($groupAdviser) ?></strong></span>
                         <?php endif; ?>
-                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='openSectionWorkspace(<?= json_encode(['course' => $gCourse, 'year_level' => $gYear, 'semester' => $gSem, 'school_year' => $gSy, 'adviser_id' => $gAdviserId, 'section' => $group['section']], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'><i class="fas fa-user-plus"></i> Add Student</button>
-                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='openEditSection(<?= json_encode(['course' => $gCourse, 'year_level' => $gYear, 'semester' => $gSem, 'school_year' => $gSy, 'adviser_id' => $gAdviserId, 'section' => $group['section']], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)' title="Edit section"><i class="fas fa-pen"></i> Edit</button>
-                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='handoffGroup(<?= htmlspecialchars(json_encode($sectionTitle), ENT_QUOTES) ?>)' title="Hand off this section to the CMS (Academic Strand module)"><i class="fas fa-paper-plane"></i> HAND-OFF</button>
+                        <button class="btn btn-secondary btn-sm" style="padding:5px 12px;font-size:12px;" onclick='handoffGroup(<?= htmlspecialchars(json_encode($groupTitle), ENT_QUOTES) ?>)' title="Hand off this group to the CMS (Academic Strand module)"><i class="fas fa-paper-plane"></i> HAND-OFF</button>
                     </div>
                     <div style="overflow-x: auto; border-radius: 12px; overflow: hidden;">
                         <table class="masterlist-table" style="width: 100%; border-collapse: collapse; font-size: 13px; word-wrap: break-word; word-break: break-word;">
@@ -319,7 +251,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                     <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="year_level"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Year</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">S.Y.</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Sem</th>
-                                    <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="section"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Section</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Adviser</th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Status</th>
                                 </tr>
@@ -335,7 +266,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['year_level'] ?? 'N/A') ?></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['school_year'] ?? '—') ?></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['semester'] ?? '—') ?></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['section'] ?? '—') ?>"><?= htmlspecialchars($student['section'] ?? '—') ?></td>
                                         <td style="padding: 8px 12px; max-width: 150px; white-space: normal; word-break: break-word; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['adviser_name'] ?? '—') ?>"><?= htmlspecialchars($student['adviser_name'] ?? '—') ?></td>
                                         <td style="padding: 8px 12px; white-space: nowrap;">
                                             <span class="badge badge-<?= in_array($student['status'], ['active', 'enrolled'], true) ? 'success' : ($student['status'] === 'at-risk' || $student['status'] === 'probation' ? 'warning' : 'neutral') ?>">
@@ -356,7 +286,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
     <div class="card" style="margin-top: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
         <div class="table-footer">
             <div class="info-text">
-                Total: <strong><?= count($students) ?></strong> students in <strong><?= count($groups) ?></strong> section group(s)
+                Total: <strong><?= count($students) ?></strong> students in <strong><?= count($groups) ?></strong> group(s)
             </div>
         </div>
     </div>
@@ -404,9 +334,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                             <option value="summer" <?= $filterSemester === 'summer' ? 'selected' : '' ?>>Summer</option>
                         </select>
                     </div>
-                    <div class="form-group"><label>Section</label>
-                        <input type="text" name="section" id="filterSection" class="form-control" placeholder="A" value="<?= htmlspecialchars($filterSection) ?>">
-                    </div>
                     <div class="form-group"><label>Status</label>
                         <select name="status" id="filterStatus" class="form-control">
                             <option value="">All statuses</option>
@@ -420,7 +347,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeFilterSearchModal()">Cancel</button>
-            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterSection !== '' || $filterStatus !== ''): ?>
+            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterStatus !== ''): ?>
                 <a class="btn btn-light" href="masterlist.php">Clear</a>
             <?php endif; ?>
             <button type="submit" form="filterSearchForm" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
@@ -439,7 +366,6 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                     <div class="form-group"><label>Semester</label><select id="genSemester" class="form-control"><option value="">All</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
                     <div class="form-group"><label>Course</label><select id="genCourse" class="form-control"><option value="">All courses</option><?php foreach ($courses as $row): ?><option value="<?= htmlspecialchars($row['course']) ?>"><?= htmlspecialchars($row['course']) ?></option><?php endforeach; ?></select></div>
                     <div class="form-group"><label>Year Level</label><select id="genYear" class="form-control"><option value="">All years</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
-                    <div class="form-group"><label>Section</label><input type="text" id="genSection" class="form-control" placeholder="A, B, C…"></div>
                     <div class="form-group"><label>Status</label><select id="genStatus" class="form-control"><option value="">All statuses</option><?php foreach ($statusOptions as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></div>
                 </div>
                 <p style="font-size:12px;color:#94a3b8;margin-top:8px;"><i class="fas fa-info-circle"></i> Course serves as the department filter. Leave fields blank to include all.</p>
@@ -469,7 +395,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                     <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Name</div><div class="val" id="vName" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
                     <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Student No.</div><div class="val" id="vStudentId" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
                     <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Course</div><div class="val" id="vCourse" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
-                    <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Year / Section</div><div class="val" id="vYearSection" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
+                    <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Year Level</div><div class="val" id="vYearSection" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
                     <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">S.Y. / Sem</div><div class="val" id="vSchoolYearSem" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
                     <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Status</div><div class="val" id="vStatus" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
                     <div><div class="lbl" style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Gender</div><div class="val" id="vGender" style="font-size:14px;font-weight:600;color:#1e293b;">—</div></div>
@@ -488,108 +414,10 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
     </div>
 </div>
 
-<!-- Create Section Modal -->
-<div class="modal-overlay" id="createSectionModal">
-    <div class="modal-content" style="max-width: 560px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-plus-circle" style="color:#2563eb;"></i> Create Section</h2><button class="modal-close" onclick="closeCreateSectionModal()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                <div class="form-group"><label>Course</label><select id="csCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Year Level</label><select id="csYear" class="form-control"><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div>
-                <div class="form-group"><label>Semester</label><select id="csSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
-                <div class="form-group"><label>School Year</label><input type="text" id="csSchoolYear" class="form-control" placeholder="2026-2027" value="<?= date('Y') . '-' . (date('Y') + 1) ?>" list="csSyOptions"><datalist id="csSyOptions"><?php foreach ($schoolYears as $row): ?><option value="<?= htmlspecialchars($row['school_year']) ?>"><?php endforeach; ?></datalist></div>
-                <div class="form-group"><label>Adviser</label><select id="csAdviser" class="form-control"><option value="">None</option><?php foreach ($advisers as $ad): ?><option value="<?= (int)$ad['id'] ?>"><?= htmlspecialchars($ad['full_name']) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Section Code</label><div style="display:flex;gap:8px;align-items:center;"><div id="csCode" style="font-size:16px;font-weight:700;color:#2563eb;min-width:80px;">—</div><input type="text" id="csCodeOverride" class="form-control" placeholder="Override code" style="max-width:120px;" title="Optional: set a specific code"></div></div>
-            </div>
-            <p id="csError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeCreateSectionModal()">Cancel</button>
-            <button class="btn btn-primary" id="csCreateBtn" onclick="createSectionAndOpen()"><i class="fas fa-user-check"></i> Create Section & Assign Students</button>
-        </div>
-    </div>
-</div>
-
-<!-- Edit Section Modal -->
-<div class="modal-overlay" id="editSectionModal">
-    <div class="modal-content" style="max-width: 560px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-pen" style="color:#b45309;"></i> Edit Section</h2><button class="modal-close" onclick="closeEditSection()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <p id="esEditInfo" style="font-size:13px;color:#64748b;margin-bottom:14px;">Editing section <strong id="esOldSection">—</strong>. Changes apply to <strong id="esStudentCount">0</strong> student(s) in this section.</p>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                <div class="form-group"><label>Section Code</label><input type="text" id="esSection" class="form-control" placeholder="11001"></div>
-                <div class="form-group"><label>School Year</label><input type="text" id="esSchoolYear" class="form-control" placeholder="2026-2027" list="csSyOptions"></div>
-                <div class="form-group"><label>Course</label><select id="esCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Year Level</label><select id="esYear" class="form-control"><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div>
-                <div class="form-group"><label>Semester</label><select id="esSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
-                <div class="form-group"><label>Adviser</label><select id="esAdviser" class="form-control"><option value="">None</option><?php foreach ($advisers as $ad): ?><option value="<?= (int)$ad['id'] ?>"><?= htmlspecialchars($ad['full_name']) ?></option><?php endforeach; ?></select></div>
-            </div>
-            <p id="esError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeEditSection()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveEditSection()"><i class="fas fa-save"></i> Save Changes</button>
-        </div>
-    </div>
-</div>
-
-<!-- Section Workspace Modal -->
-<div class="modal-overlay" id="sectionWorkspaceModal">
-    <div class="modal-content" style="max-width: 720px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-users" style="color:#2563eb;"></i> <span id="wsTitle">Section</span></h2><button class="modal-close" onclick="closeSectionWorkspace()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
-                <div style="flex:1;min-width:200px;position:relative;"><i class="fas fa-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:13px;"></i><input type="text" id="wsAssignSearch" class="form-control" style="padding-left:34px;" placeholder="Search students…"></div>
-                <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#475569;cursor:pointer;"><input type="checkbox" id="wsIncludeOthers" style="width:15px;height:15px;accent-color:#2563eb;"> Include already-assigned</label>
-            </div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
-                <div style="flex:1;min-width:200px;"><label style="display:block;font-size:11px;color:#64748b;margin-bottom:3px;font-weight:600;">Assign to section</label><input type="text" id="wsTargetSection" class="form-control" readonly></div>
-                <button class="btn btn-primary" onclick="assignSelectedToSection()"><i class="fas fa-user-check"></i> Assign Selected</button>
-            </div>
-            <p style="font-size:12px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-info-circle"></i> Showing students without a section. Check "Include already-assigned" to see everyone.</p>
-            <div id="wsAssignList" style="max-height:320px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:10px;"></div>
-        </div>
-    </div>
-</div>
-
 <script>
-const MAX_PER_SECTION = <?= (int) $maxPerSection ?>;
 const RFID_MAP = <?= json_encode(array_map(fn($c) => ['card_uid' => $c['card_uid'], 'status' => $c['status'], 'expiry_date' => $c['expiry_date']], $rfidMap)) ?>;
 const ADVISER_NAMES = <?= json_encode($adviserNames) ?>;
 const OFFERED_COURSES = <?= json_encode(array_keys($offeredCourses)) ?>;
-const SECTION_SUMMARIES = <?= json_encode($sectionSummaries) ?>;
-const ASSIGNABLE_STUDENTS = <?= json_encode($assignableStudents) ?>;
-
-// ─── AUTO-ASSIGN ─────────────────────────────────────────────
-document.getElementById('btnAutoAssign')?.addEventListener('click', async function () {
-    const ok = await confirmAction({
-        title: 'Assign section codes',
-        body: 'Assign section codes (11001, 12001, 21001…) by course, year, and semester? ' +
-              'Each section will have at most <strong>' + MAX_PER_SECTION + '</strong> students.',
-        confirmLabel: 'Assign codes'
-    });
-    if (!ok) return;
-    const btn = this;
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Assigning…';
-    try {
-        const response = await fetch('../api/masterlist.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'assign_sections', max_per_section: MAX_PER_SECTION })
-        });
-        const data = await response.json();
-        if (!data.success) { showToast(data.message || 'Failed to assign sections.', 'error'); return; }
-        const params = new URLSearchParams(window.location.search);
-        params.set('assigned', '1');
-        window.location.href = 'masterlist.php?' + params.toString();
-    } catch (err) {
-        showToast('Network error. Please try again.', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-wand-magic-sparkles"></i> Auto-assign';
-    }
-});
 
 // ─── SEARCH (client-side) ────────────────────────────────────
 const searchInput = document.getElementById('masterlistSearch');
@@ -605,7 +433,7 @@ searchInput?.addEventListener('input', function () {
     document.getElementById('showingCount').textContent = visible;
 });
 
-// ─── SORT (within each section block) ────────────────────────
+// ─── SORT (within each group block) ───────────────────────────
 document.querySelectorAll('#masterlistContent .masterlist-table th[data-sort]').forEach(th => {
     th.addEventListener('click', function () {
         const key = this.dataset.sort;
@@ -622,7 +450,7 @@ document.querySelectorAll('#masterlistContent .masterlist-table th[data-sort]').
 });
 function rowSortKey(row, key) {
     const cells = row.querySelectorAll('td');
-    const idx = { name: 3, student_number: 2, course: 4, year_level: 5, section: 8 }[key] ?? 2;
+    const idx = { name: 3, student_number: 2, course: 4, year_level: 5 }[key] ?? 2;
     const v = cells[idx] ? cells[idx].textContent.trim() : '';
     if (key === 'year_level') return String(parseInt(v) || 0).padStart(3, '0');
     return v.toLowerCase();
@@ -644,7 +472,6 @@ function applyGenerate() {
     set('genSemester', 'semester');
     set('genCourse', 'course');
     set('genYear', 'year_level');
-    set('genSection', 'section');
     set('genStatus', 'status');
     window.location.href = 'masterlist.php?' + p.toString();
 }
@@ -706,26 +533,26 @@ function collectRowData(rows) {
     const out = [];
     rows.forEach(row => {
         const cols = row.querySelectorAll('td');
-        if (cols.length < 11) return;
+        if (cols.length < 10) return;
         const t = i => cols[i].textContent.trim();
-        out.push([t(2), t(3), t(4), t(5), t(6), t(7), t(8), t(9), t(10)]);
+        out.push([t(2), t(3), t(4), t(5), t(6), t(7), t(8), t(9)]);
     });
     return out;
 }
 function exportCSV(rows) {
     rows = rows || Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    let csv = 'Student ID,Name,Course,Year,S.Y.,Semester,Section,Adviser,Status\n';
+    let csv = 'Student ID,Name,Course,Year,S.Y.,Semester,Adviser,Status\n';
     const escape = v => '"' + String(v).replace(/"/g, '""') + '"';
     collectRowData(rows).forEach(r => csv += r.map(escape).join(',') + '\n');
-    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'masterlist-by-section.csv');
+    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'masterlist.csv');
 }
 function exportExcel() {
     const rows = Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr><th>#</th><th>Student ID</th><th>Name</th><th>Course</th><th>Year</th><th>S.Y.</th><th>Sem</th><th>Section</th><th>Adviser</th><th>Status</th></tr>';
+    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr><th>#</th><th>Student ID</th><th>Name</th><th>Course</th><th>Year</th><th>S.Y.</th><th>Sem</th><th>Adviser</th><th>Status</th></tr>';
     rows.forEach(row => {
         const cols = row.querySelectorAll('td');
-        if (cols.length < 11) return;
-        const cells = Array.from(cols).slice(0, 11).map(c => '<td>' + String(c.textContent.trim()).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</td>');
+        if (cols.length < 10) return;
+        const cells = Array.from(cols).slice(0, 10).map(c => '<td>' + String(c.textContent.trim()).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</td>');
         html += '<tr>' + cells.join('') + '</tr>';
     });
     html += '</table></body></html>';
@@ -769,8 +596,8 @@ function printRows(rows) {
             const cols = row.querySelectorAll('td');
             if (cols.length < 11) return;
             const t = i => cols[i].textContent.trim();
-            const course = t(4), year = t(5), section = t(6), name = t(3), sn = t(2), gender = t(7), status = t(8);
-            w.document.write('<h3>' + course + ' — Year ' + (year || '—') + ' · Section ' + (section || '—') + '</h3>');
+            const course = t(4), year = t(5), name = t(3), sn = t(2), gender = t(7), status = t(8);
+            w.document.write('<h3>' + course + ' — Year ' + (year || '—') + '</h3>');
             w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Gender</th><th>Status</th></tr>');
             // Single row per matched row
             w.document.write('<tr><td>1</td><td>' + sn + '</td><td>' + name + '</td><td>' + gender + '</td><td>' + status + '</td></tr></table>');
@@ -796,7 +623,7 @@ function viewStudent(id) {
         document.getElementById('vName').textContent = s.first_name + ' ' + s.last_name;
         document.getElementById('vStudentId').textContent = s.student_number || 'ID not yet assigned';
         document.getElementById('vCourse').textContent = s.course || '—';
-        document.getElementById('vYearSection').textContent = (s.year_level ? s.year_level + ' Year' : '') + (s.section ? ' — ' + s.section : '');
+        document.getElementById('vYearSection').textContent = s.year_level ? s.year_level + ' Year' : '—';
         document.getElementById('vSchoolYearSem').textContent = (s.school_year ? s.school_year : '—') + (s.semester ? ' — ' + s.semester : '');
         document.getElementById('vStatus').innerHTML = '<span class="badge badge-' + (s.status === 'active' ? 'success' : s.status === 'at-risk' || s.status === 'probation' ? 'warning' : 'neutral') + '">' + ucfirst(s.status || 'Active') + '</span>';
         document.getElementById('vGender').textContent = s.gender || '—';
@@ -864,241 +691,6 @@ function loadRfid(sid) {
 
 function ucfirst(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-let wsContext = null;
-
-// ─── CREATE SECTION MODAL ────────────────────────────────────
-document.getElementById('btnCreateSection').addEventListener('click', openCreateSectionModal);
-
-function openCreateSectionModal() {
-    document.getElementById('csCourse').value = '';
-    document.getElementById('csYear').value = '';
-    document.getElementById('csSemester').value = '';
-    document.getElementById('csCodeOverride').value = '';
-    document.getElementById('csError').style.display = 'none';
-    document.getElementById('csCode').textContent = '—';
-    document.getElementById('createSectionModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeCreateSectionModal() {
-    document.getElementById('createSectionModal').classList.remove('active');
-    document.body.style.overflow = '';
-}
-document.getElementById('createSectionModal').addEventListener('click', function (e) { if (e.target === this) closeCreateSectionModal(); });
-
-// Live "next section code" preview when course/year/semester change
-['csCourse', 'csYear', 'csSemester'].forEach(id => {
-    document.getElementById(id).addEventListener('change', refreshSectionCode);
-});
-async function refreshSectionCode() {
-    const course = document.getElementById('csCourse').value;
-    const year = document.getElementById('csYear').value;
-    const sem = document.getElementById('csSemester').value;
-    const codeEl = document.getElementById('csCode');
-    if (!course || !year || !sem) { codeEl.textContent = '—'; return; }
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'next_section', course, year_level: parseInt(year), semester: sem })
-        });
-        const d = await r.json();
-        if (d.success) codeEl.textContent = d.code;
-    } catch (e) {}
-}
-
-function createSectionAndOpen() {
-    const course = document.getElementById('csCourse').value;
-    const year = document.getElementById('csYear').value;
-    const sem = document.getElementById('csSemester').value;
-    const schoolYear = document.getElementById('csSchoolYear').value.trim();
-    const adviserId = document.getElementById('csAdviser').value;
-    const override = document.getElementById('csCodeOverride').value.trim();
-    const errorEl = document.getElementById('csError');
-
-    if (!course || !year || !sem) {
-        errorEl.textContent = 'Please select course, year level, and semester.';
-        errorEl.style.display = 'block';
-        return;
-    }
-    let code = override || document.getElementById('csCode').textContent;
-    if (code === '—' || code === '') {
-        errorEl.textContent = 'Could not determine the section code.';
-        errorEl.style.display = 'block';
-        return;
-    }
-    closeCreateSectionModal();
-    openSectionWorkspace({
-        course, year_level: parseInt(year), semester: sem,
-        school_year: schoolYear, adviser_id: adviserId || '', section: code
-    });
-}
-
-// ─── EDIT SECTION ────────────────────────────────────────────
-let editSectionContext = null;
-
-function openEditSection(ctx) {
-    editSectionContext = ctx;
-    document.getElementById('esOldSection').textContent = ctx.section;
-    document.getElementById('esSection').value = ctx.section;
-    document.getElementById('esSchoolYear').value = ctx.school_year || '';
-    document.getElementById('esCourse').value = ctx.course || '';
-    document.getElementById('esYear').value = ctx.year_level || '';
-    document.getElementById('esSemester').value = ctx.semester || '';
-    document.getElementById('esAdviser').value = ctx.adviser_id || '';
-    // Estimate student count from ASSIGNABLE_STUDENTS (may be filtered view; fine as an estimate)
-    const cnt = ASSIGNABLE_STUDENTS.filter(s =>
-        (s.course || '') === ctx.course && String(s.year_level || '') === String(ctx.year_level || '') && (s.section || '') === ctx.section
-    ).length;
-    document.getElementById('esStudentCount').textContent = cnt || '?';
-    document.getElementById('esError').style.display = 'none';
-    document.getElementById('editSectionModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeEditSection() {
-    document.getElementById('editSectionModal').classList.remove('active');
-    document.body.style.overflow = '';
-    editSectionContext = null;
-}
-document.getElementById('editSectionModal').addEventListener('click', function (e) { if (e.target === this) closeEditSection(); });
-
-async function saveEditSection() {
-    if (!editSectionContext) return;
-    const ctx = editSectionContext;
-    const newSection = document.getElementById('esSection').value.trim();
-    const newCourse = document.getElementById('esCourse').value;
-    const newYear = document.getElementById('esYear').value;
-    const newSem = document.getElementById('esSemester').value;
-    const newSy = document.getElementById('esSchoolYear').value.trim();
-    const newAdviser = document.getElementById('esAdviser').value;
-    const errEl = document.getElementById('esError');
-
-    if (!newSection || !newCourse || !newYear || !newSem) {
-        errEl.textContent = 'Section code, course, year, and semester are required.';
-        errEl.style.display = 'block';
-        return;
-    }
-    if (!await confirmAction({
-        title: 'Update section',
-        body: 'Update section <strong>' + escText(ctx.section) + '</strong> to <strong>' + escText(newSection) +
-              '</strong>? This changes all students in the section.',
-        confirmLabel: 'Update section'
-    })) return;
-
-    const btn = event.target;
-    btn.disabled = true;
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'edit_section',
-                old_course: ctx.course, old_year_level: ctx.year_level, old_semester: ctx.semester, old_section: ctx.section,
-                course: newCourse, year_level: newYear, semester: newSem, section: newSection, school_year: newSy, adviser_id: newAdviser || null
-            })
-        });
-        const d = await r.json();
-        if (d.success) {
-            showToast(d.message || 'Section updated.', 'success');
-            window.location.reload();
-        } else {
-            errEl.textContent = d.message || 'Failed to update section.';
-            errEl.style.display = 'block';
-            btn.disabled = false;
-        }
-    } catch (e) {
-        showToast('Network error.', 'error');
-        btn.disabled = false;
-    }
-}
-
-// ─── SECTION WORKSPACE ───────────────────────────────────────
-function openSectionWorkspace(ctx) {
-    wsContext = ctx;
-    document.getElementById('wsTitle').textContent = ctx.course + ' — Year ' + ctx.year_level + ' — Sem ' + (ctx.semester || '1st') + ' — Section ' + ctx.section;
-
-    // Lock the target to the existing section that was clicked — no new sections here.
-    document.getElementById('wsTargetSection').value = ctx.section + ' — ' + ctx.course + ' · Y' + (ctx.year_level || '?') + ' · ' + (ctx.semester || '1st');
-
-    document.getElementById('wsAssignSearch').value = '';
-    document.getElementById('wsIncludeOthers').checked = false;
-    renderAssignList();
-    document.getElementById('sectionWorkspaceModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeSectionWorkspace() {
-    document.getElementById('sectionWorkspaceModal').classList.remove('active');
-    document.body.style.overflow = '';
-}
-document.getElementById('sectionWorkspaceModal').addEventListener('click', function (e) { if (e.target === this) closeSectionWorkspace(); });
-
-// ── Assign Existing Students ────────────────────────────────
-function renderAssignList() {
-    const q = (document.getElementById('wsAssignSearch').value || '').toLowerCase().trim();
-    const includeAssigned = document.getElementById('wsIncludeOthers').checked;
-    const listEl = document.getElementById('wsAssignList');
-    let students = ASSIGNABLE_STUDENTS;
-
-    // Default: only students WITHOUT a section. Checkbox reveals already-assigned.
-    if (!includeAssigned) {
-        students = students.filter(s => !(s.section || '').trim());
-    }
-    // Match the workspace's course/year unless the user searched or wants everyone
-    if (!q && !includeAssigned && wsContext) {
-        students = students.filter(s =>
-            (!(s.course || '').trim() || (s.course || '') === wsContext.course) &&
-            String(s.year_level) === String(wsContext.year_level)
-        );
-    }
-    if (q) {
-        students = students.filter(s => ((s.first_name + ' ' + s.last_name + ' ' + s.student_number).toLowerCase().includes(q)));
-    }
-    if (!students.length) {
-        listEl.innerHTML = '<p style="text-align:center;color:#94a3b8;padding:30px;">No students without a section found.</p>';
-        return;
-    }
-    let html = '<table style="width:100%;font-size:12px;border-collapse:collapse;"><tr style="background:#f8fafc;color:#64748b;font-weight:600;"><th style="padding:8px;"></th><th style="padding:8px;text-align:left;">Student</th><th style="padding:8px;text-align:left;">Course</th><th style="padding:8px;text-align:left;">Yr</th><th style="padding:8px;text-align:left;">Section</th></tr>';
-    students.forEach(s => {
-        html += '<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px;"><input type="checkbox" class="ws-assign-cb" value="' + s.id + '" style="width:15px;height:15px;accent-color:#2563eb;"></td><td style="padding:6px;"><strong>' + s.first_name + ' ' + s.last_name + '</strong><br><span style="color:#94a3b8;">' + (s.student_number || '') + '</span></td><td style="padding:6px;">' + (s.course || '—') + '</td><td style="padding:6px;">' + (s.year_level || '—') + '</td><td style="padding:6px;">' + (s.section || '—') + '</td></tr>';
-    });
-    html += '</table>';
-    listEl.innerHTML = html;
-}
-document.getElementById('wsAssignSearch').addEventListener('input', renderAssignList);
-document.getElementById('wsIncludeOthers').addEventListener('change', renderAssignList);
-
-async function assignSelectedToSection() {
-    const ids = Array.from(document.querySelectorAll('.ws-assign-cb:checked')).map(cb => cb.value);
-    if (!ids.length) { showToast('Select at least one student.', 'warning'); return; }
-    if (!wsContext || !wsContext.section) { showToast('No target section. Open this from a section card.', 'warning'); return; }
-    const section = wsContext.section;
-    const ctx = {
-        course: wsContext.course || '',
-        year_level: wsContext.year_level || '',
-        semester: wsContext.semester || '',
-        school_year: wsContext.school_year || '',
-        adviser_id: wsContext.adviser_id || ''
-    };
-    if (!await confirmAction({
-        title: 'Assign to section',
-        body: 'Assign <strong>' + ids.length + '</strong> student' + (ids.length === 1 ? '' : 's') +
-              ' to section <strong>' + escText(section) + '</strong>? They will be moved to ' +
-              escText(ctx.course || "the section's course") + ' / Year ' + escText(ctx.year_level || '?') + '.',
-        confirmLabel: 'Assign'
-    })) return;
-    const btn = event.target;
-    btn.disabled = true;
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'bulk_assign_section', ids, section, course: ctx.course, year_level: ctx.year_level, semester: ctx.semester, school_year: ctx.school_year, adviser_id: ctx.adviser_id })
-        });
-        const d = await r.json();
-        showToast(d.message || 'Assigned.', d.success ? 'success' : 'error');
-        if (d.success) window.location.reload();
-    } catch (e) {
-        showToast('Error.', 'error');
-    } finally {
-        btn.disabled = false;
-    }
-}
 
 // ─── ESC CLOSE ───────────────────────────────────────────────
 // ??? SEARCH & FILTER MODAL ????????????????????????????????
@@ -1136,7 +728,6 @@ async function runAiSearch() {
         if (urlParamSafe(f.year_level)) p.set('year_level', f.year_level);
         if (urlParamSafe(f.school_year)) p.set('school_year', f.school_year);
         if (urlParamSafe(f.semester)) p.set('semester', f.semester);
-        if (urlParamSafe(f.section)) p.set('section', f.section);
         if (urlParamSafe(f.status)) p.set('status', f.status);
         if (Array.isArray(f.keywords) && f.keywords.length) p.set('q', f.keywords.join(' '));
         aiExplanation.textContent = f.explanation || 'Filters applied.';
@@ -1178,7 +769,7 @@ function closeFilterSearchModal() {
 document.getElementById('filterSearchModal').addEventListener('click', function (e) { if (e.target === this) closeFilterSearchModal(); });
 
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeViewModal(); closeGenerateModal(); closeFilterSearchModal(); closeCreateSectionModal(); closeSectionWorkspace(); closeEditSection(); }
+    if (e.key === 'Escape') { closeViewModal(); closeGenerateModal(); closeFilterSearchModal(); }
 });
 
 // ---- SEND LIST / HAND-OFF (CMS) ----
@@ -1200,8 +791,8 @@ async function sendList() {
 }
 async function handoffGroup(label) {
     if (!await confirmAction({
-        title: 'Hand off section',
-        body: 'Hand off this section to the CMS?<br><br>' + escText(label),
+        title: 'Hand off group',
+        body: 'Hand off this group to the CMS?<br><br>' + escText(label),
         confirmLabel: 'Hand off'
     })) return;
     handoffApi({ program: label }).then(d => {

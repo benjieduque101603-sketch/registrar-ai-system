@@ -188,25 +188,6 @@ switch ($action) {
         ]);
         exit;
 
-    // ─── SECTION SUGGESTION (deterministic) ─────────────────
-    case 'suggest_section':
-        $course = trim((string) ($input['course'] ?? ''));
-        $year   = (int) ($input['year_level'] ?? 0);
-        $sem    = trim((string) ($input['semester'] ?? ''));
-        $sem    = $sem !== '' ? $sem : null;
-
-        if ($course === '' || $year <= 0) {
-            echo json_encode(['success' => false, 'data' => ['suggestion' => ''], 'message' => 'Choose a course and year first.']);
-            exit;
-        }
-
-        require_once __DIR__ . '/../shared/functions.php';
-        $next = nextSectionNumber($course, $year, $sem);
-        $code = sectionCodeFromParts($year, $sem, $next);
-
-        echo json_encode(['success' => true, 'data' => ['suggestion' => $code]]);
-        exit;
-
     // ─── DUPLICATE CHECK (deterministic) ────────────────────
     case 'check_duplicate':
         $firstName = trim((string) ($input['first_name'] ?? ''));

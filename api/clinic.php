@@ -66,7 +66,7 @@ if ($method === 'POST' && $action === 'identify') {
             $student = $db->fetchOne("
                 SELECT
                     s.id, s.student_number, s.first_name, s.middle_name, s.last_name,
-                    s.course, s.year_level, s.section, s.photo,
+                    s.course, s.year_level, s.photo,
                     rf.card_uid, rf.status AS card_status,
                     rf.expiry_date
                 FROM rfid_cards rf
@@ -91,7 +91,7 @@ if ($method === 'POST' && $action === 'identify') {
             $student = $db->fetchOne("
                 SELECT
                     s.id, s.student_number, s.first_name, s.middle_name, s.last_name,
-                    s.course, s.year_level, s.section, s.photo,
+                    s.course, s.year_level, s.photo,
                     NULL AS card_uid, 'active' AS card_status,
                     NULL AS expiry_date
                 FROM students s
@@ -142,7 +142,6 @@ if ($method === 'POST' && $action === 'identify') {
                 'name'          => trim(($student['first_name'] ?? '') . ' ' . ($student['middle_name'] ?? '') . ' ' . ($student['last_name'] ?? '')),
                 'program'       => $student['course'],
                 'year_level'    => $student['year_level'],
-                'section'       => $student['section'],
                 'photo'         => $student['photo'] ?? '',
                 'card_uid'      => $student['card_uid'],
                 'profile'       => $latest ?: null,
@@ -319,7 +318,7 @@ if ($method === 'GET' && $action === 'log') {
                 hv.temperature, hv.blood_pressure, hv.blood_type,
                 hv.allergies, hv.height, hv.weight,
                 hv.pre_existing_conditions, hv.immunization_records,
-                s.student_number, s.course, s.year_level, s.section,
+                s.student_number, s.course, s.year_level,
                 CONCAT(s.first_name,' ',s.last_name) AS student_name,
                 u.full_name AS recorded_by_name
             FROM health_visits hv

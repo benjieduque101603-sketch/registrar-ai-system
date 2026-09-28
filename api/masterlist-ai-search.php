@@ -4,7 +4,7 @@
 //  AI smart search for the masterlist.
 //  Turns a natural-language query into the same GET filters the
 //  masterlist already supports (course, year_level, school_year,
-//  semester, section, status) plus free-text keywords. LLM
+//  semester, status) plus free-text keywords. LLM
 //  responses are cached in ai_cache via aiGenerateJson.
 // ============================================================
 
@@ -72,7 +72,7 @@ try {
         . 'Allowed school years (use the exact string): ' . json_encode($schoolYears) . '. '
         . 'Allowed semesters: ' . implode(', ', $semesters) . '. '
         . 'Allowed statuses: ' . implode(', ', $statuses) . '. '
-        . 'Allowed JSON keys: course, year_level, school_year, semester, section, status, '
+        . 'Allowed JSON keys: course, year_level, school_year, semester, status, '
         . 'keywords (array of free-text terms such as a student name or student number), '
         . 'explanation (one short, human-friendly sentence describing what was applied). '
         . 'Only include a key when the query clearly implies it; otherwise omit it. '
@@ -89,7 +89,6 @@ try {
         'year_level'  => null,
         'school_year' => null,
         'semester'    => null,
-        'section'     => null,
         'status'      => null,
         'keywords'    => [],
         'explanation' => null,
@@ -112,11 +111,6 @@ try {
     $semMap = ['first' => '1st', 'first sem' => '1st', 'first semester' => '1st', '1st' => '1st', '1st sem' => '1st', '1st semester' => '1st', 'second' => '2nd', 'second sem' => '2nd', 'second semester' => '2nd', '2nd' => '2nd', '2nd sem' => '2nd', '2nd semester' => '2nd', 'summer' => 'summer', 'summer class' => 'summer', 'summer semester' => 'summer'];
     if ($semRaw !== '' && isset($semMap[$semRaw])) {
         $clean['semester'] = $semMap[$semRaw];
-    }
-
-    $sec = trim((string) ($filter['section'] ?? ''));
-    if ($sec !== '' && strlen($sec) <= 30) {
-        $clean['section'] = $sec;
     }
 
     $stRaw = strtolower(trim((string) ($filter['status'] ?? '')));
@@ -146,14 +140,13 @@ try {
         if ($clean['year_level'])        $applied[] = 'Year ' . $clean['year_level'];
         if ($clean['school_year'])       $applied[] = $clean['school_year'];
         if ($clean['semester'])          $applied[] = $clean['semester'] . ' sem';
-        if ($clean['section'])           $applied[] = 'Section ' . $clean['section'];
         if ($clean['status'])            $applied[] = $clean['status'];
         if (count($clean['keywords']))   $applied[] = 'keywords: ' . implode(' / ', $clean['keywords']);
         $clean['explanation'] = $applied ? ('Showing ' . implode(', ', $applied)) : 'Showing all students';
     }
 
     // Nothing usable -> fall back to a free-text keyword search.
-    if (!$clean['course'] && !$clean['year_level'] && !$clean['school_year'] && !$clean['semester'] && !$clean['section'] && !$clean['status'] && !count($clean['keywords'])) {
+    if (!$clean['course'] && !$clean['year_level'] && !$clean['school_year'] && !$clean['semester'] && !$clean['status'] && !count($clean['keywords'])) {
         $clean['keywords'] = [$query];
         $clean['explanation'] = 'AI could not map this to filters, so it will search the whole list for: ' . $query;
     }

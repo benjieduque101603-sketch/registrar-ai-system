@@ -88,9 +88,6 @@ foreach (['enrolled','probation','at-risk','graduated','loa','transferred','drop
                     <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                         <span style="background: linear-gradient(135deg, rgba(37, 99, 235, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%); border: 1px solid #2563eb; color: #2563eb; padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 700;"><?= htmlspecialchars($student['course'] ?? '—') ?></span>
                         <span style="background: linear-gradient(135deg, rgba(124, 58, 237, 0.1) 0%, rgba(168, 85, 247, 0.05) 100%); border: 1px solid #7c3aed; color: #7c3aed; padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 700;">Year <?= htmlspecialchars((string)($student['year_level'] ?? '—')) ?></span>
-                        <?php if (!empty($student['section'])): ?>
-                        <span style="background: linear-gradient(135deg, rgba(6, 182, 212, 0.1) 0%, rgba(8, 145, 178, 0.05) 100%); border: 1px solid #06b6d4; color: #06b6d4; padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 700;">Section <?= htmlspecialchars($student['section']) ?></span>
-                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -160,10 +157,6 @@ foreach (['enrolled','probation','at-risk','graduated','loa','transferred','drop
                     <div>
                         <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #94a3b8; font-weight: 800; margin-bottom: 4px;">Year Level</div>
                         <div style="font-size: 14px; font-weight: 600; color: #0d1b2e;">Year <?= htmlspecialchars((string)($student['year_level'] ?? '—')) ?></div>
-                    </div>
-                    <div>
-                        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #94a3b8; font-weight: 800; margin-bottom: 4px;">Section</div>
-                        <div style="font-size: 14px; font-weight: 600; color: #0d1b2e;"><?= htmlspecialchars($student['section'] ?? '—') ?></div>
                     </div>
                     <div>
                         <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #94a3b8; font-weight: 800; margin-bottom: 4px;">School Year</div>

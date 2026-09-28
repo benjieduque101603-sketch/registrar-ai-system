@@ -86,10 +86,6 @@ $avgGrade = count($gradeValues) ? number_format(array_sum($gradeValues) / count(
                         <div class="profile-field-content"><span class="label">Year Level</span><span class="value">Year <?= htmlspecialchars((string)($student['year_level'] ?? '—')) ?></span></div>
                     </div>
                     <div class="profile-field">
-                        <div class="profile-field-icon"><i class="fa-solid fa-people-group"></i></div>
-                        <div class="profile-field-content"><span class="label">Section</span><span class="value"><?= htmlspecialchars($student['section'] ?? '—') ?></span></div>
-                    </div>
-                    <div class="profile-field">
                         <div class="profile-field-icon"><i class="fa-solid fa-calendar-days"></i></div>
                         <div class="profile-field-content"><span class="label">Academic Year</span><span class="value"><?= htmlspecialchars($student['school_year'] ?? '—') ?></span></div>
                     </div>

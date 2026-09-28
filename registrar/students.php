@@ -676,7 +676,7 @@ $segLabel = $sg['year'] ? 'Year ' . $sg['year'] : 'Unassigned year level';
 <div class="table-responsive" id="studentTableWrap">
 <table id="studentTable">
 <thead>
-<tr><th style="width:30px;"><div class="cb-wrap"><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></div></th><th class="rownum">#</th><th>Student ID</th><th>Name</th><th>Course</th><th class="num">Year</th><th class="num">Section</th><th class="num">Gender</th><th>RFID</th><th>Status</th><th class="num">Quality <span class="quality-legend" title=""><i class="fas fa-circle-info" style="cursor:help;"></i><span class="quality-legend-box">Quality score = % of required student fields filled.
+<tr><th style="width:30px;"><div class="cb-wrap"><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></div></th><th class="rownum">#</th><th>Student ID</th><th>Name</th><th>Course</th><th class="num">Year</th><th class="num">Gender</th><th>RFID</th><th>Status</th><th class="num">Quality <span class="quality-legend" title=""><i class="fas fa-circle-info" style="cursor:help;"></i><span class="quality-legend-box">Quality score = % of required student fields filled.
 <span style="color:#22c55e;">●</span> 85–100% &nbsp; Complete
 <span style="color:#f59e0b;">●</span> 60–84% &nbsp; Some fields missing
 <span style="color:#ef4444;">●</span> &lt;60% &nbsp; Many fields missing
@@ -703,7 +703,6 @@ $qDotClass = $qScore >= 85 ? 'good' : ($qScore >= 60 ? 'warn' : 'bad');
 <td><div class="student-info"><div class="student-avatar <?= $ac ?>"><?= $initials ?: '?' ?></div><div><div class="student-name"><?= htmlspecialchars($s['first_name']." ".$s['last_name']) ?></div><div class="student-email"><?= htmlspecialchars($s['email'] ?? '') ?></div></div></div></td>
 <td><?= htmlspecialchars($s['course'] ?? 'N/A') ?></td>
 <td class="num"><?= htmlspecialchars($s['year_level'] ?? 'N/A') ?></td>
-<td class="num"><?= htmlspecialchars($s['section'] ?? '—') ?></td>
 <td class="num"><?= htmlspecialchars(($s['gender'] ?? '') ?: '—') ?></td>
 <td><a href="../registrar/rfid-cards.php?search=<?= urlencode($s['student_number']) ?>" class="rfid-chip <?= $rfidStatus ?>"><i class="fas fa-<?= $rfidStatus==='active'?'check-circle':'credit-card' ?>"></i> <?= $rfidStatus==='active'?($rfidMap[$s['id']]['card_uid']):($rfidStatus==='none'?'—':$rfidMap[$s['id']]['status']) ?></a></td>
 <td><div class="quick-status-wrap"><button class="status-badge <?= $s['status']??'active' ?>" onclick="toggleQuickMenu(<?= (int)$s['id'] ?>)"><span class="status-dot <?= $s['status']??'active' ?>"></span><?= ucfirst($s['status']??'Active') ?></button><div class="quick-status-menu" id="qsm_<?= (int)$s['id'] ?>"><?php $statuses=['active','probation','at-risk','graduated','loa','transferred','dropped']; if($s['status']==='archived')$statuses[]='archived'; foreach($statuses as $st): ?><button onclick="quickStatus(<?= (int)$s['id'] ?>,'<?= $st ?>')" class="<?= ($s['status']??'active')===$st?'active':'' ?>"><?= ucfirst($st) ?></button><?php endforeach; ?></div></div></td>
@@ -751,7 +750,6 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <div class="form-group"><label>Status</label><select id="filterStatus" class="form-control"><option value="">All Status</option><option value="enrolled">Enrolled</option><option value="active">Active</option><option value="probation">Probation</option><option value="at-risk">At Risk</option><option value="graduated">Graduated</option><option value="loa">LOA</option><option value="transferred">Transferred</option><option value="dropped">Dropped</option><option value="archived">Archived</option></select></div>
 <div class="form-group"><label>Year Level</label><select id="filterYear" class="form-control"><option value="">All Year</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></div>
 <div class="form-group"><label>Course</label><select id="filterCourse" class="form-control"><option value="">All Courses</option><?php foreach($courses as $c): ?><option value="<?= htmlspecialchars($c['course']) ?>"><?= htmlspecialchars($c['course']) ?></option><?php endforeach; ?></select></div>
-<div class="form-group"><label>Section</label><input type="text" id="filterSection" class="form-control" placeholder="Enter section..." /></div>
 </div>
 </div>
 <div class="modal-footer"><button class="btn btn-secondary" onclick="closeFilterModal()">Cancel</button><button class="btn btn-secondary" onclick="clearFilters()">Clear All</button><button class="btn btn-primary" onclick="applyFilters()"><i class="fas fa-check"></i> Apply</button></div>
@@ -789,7 +787,7 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <div class="view-item"><div class="lbl">Nationality</div><div class="val" id="vNationality">—</div></div>
 <div class="view-item"><div class="lbl">Religion</div><div class="val" id="vReligion">—</div></div>
 <div class="view-item"><div class="lbl">Course</div><div class="val" id="vCourse">—</div></div>
-<div class="view-item"><div class="lbl">Year / Section</div><div class="val" id="vYearSection">—</div></div>
+<div class="view-item"><div class="lbl">Year Level</div><div class="val" id="vYearSection">—</div></div>
 <div class="view-item"><div class="lbl">School Year / Sem</div><div class="val" id="vSchoolYearSem">—</div></div>
 <div class="view-item"><div class="lbl">Adviser</div><div class="val" id="vAdviser">—</div></div>
 <div class="view-item"><div class="lbl">Email</div><div class="val" id="vEmail">—</div></div>
@@ -857,7 +855,7 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-book"></i> Enrollment Details</div>
 <div class="form-row"><div class="form-group" style="flex:1 1 220px;min-width:150px;"><label>Course <span style="color:#dc2626;">*</span></label><div class="course-select-wrap"><select id="addCourse" class="form-control" required><option value="">Select course</option><?php foreach ($offeredCourses as $cname => $majors): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select><div class="course-select-list" style="display:none;"></div></div></div><div class="form-group" style="flex:0 0 150px;"><label>Year Level <span style="color:#dc2626;">*</span></label><select id="addYearLevel" class="form-control" required><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div><div class="form-group" id="addMajorGroup" style="display:none;flex:1 1 200px;"><label>Major</label><select id="addMajor" class="form-control"><option value="">Select major</option></select></div></div>
-<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="addSchoolYear" class="form-control" placeholder="2026-2027" value="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="addSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div><div class="form-group"><label>Section <button type="button" style="background:none;border:none;color:#2563eb;cursor:pointer;font-size:11px;padding:0;" onclick="suggestSection()"><i class="fas fa-magic"></i> Suggest</button></label><input type="text" id="addSection" class="form-control" placeholder="Set a year level first" disabled><small style="color:#64748b;font-size:11px;">A section is derived from the year level.</small></div></div>
+<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="addSchoolYear" class="form-control" placeholder="2026-2027" value="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="addSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div></div>
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-users"></i> Guardian / Parent</div>
 <div class="form-row"><div class="form-group"><label>Full Name <span style="color:#dc2626;">*</span></label><input type="text" id="addGuardianName" class="form-control" required></div><div class="form-group"><label>Relationship</label><select id="addGuardianRel" class="form-control"><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option></select></div></div>
@@ -970,13 +968,11 @@ function performSearch() {
     const status = document.getElementById('filterStatus')?.value || '';
     const year = document.getElementById('filterYear')?.value || '';
     const course = document.getElementById('filterCourse')?.value || '';
-    const section = document.getElementById('filterSection')?.value?.toLowerCase() || '';
     let filtered = allStudents;
     if (query) filtered = filtered.filter(s => (s.first_name||'').toLowerCase().includes(query)||(s.last_name||'').toLowerCase().includes(query)||(s.student_number||'').toLowerCase().includes(query)||(s.course||'').toLowerCase().includes(query));
     if (status) filtered = filtered.filter(s => s.status === status);
     if (year) filtered = filtered.filter(s => String(s.year_level) === year);
     if (course) filtered = filtered.filter(s => s.course === course);
-    if (section) filtered = filtered.filter(s => (s.section||'').toLowerCase().includes(section));
     updateTable(filtered);
     searchClear.classList.toggle('visible', query.length > 0);
 }
@@ -987,7 +983,7 @@ searchClear.addEventListener('click', () => { searchInput.value = ''; performSea
 document.getElementById('filterToggle').addEventListener('click', () => { document.getElementById('filterModal').classList.add('active'); document.body.style.overflow = 'hidden'; });
 function closeFilterModal() { document.getElementById('filterModal').classList.remove('active'); document.body.style.overflow = ''; }
 function applyFilters() { performSearch(); closeFilterModal(); }
-function clearFilters() { document.getElementById('filterStatus').value = ''; document.getElementById('filterYear').value = ''; document.getElementById('filterCourse').value = ''; document.getElementById('filterSection').value = ''; performSearch(); }
+function clearFilters() { document.getElementById('filterStatus').value = ''; document.getElementById('filterYear').value = ''; document.getElementById('filterCourse').value = ''; performSearch(); }
 document.getElementById('filterModal').addEventListener('click', function(e) { if (e.target === this) closeFilterModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeFilterModal(); closeViewModal(); closeEditModal(); }});
 
@@ -1051,7 +1047,7 @@ function viewStudent(id) {
         document.getElementById('vNationality').textContent = s.nationality||'—';
         document.getElementById('vReligion').textContent = s.religion||'—';
         document.getElementById('vCourse').textContent = s.course||'—';
-        document.getElementById('vYearSection').textContent = (s.year_level?s.year_level+' Year':'')+(s.section?' — '+s.section:'');
+        document.getElementById('vYearSection').textContent = s.year_level ? s.year_level + ' Year' : '—';
         document.getElementById('vSchoolYearSem').textContent = (s.school_year?s.school_year:'—')+(s.semester?' — '+s.semester:'');
         document.getElementById('vAdviser').textContent = (s.adviser_id && ADVISER_MAP[s.adviser_id]) ? ADVISER_MAP[s.adviser_id] : '—';
         document.getElementById('vEmail').textContent = s.email||'—';
@@ -1416,7 +1412,6 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
                 year_level: document.getElementById('addYearLevel').value,
                 school_year: document.getElementById('addSchoolYear').value,
                 semester: document.getElementById('addSemester').value,
-                section: document.getElementById('addSection').value,
                 email: document.getElementById('addEmail').value,
                 contact_number: document.getElementById('addContact').value,
                 address: document.getElementById('addAddress').value,
@@ -1570,8 +1565,6 @@ function applyPaste() {
         }
     }
     refreshMajorOptions('add');
-    // The year level may have been prefilled, which unlocks the section field.
-    syncSectionAvailability();
     closePasteModal();
     showToast('Form pre-filled from extracted data.', 'success');
 }
@@ -1630,39 +1623,6 @@ document.getElementById('addCourse').addEventListener('blur', standardizeCourse)
 
 // Data Quality review behavior is defined in js/student-data-quality.js.
 
-// ─── SECTION SUGGESTION ─────────────────────────────────────
-// A section code encodes the year level, so the field stays locked until a
-// year level is chosen. Clearing the year level clears the section too, so a
-// stale code can't be submitted against a blank year.
-function syncSectionAvailability() {
-    const year = document.getElementById('addYearLevel').value;
-    const section = document.getElementById('addSection');
-    section.disabled = !year;
-    if (!year) section.value = '';
-    section.placeholder = year ? 'e.g. ' + year + '1001' : 'Set a year level first';
-}
-document.getElementById('addYearLevel').addEventListener('change', syncSectionAvailability);
-document.getElementById('addForm').addEventListener('reset', syncSectionAvailability);
-syncSectionAvailability();
-
-function suggestSection() {
-    const course = document.getElementById('addCourse').value;
-    const year = document.getElementById('addYearLevel').value;
-    const sem = document.getElementById('addSemester').value;
-    if (!course || !year) { showToast('Choose a course and year level first.', 'warning'); return; }
-    const btn = event.target.closest('button');
-    if (btn) btn.disabled = true;
-    aiPost('suggest_section', { course, year_level: year, semester: sem }).then(d => {
-        if (d.success && d.data && d.data.suggestion) {
-            document.getElementById('addSection').value = d.data.suggestion;
-            showToast('Section ' + d.data.suggestion, 'success');
-        } else {
-            showToast(d.message || 'Could not suggest a section.', 'error');
-        }
-    }).catch(() => showToast('Error suggesting section.', 'error'))
-      .finally(() => { if (btn) btn.disabled = false; });
-}
-
 // ─── GUARDIAN AUTO-FILL ─────────────────────────────────────
 function guardianAutoFill() {
     const ln = document.getElementById('addLastName').value.trim();
@@ -1708,9 +1668,9 @@ function exportFiltered() {
     exportStudents(visible);
 }
 function exportStudents(list) {
-    let csv = "Student ID,Last Name,First Name,Middle Name,Course,Year Level,Section,Gender,Email,Contact,Status\n";
+    let csv = "Student ID,Last Name,First Name,Middle Name,Course,Year Level,Gender,Email,Contact,Status\n";
     list.forEach(s => {
-        csv += (s.student_number||'')+','+(s.last_name||'')+','+(s.first_name||'')+','+(s.middle_name||'')+','+(s.course||'')+','+(s.year_level||'')+','+(s.section||'')+','+(s.gender||'')+','+(s.email||'')+','+(s.contact_number||'')+','+(s.status||'active')+'\n';
+        csv += (s.student_number||'')+','+(s.last_name||'')+','+(s.first_name||'')+','+(s.middle_name||'')+','+(s.course||'')+','+(s.year_level||'')+','+(s.gender||'')+','+(s.email||'')+','+(s.contact_number||'')+','+(s.status||'active')+'\n';
     });
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'students_export.csv'; a.click();

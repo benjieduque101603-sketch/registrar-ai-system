@@ -143,6 +143,18 @@ CREATE TABLE `staff_notification_reads` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+-- Retired section assignments. Sectioning moved to another department; the
+-- old values are archived here rather than discarded with the column.
+CREATE TABLE `retired_student_sections` (
+  `student_id` int(11) NOT NULL,
+  `table_name` varchar(50) NOT NULL,
+  `section` varchar(20) DEFAULT NULL,
+  `archived_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`student_id`,`table_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `authorized_cards` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `card_uid` varchar(20) NOT NULL,
@@ -474,7 +486,6 @@ CREATE TABLE `enrollment_history` (
   `year_level` int(11) DEFAULT NULL,
   `school_year` varchar(20) DEFAULT NULL,
   `semester` varchar(20) DEFAULT NULL,
-  `section` varchar(20) DEFAULT NULL,
   `status` varchar(20) DEFAULT 'enrolled',
   `enrolled_at` datetime DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -514,7 +525,6 @@ CREATE TABLE `enrollments` (
   `year_level` int(11) DEFAULT NULL,
   `school_year` varchar(20) DEFAULT NULL,
   `semester` varchar(20) DEFAULT NULL,
-  `section` varchar(20) DEFAULT NULL,
   `status` enum('pending','received','re-enrolled','duplicate') NOT NULL DEFAULT 'pending',
   `received_at` datetime DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -890,7 +900,6 @@ CREATE TABLE `students` (
   `school_year` varchar(20) DEFAULT NULL,
   `semester` varchar(20) DEFAULT NULL,
   `adviser_id` int(11) DEFAULT NULL,
-  `section` varchar(20) DEFAULT NULL,
   `status` enum('active','probation','at-risk','loa','enrolled','graduated','transferred','dropped') DEFAULT 'enrolled',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
