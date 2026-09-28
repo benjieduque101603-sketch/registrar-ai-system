@@ -428,3 +428,116 @@
     .ticket-number { font-size: 90px; }
     .hero .hero-number { font-size: 100px; }
 }
+
+/* ==========================================================
+   WINDOW STRIP (monitor + registrar console)
+   One slot per service window. Idle desks are rendered, not
+   hidden, so the board reads as "3 windows, 2 busy" instead of
+   making a closed desk look like it does not exist.
+   ========================================================== */
+.window-strip,
+.win-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-bottom: 24px;
+}
+.window-strip { gap: 22px; }
+
+.win-slot {
+    box-sizing: border-box;          /* borders must not inflate the grid track */
+    background: #fff;
+    border: 2px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 20px 24px 18px;
+    text-align: center;
+    min-height: 190px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+.win-slot.busy {
+    border-color: #2563eb;
+    box-shadow: 0 10px 28px rgba(37, 99, 235, 0.16);
+}
+.win-slot.idle { background: #f8fafc; border-style: dashed; }
+.win-slot.calling { animation: winPulse .6s ease-in-out 3; }
+@keyframes winPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.32); }
+    50%      { box-shadow: 0 0 0 14px rgba(37,99,235,0); }
+}
+
+.win-head {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-bottom: 6px;
+}
+.win-slot.busy .win-head { color: #1d4ed8; }
+.win-num {
+    font-size: clamp(56px, 7vw, 92px);
+    font-weight: 900;
+    line-height: 1;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+}
+.win-name {
+    font-size: clamp(17px, 1.6vw, 23px);
+    font-weight: 700;
+    color: #334155;
+    margin-top: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.win-state {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #16a34a;
+    margin-top: 8px;
+}
+.win-slot.idle .win-state { color: #94a3b8; }
+.idle-num { color: #cbd5e1; }
+.idle-name { color: #94a3b8; font-weight: 600; }
+
+/* Console: compact per-window chips */
+.win-strip { gap: 12px; margin-bottom: 18px; }
+.win-chip {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 10px 14px;
+}
+.win-chip.busy { border-left-color: #2563eb; background: #f8fbff; }
+.wc-n { font-weight: 800; font-size: 13px; color: #475569; min-width: 30px; }
+.wc-t { font-weight: 900; font-size: 20px; color: #0f172a; font-variant-numeric: tabular-nums; }
+.wc-name { font-size: 13px; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-kicker-inline { font-size: 12px; font-weight: 700; color: #64748b; text-transform: none; letter-spacing: 0; }
+
+/* Kiosk board: window tag on the serving tile */
+.q-tile.win-tile { position: relative; padding-top: 26px; }
+.q-tile.win-tile.idle { background: #f8fafc; border-style: dashed; }
+.win-tag {
+    position: absolute;
+    top: 6px; left: 10px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #64748b;
+}
+
+@media (max-width: 900px) {
+    .window-strip, .win-strip { grid-template-columns: 1fr; }
+    .win-slot { min-height: 140px; }
+}

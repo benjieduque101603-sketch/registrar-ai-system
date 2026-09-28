@@ -23,6 +23,7 @@ header('Access-Control-Allow-Headers: Content-Type, Authorization');
 require_once __DIR__ . '/../shared/config.php';
 require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/rfid_helpers.php';
+require_once __DIR__ . '/../shared/queue_helpers.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -119,42 +120,78 @@ if ($action === 'join') {
             exit;
         }
 
-        // ── 3. 5 min per-student cooldown ─────────────────────
-        // ── 4. Join from the back (always) ────────────────────
-        // Wrap cooldown check + INSERT in a transaction with
-        // SELECT … FOR UPDATE to prevent duplicate tickets from
-        // two concurrent requests seeing the same next number.
+        // ── 3. One live ticket per student per day ───────────────
+        // ── 4. Join from the back (always) ──────────────────────
+        // The invariant that matters is the ticket's STATUS, not its age.
+        // This used to be a 5-minute TIME check, which meant a student still
+        // standing in line could tap again the moment the cooldown expired and
+        // be issued a second number (observed: Roldan Tiu holding #3 and #6,
+        // Cathy Tenco holding #4 and #5, simultaneously). A 'waiting' or
+        // 'serving' ticket blocks a new one no matter how old it is; only a
+        // finished ticket (completed / no-show / cancelled / removed) allows a
+        // fresh number, and then a short cooldown still guards an instant
+        // re-tap the moment someone is marked served.
+        //
+        // Steps 3 + 4 run in a transaction with SELECT … FOR UPDATE so two
+        // concurrent taps cannot both pass the live-ticket check.
         $db->beginTransaction();
         try {
-            $existing = $db->fetchOne(
+            $live = $db->fetchOne(
+                "SELECT * FROM queue_tickets
+                 WHERE queue_date = ? AND student_id = ? AND status IN ('waiting','serving')
+                 ORDER BY joined_at DESC LIMIT 1 FOR UPDATE",
+                [$today, $studentId]
+            );
+            if ($live) {
+                $db->rollBack();
+                $isServing = $live['status'] === 'serving';
+                $position = 0;
+                if (!$isServing) {
+                    $position = (int) $db->fetchColumn(
+                        "SELECT COUNT(*) FROM queue_tickets
+                         WHERE queue_date = ? AND status = 'waiting' AND ticket_number <= ?",
+                        [$today, (int) $live['ticket_number']]
+                    );
+                }
+                echo json_encode([
+                    'success' => false,
+                    'code'    => $isServing ? 'now_serving' : 'already_queued',
+                    'message' => $isServing
+                        ? 'You are being served now — please proceed to the window.'
+                        : 'You already have number ' . padNumber((int) $live['ticket_number'])
+                          . ' — you are #' . $position . ' in line.',
+                    'data'    => [
+                        'ticket_id'      => (int) $live['id'],
+                        'ticket_number'  => (int) $live['ticket_number'],
+                        'display_number' => padNumber((int) $live['ticket_number']),
+                        'student_name'   => $live['student_name'],
+                        'status'         => $live['status'],
+                        'counter'        => (int) $live['counter'],
+                        'position'       => $position,
+                        'waiting_ahead'  => max(0, $position - 1),
+                    ],
+                ]);
+                exit;
+            }
+
+            // Short cooldown — only meaningful once a previous ticket has
+            // actually finished, so this cannot block a legitimate re-queue.
+            $finished = $db->fetchOne(
                 "SELECT * FROM queue_tickets
                  WHERE queue_date = ? AND student_id = ?
                  ORDER BY joined_at DESC LIMIT 1 FOR UPDATE",
                 [$today, $studentId]
             );
-            if ($existing && (time() - strtotime($existing['joined_at']) < 300)) {
+            if ($finished && (time() - strtotime($finished['joined_at']) < 30)) {
                 $db->rollBack();
-                // Already have a (recent) ticket today
-                $position = 0;
-                if ($existing['status'] === 'waiting') {
-                    $position = (int) $db->fetchColumn(
-                        "SELECT COUNT(*) FROM queue_tickets
-                         WHERE queue_date = ? AND status = 'waiting' AND ticket_number <= ?",
-                        [$today, (int) $existing['ticket_number']]
-                    );
-                }
                 echo json_encode([
                     'success' => false,
                     'code'    => 'cooldown',
-                    'message' => 'You already have number ' . padNumber((int) $existing['ticket_number'])
-                                 . ' — you can get a new number after the 5-minute cooldown.',
+                    'message' => 'You were just served — please wait a moment before taking a new number.',
                     'data'    => [
-                        'ticket_id'      => (int) $existing['id'],
-                        'ticket_number'  => (int) $existing['ticket_number'],
-                        'display_number' => padNumber((int) $existing['ticket_number']),
+                        'ticket_id'      => (int) $finished['id'],
+                        'display_number' => padNumber((int) $finished['ticket_number']),
                         'student_name'   => $studentName,
-                        'position'       => $position,
-                        'waiting_ahead'  => max(0, $position - 1),
                     ],
                 ]);
                 exit;
@@ -175,7 +212,7 @@ if ($action === 'join') {
                 'student_number' => $studentNumber,
                 'course'         => $course,
                 'status'         => 'waiting',
-                'counter'        => 1,
+                'counter'        => 0,
                 'card_uid'       => $cardUid,
                 'joined_at'      => $now,
             ]);
@@ -204,7 +241,7 @@ if ($action === 'join') {
             [$today, $nextNumber]
         );
 
-        $reQueued = $existing !== null && $existing; // had a prior ticket today already
+        $reQueued = !empty($finished); // had a finished ticket earlier today
 
         echo json_encode([
             'success' => true,
@@ -228,12 +265,7 @@ if ($action === 'join') {
 // ─── BOARD (full-lineup public feed) ──────────────────────────
 if ($action === 'board') {
     try {
-        $serving = $db->fetchOne(
-            "SELECT id, ticket_number, student_name, counter FROM queue_tickets
-             WHERE queue_date = ? AND status = 'serving'
-             ORDER BY id DESC LIMIT 1",
-            [$today]
-        );
+        $payload = windowMapToPayload(buildWindowMap($db, $today));
 
         $waitingRows = $db->fetchAll(
             "SELECT id, ticket_number, student_name FROM queue_tickets
@@ -277,10 +309,9 @@ if ($action === 'board') {
         echo json_encode([
             'success' => true,
             'data'    => [
-                'serving'       => $serving
-                    ? ['number' => padNumber((int) $serving['ticket_number']), 'name' => $serving['student_name'], 'counter' => (int) $serving['counter']]
-                    : null,
-                'waiting'       => $waiting,
+                'windows'         => $payload['windows'],
+                'serving'         => $payload['serving'],
+                'waiting'         => $waiting,
                 'recently_served' => $recentMapped,
                 'waiting_count' => $waitingCount,
                 'last_number'   => $lastNumber,
@@ -310,12 +341,19 @@ if ($action === 'my_ticket') {
         }
 
         $ordering = ['waiting' => 0, 'serving' => 1, 'completed' => 2, 'no-show' => 3, 'cancelled' => 4, 'removed' => 5];
+        // "Now serving" for THIS student, not the globally newest serving
+        // ticket. With multiple windows open, ordering by id DESC returned
+        // whatever was called last at any desk, so a student checked in at
+        // Window 1 could be told they were being seen at Window 3. A waiting
+        // student has no window yet, so this is null until they are called.
         $serving = $db->fetchOne(
             "SELECT ticket_number, student_name, counter FROM queue_tickets
-             WHERE queue_date = ? AND status = 'serving'
-             ORDER BY id DESC LIMIT 1",
-            [$today]
+             WHERE queue_date = ? AND status = 'serving' AND counter = ?",
+            [$today, normalizeWindow($ticket['counter'] ?? 0)]
         );
+        // The student is only "at a window" when their own ticket is the one
+        // being served there.
+        $atMyWindow = $serving && (int) $serving['ticket_number'] === (int) $ticket['ticket_number'];
 
         $position = 0;
         $waitingAhead = 0;
@@ -351,7 +389,9 @@ if ($action === 'my_ticket') {
                 'position'        => $position,
                 'waiting_ahead'   => $waitingAhead,
                 'next_up'         => $nextUp,
-                'serving_ticket'  => $serving ? ['number' => padNumber((int) $serving['ticket_number']), 'name' => $serving['student_name'], 'counter' => (int) $serving['counter']] : null,
+                'serving_ticket'  => $atMyWindow
+                    ? ['number' => padNumber((int) $serving['ticket_number']), 'name' => $serving['student_name'], 'counter' => (int) $serving['counter']]
+                    : null,
                 'joined_at'       => $ticket['joined_at'],
                 'called_at'       => $ticket['called_at'],
                 'served_at'       => $ticket['served_at'],

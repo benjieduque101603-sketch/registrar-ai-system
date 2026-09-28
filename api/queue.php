@@ -18,6 +18,7 @@ require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/functions.php';
+require_once __DIR__ . '/../shared/queue_helpers.php';
 
 if (!isLoggedIn()) {
     echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
@@ -76,12 +77,12 @@ $today = date('Y-m-d');
 // ─── STATE ────────────────────────────────────────────────────
 if ($action === 'state') {
     try {
-        $serving = $db->fetchOne(
-            "SELECT * FROM queue_tickets
-             WHERE queue_date = ? AND status = 'serving'
-             ORDER BY id DESC LIMIT 1",
-            [$today]
-        );
+        $windowMap = buildWindowMap($db, $today);
+        $myWindow  = normalizeWindow($_GET['window'] ?? ($_COOKIE['queue_window'] ?? 1));
+        // `serving` below is scoped to the registrar's own window, so the
+        // console shows the person at THIS desk, not whoever was called last
+        // anywhere. `windows` carries the full board for the summary strip.
+        $serving = $windowMap[$myWindow] ?? null;
 
         $waitingRows = $db->fetchAll(
             "SELECT * FROM queue_tickets
@@ -132,16 +133,9 @@ if ($action === 'state') {
         echo json_encode([
             'success' => true,
             'data'    => [
-                'serving'   => $serving ? [
-                    'ticket_id'      => (int) $serving['id'],
-                    'ticket_number'  => (int) $serving['ticket_number'],
-                    'display_number' => padNumber((int) $serving['ticket_number']),
-                    'student_name'   => $serving['student_name'],
-                    'student_number' => $serving['student_number'],
-                    'course'         => $serving['course'],
-                    'called_at'      => $serving['called_at'],
-                    'counter'        => (int) $serving['counter'],
-                ] : null,
+                'serving'   => $serving,
+                'windows'   => windowMapToPayload($windowMap)['windows'],
+                'my_window' => $myWindow,
                 'waiting'   => $waiting,
                 'completed' => $completed,
                 'stats'     => $stats,
@@ -162,20 +156,36 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 // ─── CALL NEXT ────────────────────────────────────────────────
 if ($action === 'call_next') {
     try {
+        $window = normalizeWindow($input['window'] ?? 1);
+
+        // A window serves ONE student at a time. This used to auto-complete
+        // the globally-newest serving ticket regardless of which window owned
+        // it, so calling from Window 2 silently closed out the student Window
+        // 1 was still seeing — and two calls could stack on one desk. Scope
+        // the check to the requested window and refuse rather than guess.
         $serving = $db->fetchOne(
-            "SELECT * FROM queue_tickets WHERE queue_date = ? AND status = 'serving' ORDER BY id DESC LIMIT 1",
-            [$today]
+            "SELECT * FROM queue_tickets
+             WHERE queue_date = ? AND status = 'serving' AND counter = ?
+             ORDER BY id DESC LIMIT 1",
+            [$today, $window]
         );
         if ($serving) {
-            // Auto-complete the current serving ticket first
-            $db->update('queue_tickets',
-                ['status' => 'completed', 'served_at' => $now],
-                'id = ?', [$serving['id']]);
-            logActivity($_SESSION['user_id'], 'queue_auto_complete', null, 'queue_tickets', $serving['id'],
-                ['status' => 'serving'], ['status' => 'completed']);
-
-            // Log queue completed event to rfid_scan_logs for auto-completed ticket
-            logQueueEvent($db, $serving, 'queue_completed', 'success');
+            echo json_encode([
+                'success' => false,
+                'code'    => 'window_busy',
+                'message' => 'Window ' . $window . ' is still serving number '
+                             . padNumber((int) $serving['ticket_number'])
+                             . ' — ' . $serving['student_name']
+                             . '. Complete or skip them first.',
+                'data'    => [
+                    'ticket_id'      => (int) $serving['id'],
+                    'display_number' => padNumber((int) $serving['ticket_number']),
+                    'student_name'   => $serving['student_name'],
+                    'counter'        => $window,
+                    'called_at'      => $serving['called_at'],
+                ],
+            ]);
+            exit;
         }
 
         $next = $db->fetchOne(
@@ -188,9 +198,6 @@ if ($action === 'call_next') {
             echo json_encode(['success' => true, 'message' => 'Queue is empty.', 'data' => ['called' => null]]);
             exit;
         }
-
-        // Accept window number (1-3 max) from the registrar console
-        $window = max(1, min(3, (int) ($input['window'] ?? 1)));
 
         $db->update('queue_tickets',
             ['status' => 'serving', 'called_at' => $now, 'counter' => $window],

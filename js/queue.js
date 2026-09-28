@@ -133,7 +133,24 @@
             } else {
                 num.style.display = 'none';
                 name.style.display = 'none';
-                if (d.code === 'cooldown' && d.data) {
+                if (d.code === 'already_queued' && d.data) {
+                    // Student tapped again while already holding a live
+                    // number. Show the number they already have rather than an
+                    // error — the tap was harmless, not a failure.
+                    icon.className = 'result-icon warn fas fa-hourglass-half';
+                    icon.style.display = '';
+                    sub.textContent = d.message;
+                    name.style.display = '';
+                    name.textContent = 'Your current number: ' + d.data.display_number;
+                } else if (d.code === 'now_serving' && d.data) {
+                    icon.className = 'result-icon success fas fa-circle-check';
+                    icon.style.display = '';
+                    num.style.display = '';
+                    num.textContent = d.data.display_number;
+                    name.style.display = '';
+                    name.textContent = d.data.student_name;
+                    sub.textContent = 'You are being served at Window ' + (d.data.counter || 1) + '.';
+                } else if (d.code === 'cooldown' && d.data) {
                     icon.className = 'result-icon warn fas fa-hourglass-half';
                     icon.style.display = '';
                     sub.textContent = d.message;
@@ -172,12 +189,20 @@
             var el = document.getElementById('boardList');
             if (!el) return;
             var html = '';
-            if (data.serving) {
-                html += '<div class="q-tile serving-tile">' +
-                    '<div class="num">' + esc(data.serving.number) + '</div>' +
-                    '<div class="who"><div class="name">' + esc(data.serving.name) + '</div><div class="pos">Now serving</div></div>' +
+            // One tile per window so the kiosk board matches the monitor —
+            // a single "now serving" tile made it look like only one desk
+            // existed, and hid the fact that other desks were busy.
+            (data.windows || []).forEach(function (slot) {
+                var s = slot.serving;
+                html += '<div class="q-tile serving-tile win-tile' + (s ? '' : ' idle') + '">' +
+                    '<div class="win-tag">Window ' + slot.window + '</div>' +
+                    (s
+                        ? '<div class="num">' + esc(s.display_number) + '</div>' +
+                          '<div class="who"><div class="name">' + esc(s.student_name) + '</div><div class="pos">Now serving</div></div>'
+                        : '<div class="num idle-num">—</div>' +
+                          '<div class="who"><div class="name idle-name">Available</div><div class="pos">Ready</div></div>') +
                     '</div>';
-            }
+            });
             (data.waiting || []).forEach(function (w) {
                 html += '<div class="q-tile' + (w.next_up ? ' next-up' : '') + '">' +
                     '<div class="num">' + esc(w.number) + '</div>' +
@@ -282,41 +307,37 @@
     //  MONITOR
     // ==========================================================
     else if (PAGE === 'monitor') {
-        var lastServing = '';
+        var lastServing = {};
 
         function render(data) {
-            var heroNum = document.getElementById('heroNumber');
-            var heroName = document.getElementById('heroName');
-            var hero = document.getElementById('hero');
+            var strip = document.getElementById('windowStrip');
             var waitList = document.getElementById('waitList');
             var recentList = document.getElementById('recentList');
 
-            var serving = data.serving || null;
-            if (serving) {
-                heroNum.textContent = serving.number;
-                heroName.textContent = serving.name;
-                var win = serving.counter || 1;
-                var key = serving.number + ':' + serving.name;
-                if (lastServing && lastServing !== key) {
-                    hero.classList.remove('calling');
-                    void hero.offsetWidth;
-                    hero.classList.add('calling');
-                }
-                lastServing = key;
-                var hw = document.getElementById('heroWindow');
-                var dv = document.getElementById('servingDivider');
-                if (hw) {
-                    hw.classList.remove('hidden');
-                    document.getElementById('heroWindowNum').innerHTML = 'Proceed to Window<span>' + win + '</span>';
-                }
-                if (dv) dv.classList.remove('hidden');
-            } else {
-                heroNum.textContent = '\u2014';
-                heroName.textContent = 'Waiting for the next number';
-                var hw = document.getElementById('heroWindow');
-                var dv = document.getElementById('servingDivider');
-                if (hw) hw.classList.add('hidden');
-                if (dv) dv.classList.add('hidden');
+            // One slot per window, always rendered — including idle desks, so
+            // the board reads as "3 windows, 2 busy" instead of hiding that a
+            // desk exists but is free. Each window animates on its OWN key; a
+            // single shared key made the whole strip flash when any desk called.
+            var slots = data.windows || [];
+            if (strip) {
+                var sh = '';
+                slots.forEach(function (slot) {
+                    var s = slot.serving;
+                    var key = s ? (slot.window + ':' + s.number + ':' + s.name) : '';
+                    var isNew = s && lastServing[slot.window] !== undefined && lastServing[slot.window] !== key;
+                    lastServing[slot.window] = key;
+                    sh += '<div class="win-slot' + (s ? ' busy' : ' idle') + (isNew ? ' calling' : '') + '">' +
+                        '<div class="win-head"><i class="fas fa-door-open"></i> Window ' + slot.window + '</div>' +
+                        (s
+                            ? '<div class="win-num">' + esc(s.display_number) + '</div>' +
+                              '<div class="win-name">' + esc(s.student_name) + '</div>' +
+                              '<div class="win-state">Now serving</div>'
+                            : '<div class="win-num idle-num">\u2014</div>' +
+                              '<div class="win-name idle-name">Available</div>' +
+                              '<div class="win-state">Ready</div>') +
+                        '</div>';
+                });
+                strip.innerHTML = sh || '<div class="win-slot idle"><div class="win-head">Windows</div><div class="win-num idle-num">\u2014</div><div class="win-name idle-name">Loading</div></div>';
             }
 
             var wh = '';
@@ -402,6 +423,26 @@
                 var el = document.getElementById('stat-' + k);
                 if (el) el.textContent = (d.stats && d.stats[k] != null) ? d.stats[k] : 0;
             });
+
+            var nsWinLbl = document.getElementById('nsWinLabel');
+            if (nsWinLbl) nsWinLbl.textContent = d.my_window ? '— Window ' + d.my_window : '';
+
+            // Window summary — all desks at a glance, so a registrar can see
+            // which windows are free without switching the selector.
+            var wstrip = document.getElementById('winStrip');
+            if (wstrip) {
+                var wh2 = '';
+                (d.windows || []).forEach(function (slot) {
+                    var s = slot.serving;
+                    wh2 += '<div class="win-chip' + (s ? ' busy' : ' idle') + '">' +
+                        '<span class="wc-n">W' + slot.window + '</span>' +
+                        (s ? '<span class="wc-t">' + esc(s.display_number) + '</span>' +
+                             '<span class="wc-name">' + esc(s.student_name) + '</span>'
+                           : '<span class="wc-t idle-num">—</span><span class="wc-name idle-name">Available</span>') +
+                        '</div>';
+                });
+                wstrip.innerHTML = wh2;
+            }
 
             // Now serving card
             var panel = document.getElementById('nowServingBody');
@@ -573,7 +614,13 @@
         }
 
         function loadState() {
-            fetchJson(API_AUTH + '?action=state').then(function (d) {
+            // Scope the poll to the registrar's own window so the "now serving"
+            // card shows the person at THIS desk. Without it the server fell
+            // back to the globally-newest serving ticket, so two desks open at
+            // once each saw the other's student.
+            var ws = document.getElementById('windowSelect');
+            var w = ws ? (parseInt(ws.value, 10) || 1) : 1;
+            fetchJson(API_AUTH + '?action=state&window=' + w).then(function (d) {
                 if (d.success && d.data) render(d.data);
             }).catch(function () {});
         }
@@ -583,7 +630,12 @@
         if (winSel) {
             var saved = localStorage.getItem('queue_window');
             if (saved && [1,2,3].indexOf(parseInt(saved,10)) !== -1) winSel.value = saved;
-            winSel.addEventListener('change', function() { localStorage.setItem('queue_window', this.value); });
+            winSel.addEventListener('change', function() {
+                localStorage.setItem('queue_window', this.value);
+                // Switching desks must repaint the now-serving card for the new
+                // window immediately, not on the next 3 s poll.
+                loadState();
+            });
         }
         bindConsole();
         loadState();

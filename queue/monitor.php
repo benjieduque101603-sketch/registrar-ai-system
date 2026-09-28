@@ -31,18 +31,8 @@ $page_title = 'Queue Monitor';
         <div class="clock" id="clock"></div>
     </div>
 
-    <!-- NOW SERVING -->
-    <div class="serving-bar" id="hero">
-        <div class="serving-ticket">
-            <div class="serving-label" id="servingLabel">Now Serving</div>
-            <div class="serving-num" id="heroNumber">—</div>
-            <div class="serving-name" id="heroName">Waiting for the next number</div>
-        </div>
-        <div class="serving-divider hidden" id="servingDivider"></div>
-        <div class="serving-window hidden" id="heroWindow">
-            <div class="serving-win-text" id="heroWindowNum">—</div>
-        </div>
-    </div>
+    <!-- NOW SERVING — one slot per window -->
+    <div class="window-strip" id="windowStrip"></div>
 
     <div class="monitor-cols">
         <div>

@@ -163,13 +163,16 @@ body[data-page="console"] .empty-state{color:#94a3b8}
     </div>
 </div>
 
+<!-- All windows at a glance -->
+<div class="win-strip" id="winStrip"></div>
+
 <!-- Serving + waiting, side by side -->
 <div class="q-split">
 
 <!-- Now serving -->
 <div class="panel" id="nowServingBody">
     <div class="panel-toolbar">
-        <div class="panel-title"><i class="fas fa-bullhorn"></i> Now Serving</div>
+        <div class="panel-title"><i class="fas fa-bullhorn"></i> Now Serving <span class="q-kicker-inline" id="nsWinLabel"></span></div>
     </div>
 
     <div id="nsEmpty" class="q-idle">

@@ -24,7 +24,11 @@ if (!$u) {
     exit(1);
 }
 
-$id = 'deskcheck' . bin2hex(random_bytes(8));
+// The id must be session.sid_length characters (26 by default) or
+// session.use_strict_mode=1 makes PHP reject it and silently mint a
+// different one, so the request lands on the login page and the check
+// passes while testing nothing. 'deskcheck' + 17 hex = 26.
+$id = 'deskcheck' . substr(bin2hex(random_bytes(9)), 0, 17);
 
 // The session id and name must be set BEFORE anything reaches output.
 // PHP refuses both once headers are sent, and it fails quietly in the
