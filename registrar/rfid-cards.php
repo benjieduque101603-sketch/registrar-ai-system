@@ -48,9 +48,22 @@ $cards = $db->fetchAll("
     ORDER BY rf.id DESC
 ");
 
-// Split cards: pool (available/unassigned) vs table (assigned/status cards)
+// Split cards three ways: the unassigned pool, the live table, and retired.
+//
+// Retired cards (lost, archived, inactive) are pulled out of the live table so
+// a lost or archived card no longer sits in the middle of active ones. They are
+// still rendered and still searchable, just behind a toggle, because a lost
+// card's UID must stay on record - if it vanished entirely the UID would look
+// free and could be re-issued to someone else.
+//
+// `expired` deliberately stays in the live table: an expired card is still a
+// tracked card that can be renewed, and the page already has an "Expiring soon"
+// stat. Move it to $RETIRED_STATUSES if that is not the intent.
+$RETIRED_STATUSES = ['lost', 'archived', 'inactive'];
+
 $poolCards = array_filter($cards, fn($c) => $c['status'] === 'available' && empty($c['student_id']));
-$tableCards = array_values(array_filter($cards, fn($c) => !($c['status'] === 'available' && empty($c['student_id']))));
+$retiredCards = array_values(array_filter($cards, fn($c) => in_array($c['status'], $RETIRED_STATUSES, true)));
+$tableCards = array_values(array_filter($cards, fn($c) => !($c['status'] === 'available' && empty($c['student_id'])) && !in_array($c['status'], $RETIRED_STATUSES, true)));
 
 $totalCards   = count($cards);
 $activeCards  = count(array_filter($cards, fn($c) => $c['status'] === 'active'));
@@ -58,7 +71,8 @@ $availableCards = count($poolCards);
 $expiredCards = count(array_filter($cards, fn($c) => $c['status'] === 'expired'));
 $lostCards    = count(array_filter($cards, fn($c) => $c['status'] === 'lost'));
 $archivedCards = count(array_filter($cards, fn($c) => $c['status'] === 'archived'));
-$inactiveCards = $totalCards - $activeCards - $availableCards - $expiredCards - $lostCards - $archivedCards;
+$inactiveCards = count(array_filter($cards, fn($c) => $c['status'] === 'inactive'));
+$retiredCount = count($retiredCards);
 
 // Percentages
 $activePct    = $totalCards ? round($activeCards / $totalCards * 100) : 0;
@@ -1309,6 +1323,27 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 }
 #assignModal #assignSubmitBtn:disabled{opacity:.55;cursor:not-allowed}
 
+/* Live / Retired view toggle. Lives in the table header so the retired group
+   is one click away and completely out of the way otherwise. */
+.rfid-view-toggle{
+    display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;
+    padding:8px 13px;border:1px solid #dbe3ef;border-radius:10px;background:#fff;
+    font:600 12.5px Inter,system-ui,sans-serif;color:#475569;cursor:pointer;
+    transition:all .15s ease;
+}
+.rfid-view-toggle:hover{border-color:#94a3b8;background:#f8fafc;color:#0f172a}
+.rfid-view-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(37,99,235,.25);border-color:#2563eb}
+.rfid-view-toggle i{font-size:11.5px;color:#94a3b8}
+.rfid-view-toggle-count{
+    display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;
+    border-radius:999px;background:#eef2f7;color:#475569;
+    font:700 11px Inter,sans-serif;
+}
+/* While the retired view is open the button becomes the way back. */
+.rfid-view-toggle.is-retired{border-color:#cbd5e1;background:#f1f5f9;color:#0f172a}
+.rfid-view-toggle.is-retired i{color:#64748b}
+.rfid-view-toggle.is-retired .rfid-view-toggle-count{background:#475569;color:#fff}
+
 /* -- Empty state -- */
 .rc-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:220px;padding:38px 20px;text-align:center}
 .rc-empty i{font-size:34px;color:#cbd5e1}
@@ -1426,8 +1461,20 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
     <!-- Assigned / Status Cards Table -->
     <div class="rfid-table-wrapper">
         <div class="rfid-table-header">
-            <h3><i class="fas fa-credit-card" style="color:#2563eb;"></i> Assigned Cards <span class="rfid-table-count"><?= count($tableCards) ?></span></h3>
-            <p>Cards currently assigned to students</p>
+            <div>
+                <h3><i class="fas fa-credit-card" style="color:#2563eb;"></i>
+                    <span id="rfidTableHeading">Live Cards</span>
+                    <span class="rfid-table-count" id="rfidViewCount"><?= count($tableCards) ?></span>
+                </h3>
+                <p id="rfidTableSubheading">Cards in use and still being tracked</p>
+            </div>
+            <button type="button" class="rfid-view-toggle" id="rfidViewToggle"
+                    aria-controls="rfidTableBody" aria-pressed="false"
+                    title="Show cards that are lost, archived or inactive">
+                <i class="fas fa-box-archive"></i>
+                <span id="rfidViewToggleLabel">Show retired</span>
+                <span class="rfid-view-toggle-count"><?= $retiredCount ?></span>
+            </button>
         </div>
         <div class="rfid-table-wrap">
         <table>
@@ -1445,16 +1492,36 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
                 </tr>
             </thead>
             <tbody id="rfidTableBody">
-                <?php if (empty($tableCards)): ?>
-                    <tr>
+                <?php if (empty($tableCards) && empty($retiredCards)): ?>
+                    <tr data-empty="both">
                         <td colspan="9" class="rc-empty">
                             <i class="fas fa-credit-card"></i>
-                            <p>No assigned cards</p>
+                            <p>No cards yet</p>
                             <span>Assign a card to a student to get started.</span>
                         </td>
                     </tr>
                 <?php else: ?>
-                    <?php foreach ($tableCards as $cardIndex => $card):
+                    <?php if (empty($tableCards)): ?>
+                        <tr data-empty="active">
+                            <td colspan="9" class="rc-empty">
+                                <i class="fas fa-credit-card"></i>
+                                <p>No live cards</p>
+                                <span>Cards in use appear here.</span>
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                    <?php if (empty($retiredCards)): ?>
+                        <tr data-empty="retired">
+                            <td colspan="9" class="rc-empty">
+                                <i class="fas fa-box-archive"></i>
+                                <p>No retired cards</p>
+                                <span>Cards marked lost, archived or inactive collect here.</span>
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                <?php endif; ?>
+                <?php foreach (array_merge($tableCards, $retiredCards) as $cardIndex => $card):
+                        $isRetired = in_array($card['status'], $RETIRED_STATUSES, true);
                         $initials = '';
                         if (!empty($card['student_name'])) {
                             $names = explode(' ', $card['student_name']);
@@ -1463,6 +1530,7 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
                         $avatarClass = $avatarClasses[$card['id']] ?? 'blue';
                     ?>
                         <tr data-card='<?= htmlspecialchars(json_encode($card), ENT_QUOTES, 'UTF-8') ?>'
+                            data-retired="<?= $isRetired ? '1' : '0' ?>"
                             data-id="<?= (int)$card['id'] ?>"
                             data-student-id="<?= (int)($card['student_id'] ?? 0) ?>"
                             data-name="<?= htmlspecialchars($card['student_name'] ?? '', ENT_QUOTES) ?>"
@@ -1544,29 +1612,25 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
                                     <button class="action-btn view" onclick="viewIdCard(this)" title="View ID Card">
                                         <i class="fas fa-id-card"></i>
                                     </button>
-                                    <button class="action-btn edit" onclick="openEditModal(<?= (int)$card['id'] ?>)" title="Edit">
+                                    <?php // Archive and Delete are gone: the Edit modal is now the one
+                                          // way to change a card's state, and it records a reason.
+                                          // Hard delete stays available on the unassigned pool below,
+                                          // which is a different operation - clearing bad stock, not
+                                          // retiring a card somebody holds. ?>
+                                    <button class="action-btn edit" onclick="openEditModal(<?= (int)$card['id'] ?>)" title="<?= $isRetired ? 'Edit retired card' : 'Edit' ?>">
                                         <i class="fas fa-pen"></i>
-                                    </button>
-                                    <?php if ($card['status'] === 'active' || $card['status'] === 'expired' || $card['status'] === 'lost'): ?>
-                                    <button class="action-btn" onclick="openArchiveModal(<?= (int)$card['id'] ?>, '<?= htmlspecialchars($card['card_uid'], ENT_QUOTES) ?>')" title="Archive" style="color:#6b7280;">
-                                        <i class="fas fa-box-archive"></i>
-                                    </button>
-                                    <?php endif; ?>
-                                    <button class="action-btn delete" onclick="confirmDelete(<?= (int)$card['id'] ?>, '<?= htmlspecialchars($card['card_uid'], ENT_QUOTES) ?>')" title="Delete">
-                                        <i class="fas fa-trash-alt"></i>
                                     </button>
                                 </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
-                <?php endif; ?>
             </tbody>
         </table>
         </div>
     </div>
 
     <div class="table-footer">
-            <div class="info-text">Showing <strong id="showingCount"><?= count($tableCards) ?></strong> of <strong id="totalCount"><?= count($tableCards) ?></strong> assigned cards</div>
+            <div class="info-text">Showing <strong id="showingCount"><?= count($tableCards) ?></strong> of <strong id="totalCount"><?= count($tableCards) ?></strong> <span id="totalCountNoun">live cards</span></div>
         </div>
 </div><!-- /search-table-container -->
 
@@ -2148,34 +2212,12 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
         </div>
     </div>
 </div>
-<!-- Archive Confirmation Modal -->
-<div class="logout-modal-overlay" id="archiveModal">
-    <div class="logout-modal">
-        <div class="logout-modal-icon" style="background: #f3f4f6;">
-            <i class="fas fa-box-archive" style="color: #6b7280;"></i>
-        </div>
-        <h3 class="logout-modal-title">Archive Card</h3>
-        <p class="logout-modal-message" id="archiveMessage">Archive this RFID card? It will be removed from active use.</p>
-        <div style="padding:0 16px;margin-top:8px;">
-            <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px;">Reason</label>
-            <select id="archiveReason" class="form-control" style="width:100%;">
-                <option value="">Select reason...</option>
-                <option value="Graduated">Graduated</option>
-                <option value="Dropped Out">Dropped Out</option>
-                <option value="Transferred">Transferred</option>
-                <option value="Card Damaged">Card Damaged</option>
-                <option value="Card Lost">Card Lost</option>
-                <option value="Other">Other</option>
-            </select>
-        </div>
-        <div class="logout-modal-actions">
-            <button class="logout-btn-cancel" id="archiveCancel" type="button">Cancel</button>
-            <button class="logout-btn-confirm" id="archiveConfirm" type="button" style="background: #6b7280;">
-                <i class="fas fa-box-archive"></i> Archive
-            </button>
-        </div>
-    </div>
-</div>
+<!-- The standalone Archive modal and its per-row Archive button are gone.
+     The Edit modal is now the single way to retire a card, and it records a
+     retirement reason in archive_reason. The old modal wrote free-text values
+     like "Graduated" and "Card Lost" into that column while the Edit modal
+     writes tokens like "graduated" and "lost_card" - two vocabularies in one
+     column. Consolidating on the Edit modal leaves a single vocabulary. -->
 
 
 
@@ -2243,33 +2285,101 @@ const rfidSearchInput = document.getElementById('rfidSearch');
 const rfidTableBody = document.getElementById('rfidTableBody');
 const searchClearBtn = document.getElementById('searchClear');
 const showingCount = document.getElementById('showingCount');
+const totalCountEl = document.getElementById('totalCount');
 const statusFilter = document.getElementById('statusFilter');
 const resetFilterBtn = document.getElementById('resetFilterBtn');
+const viewToggle = document.getElementById('rfidViewToggle');
+const viewToggleLabel = document.getElementById('rfidViewToggleLabel');
+const viewHeading = document.getElementById('rfidTableHeading');
+const viewSubheading = document.getElementById('rfidTableSubheading');
+const viewCount = document.getElementById('rfidViewCount');
+const countNoun = document.getElementById('totalCountNoun');
 
+let rfidView = 'active';
+
+// Statuses that live in the retired group. Must match $RETIRED_STATUSES in PHP.
+const RFID_RETIRED_STATUSES = ['lost', 'archived', 'inactive'];
+
+const RFID_VIEW_COPY = {
+    active:  { label: 'Live Cards',    sub: 'Cards in use and still being tracked', back: 'Show retired', noun: 'live cards' },
+    retired: { label: 'Retired Cards', sub: 'Lost, archived or inactive - kept for the record', back: 'Show live', noun: 'retired cards' }
+};
+
+// Cards carry data-retired="1" when they are lost, archived or inactive. Both
+// groups share one table body so there is a single row template and a single
+// search pass; the view decides which group is visible. Retiring through the
+// Edit modal sets the status, so after the reload the card has moved groups on
+// its own - there is no separate archive step to forget.
 function applyRfidSearch() {
     if (!rfidTableBody) return;
     const query = (rfidSearchInput?.value || '').trim().toLowerCase();
     const filterStatus = statusFilter?.value || '';
+    const wantRetired = rfidView === 'retired';
     const rows = rfidTableBody.querySelectorAll('tr[data-card]');
     let visible = 0;
+    let inView = 0;
     rows.forEach(row => {
         const data = (row.getAttribute('data-card') || '').toLowerCase();
-        let match = true;
-        if (query) match = data.indexOf(query) !== -1;
+        const rowRetired = row.getAttribute('data-retired') === '1';
+        if (rowRetired === wantRetired) inView++;
+        let match = (rowRetired === wantRetired);
+        if (match && query) match = data.indexOf(query) !== -1;
         if (match && filterStatus) match = data.indexOf('"status":"' + filterStatus + '"') !== -1;
         row.style.display = match ? '' : 'none';
         if (match) visible++;
     });
+
+    // The empty-state rows belong to a view, so show only the relevant one.
+    rfidTableBody.querySelectorAll('tr[data-empty]').forEach(r => {
+        const kind = r.getAttribute('data-empty');
+        const applies = kind === 'both' || (wantRetired ? kind === 'retired' : kind === 'active');
+        r.style.display = applies ? '' : 'none';
+    });
+
     if (showingCount) showingCount.textContent = visible;
+    if (totalCountEl) totalCountEl.textContent = inView;
+    if (viewCount) viewCount.textContent = inView;
+}
+
+function setRfidView(view) {
+    rfidView = view;
+    const copy = RFID_VIEW_COPY[view];
+    if (viewHeading) viewHeading.textContent = copy.label;
+    if (viewSubheading) viewSubheading.textContent = copy.sub;
+    if (countNoun) countNoun.textContent = copy.noun;
+    if (viewToggleLabel) viewToggleLabel.textContent = copy.back;
+    if (viewToggle) {
+        viewToggle.setAttribute('aria-pressed', view === 'retired' ? 'true' : 'false');
+        viewToggle.classList.toggle('is-retired', view === 'retired');
+    }
+    applyRfidSearch();
+}
+
+if (viewToggle) {
+    viewToggle.addEventListener('click', () => setRfidView(rfidView === 'active' ? 'retired' : 'active'));
 }
 if (rfidSearchInput) rfidSearchInput.addEventListener('input', applyRfidSearch);
-if (statusFilter) statusFilter.addEventListener('change', applyRfidSearch);
+if (statusFilter) statusFilter.addEventListener('change', () => {
+    // Picking a retired status while looking at live cards would show an empty
+    // table, so follow the filter into the view that actually holds them.
+    const s = statusFilter.value;
+    if (RFID_RETIRED_STATUSES.includes(s) && rfidView === 'active') setRfidView('retired');
+    else applyRfidSearch();
+});
 if (resetFilterBtn) resetFilterBtn.addEventListener('click', () => {
     if (rfidSearchInput) rfidSearchInput.value = '';
     if (statusFilter) statusFilter.value = '';
-    applyRfidSearch();
+    setRfidView('active');
     rfidSearchInput && rfidSearchInput.focus();
 });
+if (searchClearBtn) {
+    searchClearBtn.addEventListener('click', () => {
+        if (rfidSearchInput) rfidSearchInput.value = '';
+        applyRfidSearch();
+    });
+}
+// Apply once on load so the counts and the view agree with the server-rendered rows.
+setRfidView('active');
 
 // ─── Assign modal: students from <select> ────────────────────────
 const allStudents = [];
@@ -3158,34 +3268,10 @@ async function submitBulkRegister() {
     } catch(e) { showToast('Network error.', 'error'); }
     btn.disabled = false;
 }
-// ── Archive Modal ─────────────────────────────────────────────────
-let archiveCardId = null;
-function openArchiveModal(id, uid) {
-    archiveCardId = id;
-    document.getElementById('archiveMessage').textContent = 'Archive card ' + uid + '?';
-    document.getElementById('archiveReason').value = '';
-    document.getElementById('archiveModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-document.getElementById('archiveCancel')?.addEventListener('click', () => {
-    document.getElementById('archiveModal').classList.remove('active');
-    document.body.style.overflow = ''; archiveCardId = null;
-});
-document.getElementById('archiveConfirm')?.addEventListener('click', async () => {
-    if (!archiveCardId) return;
-    try {
-        const res = await fetch('../api/rfid.php?action=archive', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ card_id: archiveCardId, reason: document.getElementById('archiveReason').value })
-        });
-        const data = await res.json();
-        if (data.success) { showToast(data.message, 'success'); setTimeout(() => window.location.reload(), 800); }
-        else showToast(data.message, 'error');
-    } catch(e) { showToast('Network error.', 'error'); }
-    document.getElementById('archiveModal').classList.remove('active');
-    document.body.style.overflow = ''; archiveCardId = null;
-});
-['registerModal','archiveModal'].forEach(id => {
+// The archive modal and its handlers were removed. openEditModal() is the single
+// path for retiring a card; it writes both status and archive_reason, and the
+// card then drops out of the live table into the retired view on reload.
+['registerModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', e => { if (e.target === e.currentTarget) { el.classList.remove('active'); document.body.style.overflow = ''; } });
 });
