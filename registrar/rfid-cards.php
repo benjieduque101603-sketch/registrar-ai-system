@@ -1231,6 +1231,11 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 #editModal .rc-choice-input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
 #editModal .rc-choice-body{
     display:flex;flex-direction:column;gap:3px;height:100%;padding:12px 13px;
+    /* border-box is load-bearing, not tidiness. `height:100%` is the grid row
+       height, and under content-box the padding and border are added on top of
+       it, so every tile rendered 26px taller than its cell and overlapped the
+       row below by 16px once the gap was taken off. Measured, not eyeballed. */
+    box-sizing:border-box;
     border:1.5px solid #e2e8f0;border-radius:11px;background:#fff;
     transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;
 }
@@ -1255,6 +1260,8 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
     font-size:12px;line-height:1.5;color:#475569;
 }
 #editModal .rc-effect i{color:#2563eb;margin-top:2px;flex:0 0 auto;font-size:11px}
+/* Never show an empty bordered bar if it has not been filled in. */
+#editModal .rc-effect:empty{display:none}
 #editModal .rc-effect b{font-weight:700;color:#0f172a}
 #editModal .rc-effect.is-retiring{background:#fef2f2;border-color:#fecaca;color:#7f1d1d}
 #editModal .rc-effect.is-retiring i{color:#dc2626}
