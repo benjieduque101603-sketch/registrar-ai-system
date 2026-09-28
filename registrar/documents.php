@@ -1299,11 +1299,17 @@ tr.is-blocked:hover{background:#fffbeb}
                                     // the clerk's dropdown. Name the unit instead,
                                     // matching how the same fee is worded elsewhere
                                     // on this page.
-                                    $unit = match ($c['fee_type']) {
-                                        'per_page'     => 'page',
-                                        'per_syllabus' => 'syllabus',
-                                        default        => '',
-                                    };
+                                    //
+                                    // Written as an array lookup, not a `match`
+                                    // expression. `match` arrived in PHP 8.0, so it
+                                    // is a parse error - not a runtime one - on 7.x,
+                                    // and a parse error takes the whole page down
+                                    // with a blank 500 before a single row renders.
+                                    // This was the only `match` in the codebase, and
+                                    // the only page that failed to load on a host
+                                    // running PHP 7 while every other page worked.
+                                    $units = ['per_page' => 'page', 'per_syllabus' => 'syllabus'];
+                                    $unit = $units[$c['fee_type']] ?? '';
                                     $feeTxt = '&#8369;' . number_format((float) $c['base_fee'], 2)
                                         . ($unit !== '' ? ' per ' . $unit : ''); ?>
                                     <option value="<?= (int) $c['id'] ?>"

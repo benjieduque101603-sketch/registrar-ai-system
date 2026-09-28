@@ -117,7 +117,7 @@ function resetLoginLockout($db, int $userId): void {
 /** "somebody@bestlink.edu.ph" → "s******@bestlink.edu.ph". */
 function maskEmail(?string $email): string {
     $email = trim((string) $email);
-    if ($email === '' || !str_contains($email, '@')) {
+    if ($email === '' || strpos($email, '@') === false) {
         return '';
     }
     [$local, $domain] = explode('@', $email, 2);

@@ -67,7 +67,12 @@ function app_base_path(): string {
     // SCRIPT_NAME may already be root-relative; if DOCUMENT_ROOT is usable,
     // derive base by stripping the doc root off APP_ROOT.
     $fsBase = str_replace('\\', '/', APP_ROOT);               // …/htdocs/registrar-ai-system/
-    if ($docRoot !== '' && str_starts_with($fsBase, $docRoot)) {
+    // strncmp, not str_starts_with. This is the one place the app needs a
+    // path test on every request that touches app_url(), and str_starts_with
+    // is PHP 8.0+ - a fatal on 7.x, not a fallback. registrar/documents.php
+    // calls app_url() at the top level of the page, so it was the only
+    // registrar page that died on a PHP 7 host while the rest rendered fine.
+    if ($docRoot !== '' && strncmp($fsBase, $docRoot, strlen($docRoot)) === 0) {
         $base = rtrim(substr($fsBase, strlen($docRoot)), '/'); // /registrar-ai-system
         return $base;
     }
