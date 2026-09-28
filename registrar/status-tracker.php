@@ -163,11 +163,26 @@ include '../includes/header.php';
 include '../includes/sidebar.php';
 ?>
 <main class="dashboard-main">
-<header class="header">
-    <div class="title">
-      <div class="st-kicker"><i class="fas fa-chart-line"></i> Registrar intelligence</div>
-      <h1>Status Tracker</h1>
-      <p>Monitor student status changes, review activity, and identify students who need attention.</p>
+<!--
+  The house header. Every other registrar page (documents, queue, users,
+  academic history) uses a card: bordered, rounded, a soft blue gradient
+  and align-items:flex-end, with the kicker above a 28px title. This page
+  was using the plain global .header, which is why it read as a different
+  screen from the ones beside it in the sidebar. Values below are copied
+  from .q-head in registrar/queue.php so they match exactly rather than
+  approximately.
+-->
+<header class="st-head">
+    <div>
+        <div class="st-kicker"><i class="fas fa-chart-line"></i> Registrar intelligence</div>
+        <h1>Status Tracker</h1>
+        <p>Monitor student status changes, review activity, and identify students who need attention.</p>
+    </div>
+    <div class="header-actions">
+        <span class="st-head-chip <?= $queueHigh > 0 ? 'warn' : 'ok' ?>">
+            <i class="fas <?= $queueHigh > 0 ? 'fa-triangle-exclamation' : 'fa-circle-check' ?>"></i>
+            <b><?= $queueHigh ?></b> need<?= $queueHigh === 1 ? 's' : '' ?> a decision
+        </span>
     </div>
 </header>
 <div class="st-wrap">
@@ -186,11 +201,13 @@ include '../includes/sidebar.php';
 <div class="st-desk-grid">
   <!-- Left rail: the work -->
   <aside class="st-rail" aria-label="Students needing a decision">
-    <section class="st-rail-sec">
+    <!-- st-queue carries the state: a red top edge while there is work,
+         green once there is none. -->
+    <section class="st-rail-sec st-queue<?= $queueRows ? '' : ' clear' ?>">
       <div class="st-rail-head">
         <h2>Needs a decision<?php if ($queueHigh > 0): ?> <span class="st-rail-n"><?= $queueHigh ?></span><?php endif; ?></h2>
         <button type="button" class="st-rail-check" id="btnAIMissed"
-                title="Re-read every record for contradictions">Check what I missed</button>
+                title="Re-read every record for contradictions"><i class="fas fa-rotate"></i> Check what I missed</button>
       </div>
       <?php if (!$queueRows): ?>
         <p class="st-rail-clear">
@@ -223,18 +240,25 @@ include '../includes/sidebar.php';
       <?php endif; ?>
     </section>
 
-    <!-- Counts and filters are the same list. -->
-    <section class="st-rail-sec">
+    <!-- Counts and filters are the same list. The inline --fill turns the
+         count into a proportion bar, so this doubles as the distribution
+         that used to be a separate band above the table. -->
+    <section class="st-rail-sec st-filters">
       <div class="st-rail-head"><h2>By status</h2></div>
       <ul class="st-rail-flist">
         <li>
-          <a class="st-rail-f<?= $filterStatus === '' ? ' on' : '' ?>" href="<?= htmlspecialchars($dirUrl(['status' => null, 'page' => 1])) ?>">
-            <span class="st-rail-fname">All students</span><span class="st-rail-fc"><?= number_format($totalStudents) ?></span>
+          <a class="st-rail-f<?= $filterStatus === '' ? ' on' : '' ?>"
+             style="--fill:<?= $totalStudents > 0 ? 100 : 0 ?>%;--fill-color:var(--brand-400)"
+             href="<?= htmlspecialchars($dirUrl(['status' => null, 'page' => 1])) ?>">
+            <span class="st-rail-fdot" style="background:var(--brand-500)"></span>
+            <span class="st-rail-fname">All students</span>
+            <span class="st-rail-fc"><?= number_format($totalStudents) ?></span>
           </a>
         </li>
         <?php foreach ($DB_STATUSES as $s): $m = $STATUS_META[$s] ?? $STATUS_META['inactive']; ?>
           <li>
             <a class="st-rail-f<?= $filterStatus === $s ? ' on' : '' ?>"
+               style="--fill:<?= (float) ($distData[$s] ?? 0) ?>%;--fill-color:<?= $m['color'] ?>"
                href="<?= htmlspecialchars($dirUrl(['status' => $s, 'page' => 1])) ?>">
               <span class="st-rail-fdot" style="background:<?= $m['color'] ?>"></span>
               <span class="st-rail-fname"><?= htmlspecialchars(ucwords(str_replace('-', ' ', $s))) ?></span>

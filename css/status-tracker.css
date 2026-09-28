@@ -14,6 +14,52 @@
    it, both fitting above the fold.
    ============================================================ */
 
+/* ── Page header ────────────────────────────────────────────
+   The house card, copied from .q-head in registrar/queue.php and
+   .dq-head in registrar/documents.php: bordered, rounded 19px, a soft
+   blue gradient, align-items:flex-end, 25/27px padding, and the same
+   28px title over a 12.5px line of slate copy.
+
+   This page previously used the plain global .header, which is a flat
+   bar with a hairline rule and a 24px title. Side by side in the
+   sidebar the two read as different products, which is exactly the
+   inconsistency this replaces. Values are duplicated from queue.php on
+   purpose rather than refactored into a shared file: those rules are
+   inlined in each page's own <style>, and hoisting them is a wider
+   change than this task warrants. */
+.st-head{
+  display:flex;align-items:flex-end;justify-content:space-between;
+  gap:20px;flex-wrap:wrap;margin:0 0 16px;padding:25px 27px;
+  border:1px solid #c7d7fe;border-radius:19px;
+  background:linear-gradient(120deg,#eff6ff,#fff 68%);
+  box-shadow:0 10px 30px rgba(37,99,235,.08);
+}
+.st-head h1{margin:0 0 5px;font-size:28px;line-height:1.1;letter-spacing:-.03em;color:#172554}
+.st-head p{max-width:620px;margin:0;font-size:12.5px;line-height:1.5;color:#64748b}
+.st-head .header-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+/* The chip echoes adm-chip on the Users page: a count, and the state it
+   counts. Green when there is nothing to do, amber when there is. */
+.st-head-chip{
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  padding:5px 8px;border:1px solid #bfdbfe;border-radius:999px;
+  background:#eff6ff;color:#1d4ed8;
+  font-size:9.5px;font-weight:800;
+}
+.st-head-chip b{font-weight:800}
+.st-head-chip.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}
+.st-head-chip.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
+
+@media(max-width:900px){
+  .st-head{flex-direction:column;align-items:flex-start}
+  .st-head .header-actions{width:100%;justify-content:flex-start}
+}
+@media(max-width:600px){
+  .st-head{padding:21px 18px}
+  .st-head h1{font-size:25px}
+}
+
+
 /* Page header.
    Restored verbatim. The layout rework did not touch the header, but
    rebuilding this stylesheet dropped the kicker rule, which left the
@@ -49,27 +95,69 @@ body[data-page="status-tracker"] .st-rail{
   max-height:calc(100vh - 40px);
   overflow-y:auto;scrollbar-width:thin;padding-right:2px;
 }
-body[data-page="status-tracker"] .st-rail-sec{
+
+
+/* â”€â”€ Needs a decision â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   The card the whole rail turns on. A red top edge says there is work
+   in here before a word is read; when there is nothing to do the edge
+   goes green, so the rail's state is legible from across the desk
+   without scrolling. */
+body[data-page="status-tracker"] .st-rail-sec.st-queue{
   background:var(--surface);
   border:1px solid var(--border);
+  border-top:3px solid var(--danger-500);
   border-radius:var(--radius-md);
   overflow:hidden;
+  box-shadow:0 4px 14px rgba(15,23,42,.05);
 }
+body[data-page="status-tracker"] .st-rail-sec.st-queue.clear{border-top-color:var(--success-500)}
+
 body[data-page="status-tracker"] .st-rail-head{
   display:flex;align-items:center;justify-content:space-between;gap:8px;
-  padding:13px 14px 11px;
+  padding:12px 14px;
+  background:var(--surface-subtle);
   border-bottom:1px solid var(--border-subtle);
+}
+body[data-page="status-tracker"] .st-rail-head h2{
+  margin:0;font-size:11px;font-weight:800;color:var(--text-strong);
+  text-transform:uppercase;letter-spacing:.06em;
+  display:flex;align-items:center;gap:7px;
+}
+body[data-page="status-tracker"] .st-rail-n{
+  display:inline-grid;place-items:center;
+  min-width:20px;height:20px;padding:0 6px;
+  background:var(--danger-100);color:var(--danger-600);
+  border:1px solid #fecaca;border-radius:20px;
+  font-size:10.5px;font-weight:800;
+}
+/* A quiet action rather than a button: this re-reads records, it does
+   not commit anything, so it should not look like it might. */
+body[data-page="status-tracker"] .st-rail-check{
+  display:inline-flex;align-items:center;gap:5px;
+  background:none;border:0;padding:3px 0;cursor:pointer;
+  font:inherit;font-size:10.5px;font-weight:700;color:var(--brand-500);
+  letter-spacing:.02em;white-space:nowrap;
+}
+body[data-page="status-tracker"] .st-rail-check:hover{color:var(--brand-600)}
+body[data-page="status-tracker"] .st-rail-check:focus-visible{
+  outline:2px solid var(--brand-500);outline-offset:3px;border-radius:3px;
+}
+body[data-page="status-tracker"] .st-rail-check[disabled]{opacity:.55;cursor:default}
 
+/* Each row is a small case file: who it is on the first line, why it
+   was flagged on the second, and a left rule in the severity colour so
+   the list can be triaged by scanning one column. */
 body[data-page="status-tracker"] .st-rail-list{list-style:none;margin:0;padding:0}
 body[data-page="status-tracker"] .st-rail-item{
   display:flex;flex-direction:column;gap:3px;width:100%;
-  padding:9px 14px;text-align:left;
-  background:none;border:0;border-bottom:1px solid var(--border-subtle);
-  border-left:3px solid var(--border-input);
+  padding:10px 14px 11px;text-align:left;
+  background:var(--surface);border:0;
+  border-bottom:1px solid var(--border-subtle);
+  border-left:3px solid var(--danger-500);
   font:inherit;cursor:pointer;transition:background .12s;
 }
 body[data-page="status-tracker"] .st-rail-list li:last-child .st-rail-item{border-bottom:0}
-body[data-page="status-tracker"] .st-rail-item:hover{background:var(--surface-subtle)}
+body[data-page="status-tracker"] .st-rail-item:hover{background:var(--danger-100)}
 body[data-page="status-tracker"] .st-rail-item:focus-visible{
   outline:2px solid var(--brand-500);outline-offset:-2px;
 }
@@ -77,21 +165,69 @@ body[data-page="status-tracker"] .st-rail-item-top{
   display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;
 }
 body[data-page="status-tracker"] .st-rail-item-name{
-  font-size:12.5px;font-weight:600;color:var(--text-strong);
+  font-size:12.5px;font-weight:700;color:var(--text-strong);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 body[data-page="status-tracker"] .st-rail-item-badge{
-  font-size:10px;font-weight:600;padding:1px 7px;border-radius:20px;
-  white-space:nowrap;flex-shrink:0;
+  font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:20px;
+  white-space:nowrap;flex-shrink:0;text-transform:capitalize;
+
+/* â”€â”€ By status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   Counts and filters in one list. The bar is the design idea: a
+   right-aligned proportion fill behind each row, so the list reads as
+   a distribution as well as a set of links. The fill is drawn on a
+   pseudo-element so the label and count stay selectable and the hit
+   target remains the whole row. */
+body[data-page="status-tracker"] .st-rail-sec.st-filters{
+  background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius-md);
+  overflow:hidden;box-shadow:0 4px 14px rgba(15,23,42,.05);
+}
+body[data-page="status-tracker"] .st-rail-sec.st-filters .st-rail-head{
+  background:var(--surface);border-bottom:1px solid var(--border-subtle);
+}
+body[data-page="status-tracker"] .st-rail-flist{list-style:none;margin:0;padding:6px}
+body[data-page="status-tracker"] .st-rail-f{
+  position:relative;display:flex;align-items:center;gap:8px;
+  padding:6px 9px;border-radius:var(--radius-sm);overflow:hidden;
+  font-size:12.5px;color:var(--text-body);text-decoration:none;
+  transition:background .1s;
+}
+body[data-page="status-tracker"] .st-rail-f:hover{background:var(--surface-subtle)}
+body[data-page="status-tracker"] .st-rail-f:focus-visible{
+  outline:2px solid var(--brand-500);outline-offset:-2px;
+}
+body[data-page="status-tracker"] .st-rail-f.on{color:var(--brand-700);font-weight:600}
+body[data-page="status-tracker"] .st-rail-f::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;
+  width:var(--fill,0%);
+  background:var(--fill-color,#e2e8f0);
+  opacity:.34;pointer-events:none;transition:width .2s;
+}
+body[data-page="status-tracker"] .st-rail-f.on::before{opacity:.5}
+body[data-page="status-tracker"] .st-rail-fdot,
+body[data-page="status-tracker"] .st-rail-fname,
+body[data-page="status-tracker"] .st-rail-fc{position:relative;z-index:1}
+body[data-page="status-tracker"] .st-rail-fdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+body[data-page="status-tracker"] .st-rail-fname{
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+body[data-page="status-tracker"] .st-rail-fc{
+  font-size:11.5px;color:var(--text-subtle);
+  font-variant-numeric:tabular-nums;font-weight:600;
+}
+body[data-page="status-tracker"] .st-rail-f.on .st-rail-fc{color:var(--brand-700)}
+
 }
 body[data-page="status-tracker"] .st-rail-item-why{
-  font-size:11.5px;color:var(--text-muted);line-height:1.4;
+  font-size:11px;color:var(--text-muted);line-height:1.4;font-weight:500;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
 }
 body[data-page="status-tracker"] .st-rail-clear{
+  display:flex;align-items:center;gap:9px;
   margin:0;padding:16px 14px;font-size:12px;color:var(--text-muted);line-height:1.5;
 }
-body[data-page="status-tracker"] .st-rail-clear i{color:var(--success-600);margin-right:4px}
+body[data-page="status-tracker"] .st-rail-clear>i{font-size:15px;color:var(--success-600);flex-shrink:0}
 body[data-page="status-tracker"] .st-rail-more{
   margin:0;padding:9px 14px;font-size:11px;color:var(--text-subtle);
   background:var(--surface-subtle);border-top:1px solid var(--border-subtle);
@@ -101,50 +237,7 @@ body[data-page="status-tracker"] .st-rail-partial{
   background:#fffbeb;border-top:1px solid #fde68a;cursor:help;
 }
 
-/* Status list. The count is right-aligned so the numbers form a
-   column, which is what makes it readable as a distribution. */
-body[data-page="status-tracker"] .st-rail-flist{list-style:none;margin:0;padding:5px}
-body[data-page="status-tracker"] .st-rail-f{
-  display:flex;align-items:center;gap:8px;
-  padding:6px 9px;border-radius:var(--radius-sm);
-  font-size:12.5px;color:var(--text-body);text-decoration:none;
-  transition:background .1s;
-}
-body[data-page="status-tracker"] .st-rail-f:hover{background:var(--surface-subtle)}
-body[data-page="status-tracker"] .st-rail-f:focus-visible{outline:2px solid var(--brand-500);outline-offset:-2px}
-body[data-page="status-tracker"] .st-rail-f.on{
-  background:var(--brand-50);color:var(--brand-700);font-weight:600;
-}
-body[data-page="status-tracker"] .st-rail-fdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-body[data-page="status-tracker"] .st-rail-fname{
-  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-body[data-page="status-tracker"] .st-rail-fc{
-  font-size:11.5px;color:var(--text-subtle);font-variant-numeric:tabular-nums;
-}
-body[data-page="status-tracker"] .st-rail-f.on .st-rail-fc{color:var(--brand-600)}
 
-}
-body[data-page="status-tracker"] .st-rail-head h2{
-  margin:0;font-size:13px;font-weight:700;color:var(--text-strong);
-  display:flex;align-items:center;gap:7px;
-}
-body[data-page="status-tracker"] .st-rail-n{
-  display:inline-grid;place-items:center;
-  min-width:19px;height:19px;padding:0 5px;
-  background:var(--danger-100);color:var(--danger-600);
-  border-radius:20px;font-size:10.5px;font-weight:700;
-}
-body[data-page="status-tracker"] .st-rail-check{
-  background:none;border:0;padding:0;cursor:pointer;
-  font:inherit;font-size:11px;font-weight:600;color:var(--brand-500);
-  text-decoration:underline;text-underline-offset:2px;
-}
-body[data-page="status-tracker"] .st-rail-check:hover{color:var(--brand-600)}
-body[data-page="status-tracker"] .st-rail-check:focus-visible{
-  outline:2px solid var(--brand-500);outline-offset:3px;border-radius:3px;
-}
-body[data-page="status-tracker"] .st-rail-check[disabled]{opacity:.55;cursor:default}
 /* â”€â”€ Directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 body[data-page="status-tracker"] .st-directory{
   min-width:0;display:flex;flex-direction:column;gap:12px;
