@@ -1217,6 +1217,67 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 }
 #editModal .rc-record-foot i{color:#94a3b8;font-size:10.5px;flex:0 0 auto}
 
+/* Edit: the one decision. This replaces the old Status + Reason pair, which
+   let a card be saved as status=active with reason=graduated — two controls
+   describing the same fact, with no stated relationship. Each tile writes
+   BOTH fields, so the pair cannot disagree. */
+#editModal .rc-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+#editModal .rc-choice{position:relative;display:block;margin:0;cursor:pointer}
+/* Kept focusable (not display:none) so the group is keyboard-navigable. */
+#editModal .rc-choice-input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+#editModal .rc-choice-body{
+    display:flex;flex-direction:column;gap:2px;height:100%;padding:11px 12px;
+    border:1.5px solid #e2e8f0;border-radius:11px;background:#fff;
+    transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;
+}
+#editModal .rc-choice:hover .rc-choice-body{border-color:#93c5fd;background:#f8faff}
+#editModal .rc-choice-input:focus-visible + .rc-choice-body{box-shadow:0 0 0 3px rgba(37,99,235,.28);border-color:#2563eb}
+#editModal .rc-choice-input:checked + .rc-choice-body{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 1px #2563eb inset}
+#editModal .rc-choice-label{font-size:12.5px;font-weight:700;color:#0f172a;line-height:1.25}
+#editModal .rc-choice-input:checked + .rc-choice-body .rc-choice-label{color:#1d4ed8}
+#editModal .rc-choice-meta{font-size:11px;color:#64748b;line-height:1.25}
+/* Retiring choices read heavier than "still in use" — the one option anyone
+   can undo just by clicking again. */
+#editModal .rc-choice.is-retiring .rc-choice-label{color:#7f1d1d}
+#editModal .rc-choice.is-retiring .rc-choice-input:checked + .rc-choice-body{border-color:#dc2626;background:#fef2f2;box-shadow:0 0 0 1px #dc2626 inset}
+#editModal .rc-choice.is-retiring .rc-choice-input:checked + .rc-choice-body .rc-choice-label{color:#b91c1c}
+#editModal .rc-choice.is-warning .rc-choice-input:checked + .rc-choice-body{border-color:#d97706;background:#fffbeb;box-shadow:0 0 0 1px #d97706 inset}
+#editModal .rc-choice.is-warning .rc-choice-input:checked + .rc-choice-body .rc-choice-label{color:#b45309}
+
+/* Consequence: states what saving will actually do, before saving. */
+#editModal .rc-effect{
+    display:flex;align-items:flex-start;gap:8px;margin:11px 0 0;padding:10px 12px;
+    border:1px solid #e2e8f0;border-radius:10px;background:#f8faff;
+    font-size:12px;line-height:1.5;color:#475569;
+}
+#editModal .rc-effect i{color:#2563eb;margin-top:2px;flex:0 0 auto;font-size:11px}
+#editModal .rc-effect b{font-weight:700;color:#0f172a}
+#editModal .rc-effect.is-retiring{background:#fef2f2;border-color:#fecaca;color:#7f1d1d}
+#editModal .rc-effect.is-retiring i{color:#dc2626}
+#editModal .rc-effect.is-retiring b{color:#991b1b}
+#editModal .rc-effect.is-warning{background:#fffbeb;border-color:#fde68a;color:#78350f}
+#editModal .rc-effect.is-warning i{color:#d97706}
+#editModal .rc-effect.is-warning b{color:#92400e}
+
+/* The reason that was already recorded. archive_reason was written by the API
+   but read by nothing, so a saved reason was invisible. Shown read-only. */
+#editModal .rc-previous{
+    display:flex;align-items:flex-start;gap:8px;margin:0 0 14px;padding:9px 12px;
+    border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;
+    font-size:11.5px;line-height:1.5;color:#64748b;
+}
+#editModal .rc-previous i{color:#94a3b8;margin-top:2px;flex:0 0 auto}
+#editModal .rc-previous b{font-weight:700;color:#334155}
+#editModal .rc-previous[hidden]{display:none}
+
+/* Fields that only make sense for some outcomes. */
+#editModal .rc-conditional[hidden]{display:none}
+#editModal .rc-conditional{animation:rcFade .16s ease}
+@keyframes rcFade{from{opacity:0}to{opacity:1}}
+#editModal .rc-required{color:#dc2626;font-weight:700}
+@media(max-width:560px){#editModal .rc-choices{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:380px){#editModal .rc-choices{grid-template-columns:1fr}}
+
 /* Notices */
 #assignModal .rfid-notice, #editModal .rfid-notice{
     flex:0 0 auto;margin:0;padding:12px 22px;font-size:12px;line-height:1.5;color:#475569;
@@ -1687,46 +1748,91 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
                 </div>
             </div>
 
-            <!-- What you can change. -->
+            <!-- The reason already on record. Shown only when there is one, so a
+                 second visit tells you what happened last time. -->
+            <div class="rc-previous" id="editPrevious" hidden>
+                <i class="fas fa-rotate-left"></i>
+                <span>Already recorded: <b id="editPrevReason">&mdash;</b><span id="editPrevMeta"></span></span>
+            </div>
+
+            <!-- What you can change: one decision, not two. -->
             <div class="form-section">
                 <div class="form-section-header">
                     <div class="form-section-icon"><i class="fas fa-sliders"></i></div>
-                    <div class="form-section-title">Update</div>
+                    <div class="form-section-title">What happened to this card?</div>
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="editStatus">Status</label>
-                        <div class="rc-select">
-                            <select id="editStatus" class="form-control">
-                                <option value="active">Active</option>
-                                <option value="expired">Expired</option>
-                                <option value="lost">Lost</option>
-                                <option value="inactive">Inactive</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="editExpiryDate">Expiry date</label>
-                        <input type="date" id="editExpiryDate" class="form-control" />
-                    </div>
+
+                <div class="rc-choices" role="radiogroup" aria-labelledby="editChoicesLabel">
+                    <span id="editChoicesLabel" hidden>What happened to this card?</span>
+
+                    <label class="rc-choice">
+                        <input type="radio" name="editOutcome" value="keep" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Still in use</span>
+                            <span class="rc-choice-meta">stays active</span>
+                        </span>
+                    </label>
+
+                    <label class="rc-choice is-warning">
+                        <input type="radio" name="editOutcome" value="lost" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Reported lost</span>
+                            <span class="rc-choice-meta">marked lost</span>
+                        </span>
+                    </label>
+
+                    <label class="rc-choice is-retiring">
+                        <input type="radio" name="editOutcome" value="transfer" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Transferred out</span>
+                            <span class="rc-choice-meta">archived</span>
+                        </span>
+                    </label>
+
+                    <label class="rc-choice is-retiring">
+                        <input type="radio" name="editOutcome" value="dropout" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Dropped out</span>
+                            <span class="rc-choice-meta">archived</span>
+                        </span>
+                    </label>
+
+                    <label class="rc-choice is-retiring">
+                        <input type="radio" name="editOutcome" value="graduate" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Graduated</span>
+                            <span class="rc-choice-meta">archived</span>
+                        </span>
+                    </label>
+
+                    <label class="rc-choice is-warning">
+                        <input type="radio" name="editOutcome" value="damaged" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Damaged / expired</span>
+                            <span class="rc-choice-meta">marked expired</span>
+                        </span>
+                    </label>
+
+                    <label class="rc-choice is-retiring">
+                        <input type="radio" name="editOutcome" value="other" class="rc-choice-input" form="editCardForm">
+                        <span class="rc-choice-body">
+                            <span class="rc-choice-label">Something else</span>
+                            <span class="rc-choice-meta">archived &mdash; needs a note</span>
+                        </span>
+                    </label>
                 </div>
-                <div class="form-group">
-                    <label for="editStatusReason">Reason for change</label>
-                    <div class="rc-select">
-                        <select id="editStatusReason" class="form-control">
-                            <option value="">&mdash; Select reason &mdash;</option>
-                            <option value="active">Active</option>
-                            <option value="graduated">Graduated</option>
-                            <option value="lost_card">Lost Card</option>
-                            <option value="dropped_out">Dropped Out</option>
-                            <option value="transferred">Transferred</option>
-                            <option value="inactive">Inactive</option>
-                            <option value="other">Other</option>
-                        </select>
-                    </div>
+
+                <!-- Fills in when a choice is made, and says only what will
+                     really happen. -->
+                <div class="rc-effect" id="editEffect" role="status" aria-live="polite"></div>
+
+                <div class="form-group rc-conditional" id="editExpiryWrap" hidden style="margin-top:12px">
+                    <label for="editExpiryDate">Expiry date</label>
+                    <input type="date" id="editExpiryDate" class="form-control" />
                 </div>
-                <div class="form-group">
-                    <label for="editNotes">Notes</label>
+
+                <div class="form-group rc-conditional" id="editNotesWrap" style="margin-top:12px">
+                    <label for="editNotes">Notes <span class="rc-required" id="editNotesRequired" hidden>*</span></label>
                     <textarea id="editNotes" class="form-control" rows="3" placeholder="Anything the next person should know about this card."></textarea>
                 </div>
             </div>
@@ -1735,8 +1841,8 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 
             <div class="rfid-modal-actions">
                 <button type="button" class="btn btn-light" data-close-modal="edit">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="editSubmitBtn">
-                    <i class="fas fa-save"></i> Save Changes
+                <button type="submit" class="btn btn-primary" id="editSubmitBtn" disabled>
+                    <i class="fas fa-save"></i> <span id="editSubmitLabel">Save Changes</span>
                 </button>
             </div>
         </form>
@@ -2332,6 +2438,109 @@ document.getElementById('assignCardForm')?.addEventListener('submit', async func
     }
 });
 // â”€â”€ Edit modal â”€â”€
+// One outcome = one (status, reason) pair. The old modal had two independent
+// selects and could save status=active with reason=graduated; here a choice
+// always writes both, so they cannot disagree.
+//
+// `reason` is the value written to archive_reason, which the API allow-list
+// accepts. The page used to send `status_reason`, which that allow-list drops
+// silently, so the chosen reason was never actually saved.
+const EDIT_OUTCOMES = {
+    keep:     { status: 'active',   reason: 'active',      label: 'Still in use',      verb: 'Save Changes',   effect: 'keep' },
+    lost:     { status: 'lost',     reason: 'lost_card',   label: 'Reported lost',     verb: 'Mark Card Lost', effect: 'warning' },
+    transfer: { status: 'archived', reason: 'transferred', label: 'Transferred out',   verb: 'Archive Card',   effect: 'retiring' },
+    dropout:  { status: 'archived', reason: 'dropped_out', label: 'Dropped out',       verb: 'Archive Card',   effect: 'retiring' },
+    graduate: { status: 'archived', reason: 'graduated',   label: 'Graduated',         verb: 'Archive Card',   effect: 'retiring' },
+    damaged:  { status: 'expired',  reason: 'damaged',     label: 'Damaged / expired', verb: 'Mark Expired',   effect: 'warning' },
+    other:    { status: 'inactive', reason: 'other',       label: 'Something else',    verb: 'Archive Card',   effect: 'retiring' }
+};
+
+// Reason -> how it reads. Covers every value the old select could write, so
+// rows saved before this change still show a sensible label.
+const EDIT_REASON_LABELS = {
+    'active': 'Active', 'graduated': 'Graduated', 'lost_card': 'Reported lost',
+    'dropped_out': 'Dropped out', 'transferred': 'Transferred to another school',
+    'inactive': 'Inactive', 'other': 'Other reason', 'damaged': 'Damaged'
+};
+
+const EDIT_STATUS_LABEL = {
+    active: 'Active', lost: 'Lost', expired: 'Expired',
+    inactive: 'Inactive', archived: 'Archived', available: 'Available'
+};
+
+// Reverse lookup: given what is stored, which tile represents it. Falls back to
+// matching on status alone so rows with no reason still preselect.
+function matchEditOutcome(status, reason) {
+    if (reason) {
+        for (const key of Object.keys(EDIT_OUTCOMES)) {
+            if (EDIT_OUTCOMES[key].reason === reason) return key;
+        }
+    }
+    if (status === 'lost') return 'lost';
+    if (status === 'expired') return 'damaged';
+    if (status === 'active') return 'keep';
+    // archived/inactive with an unrecognised reason: still retired, so preselect
+    // the generic retirement rather than a specific claim we cannot support.
+    if (status === 'archived' || status === 'inactive') return 'other';
+    return 'keep';
+}
+
+let editHolderName = 'the assigned student';
+let editHolderAssigned = true;
+
+function describeEditOutcome(key) {
+    const o = EDIT_OUTCOMES[key];
+    if (!o) return '';
+    const head = '<b>' + o.label + '</b> ';
+
+    if (o.effect === 'keep') {
+        return head + (editHolderAssigned
+            ? 'keeps this card active and assigned to ' + editHolderName + '.'
+            : 'keeps this card active and available to assign.');
+    }
+    // The PUT does not cascade to student_ids, so an assigned student's ID
+    // record keeps pointing at this card. Say so rather than implying a clean
+    // unlink. An unassigned card has no such record, so do not claim one.
+    const tail = editHolderAssigned
+        ? ' The student’s ID record still points at this card.'
+        : ' The card is unassigned, so there is no student record to update.';
+    return head + 'marks this card <b>' + (EDIT_STATUS_LABEL[o.status] || o.status) +
+           '</b> and records the reason <b>' + (EDIT_REASON_LABELS[o.reason] || o.reason) +
+           '</b>.' + tail;
+}
+
+function applyEditOutcome(key) {
+    const o = EDIT_OUTCOMES[key];
+    if (!o) return;
+
+    setEditStatusPill(o.status);
+
+    const effect = document.getElementById('editEffect');
+    // o.effect is 'retiring'/'warning' to match the .rc-effect.is-* CSS classes.
+    effect.className = 'rc-effect' + (o.effect === 'keep' ? '' : ' is-' + o.effect);
+    const icon = o.effect === 'keep'
+        ? 'fas fa-check-circle'
+        : (o.effect === 'warning' ? 'fas fa-exclamation-triangle' : 'fas fa-archive');
+    effect.innerHTML = '<i class="' + icon + '"></i><span>' + describeEditOutcome(key) + '</span>';
+
+    document.getElementById('editSubmitLabel').textContent = o.verb;
+    const btn = document.getElementById('editSubmitBtn');
+    if (btn) btn.disabled = false;
+
+    // An expiry only means something while the card is in use.
+    document.getElementById('editExpiryWrap').hidden = (o.status !== 'active');
+
+    // "Something else" is the one choice we cannot describe on its own.
+    document.getElementById('editNotesRequired').hidden = (key !== 'other');
+}
+
+// The radios sit inside the form, so one delegated listener covers all of them.
+document.getElementById('editCardForm')?.addEventListener('change', function (e) {
+    if (e.target && e.target.name === 'editOutcome') {
+        applyEditOutcome(e.target.value);
+    }
+});
+
 async function openEditModal(id) {
     const m = document.getElementById('editModal');
     if (!m) return;
@@ -2347,13 +2556,41 @@ async function openEditModal(id) {
         document.getElementById('editUid').textContent = c.card_uid;
         document.getElementById('editStudentName').textContent = c.student_name || 'Unassigned';
         document.getElementById('editStudentNumber').textContent = c.student_number || '';
-        document.getElementById('editStatus').value = c.status;
+        editHolderAssigned = !!c.student_name;
+        editHolderName = c.student_name
+            ? (c.student_name + (c.student_number ? ' (' + c.student_number + ')' : ''))
+            : 'nobody';
+
         setEditStatusPill(c.status);
-        document.getElementById('editStatusReason').value = c.status_reason || '';
+
+        // archive_reason is what the API stores and returns. The old code read
+        // c.status_reason, which never exists, so a saved reason never appeared.
+        const prevReason = c.archive_reason || '';
+        const prev = document.getElementById('editPrevious');
+        if (prevReason) {
+            document.getElementById('editPrevReason').textContent = EDIT_REASON_LABELS[prevReason] || prevReason;
+            const changed = c.updated_at || c.updated_date;
+            document.getElementById('editPrevMeta').textContent = changed
+                ? ' — last changed ' + new Date(changed).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'2-digit' })
+                : '';
+            prev.hidden = false;
+        } else {
+            prev.hidden = true;
+        }
+
         document.getElementById('editExpiryDate').value = c.expiry_date || '';
         document.getElementById('editNotes').value = c.notes || '';
         const updated = c.updated_at || c.updated_date;
         document.getElementById('editUpdatedAt').textContent = updated ? new Date(updated).toLocaleString(undefined, { year:'numeric', month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : 'Never';
+
+        // Preselect what is already true, then re-apply so the consequence line,
+        // the status pill, the conditional fields and the Save verb are all
+        // correct the moment the modal opens.
+        const key = matchEditOutcome(c.status, prevReason);
+        const radio = document.querySelector('input[name="editOutcome"][value="' + key + '"]');
+        if (radio) radio.checked = true;
+        applyEditOutcome(key);
+
         m.classList.add('active');
         document.body.style.overflow = 'hidden';
     } catch (e) {
@@ -2379,26 +2616,43 @@ function setEditStatusPill(value) {
     pill.setAttribute('data-status', v);
     pill.className = 'rc-record-status ' + (EDIT_STATUS_TONE[v] || EDIT_STATUS_TONE.active);
 }
-document.getElementById('editStatus')?.addEventListener('change', function () {
-    setEditStatusPill(this.value);
-});
-
 document.getElementById('editCardForm')?.addEventListener('submit', async function (e) {
     e.preventDefault();
     const id = document.getElementById('editCardId').value;
     if (!id) return;
+
+    const chosen = this.querySelector('input[name="editOutcome"]:checked');
+    if (!chosen) {
+        showToast('Choose what happened to this card.', 'error');
+        return;
+    }
+    const outcome = EDIT_OUTCOMES[chosen.value];
+    if (!outcome) return;
+
+    // "Something else" is only meaningful with a note explaining it.
+    const notes = document.getElementById('editNotes').value.trim();
+    if (chosen.value === 'other' && !notes) {
+        showToast('Add a note explaining the reason.', 'error');
+        document.getElementById('editNotes').focus();
+        return;
+    }
+
     const submitBtn = document.getElementById('editSubmitBtn');
+    const btnLabel = document.getElementById('editSubmitLabel');
+    const resting = btnLabel.textContent;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    btnLabel.textContent = 'Saving...';
     try {
         const res = await fetch('../api/rfid.php?id=' + id, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                status: document.getElementById('editStatus').value,
-                status_reason: document.getElementById('editStatusReason').value,
-                expiry_date: document.getElementById('editExpiryDate').value,
-                notes: document.getElementById('editNotes').value
+                status: outcome.status,
+                // archive_reason, per the API's allow-list. The old payload key
+                // `status_reason` was filtered out server-side and never stored.
+                archive_reason: outcome.reason,
+                expiry_date: outcome.status === 'active' ? document.getElementById('editExpiryDate').value : '',
+                notes: notes
             })
         });
         const data = await res.json();
@@ -2408,12 +2662,12 @@ document.getElementById('editCardForm')?.addEventListener('submit', async functi
         } else {
             showToast(data.message || 'Update failed.', 'error');
             submitBtn.disabled = false;
-            submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+            btnLabel.textContent = resting;
         }
     } catch (err) {
         showToast('Network error. Please try again.', 'error');
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+        btnLabel.textContent = resting;
     }
 });
 
