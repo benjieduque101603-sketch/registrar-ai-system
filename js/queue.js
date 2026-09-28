@@ -327,7 +327,7 @@
                     var isNew = s && lastServing[slot.window] !== undefined && lastServing[slot.window] !== key;
                     lastServing[slot.window] = key;
                     sh += '<div class="win-slot' + (s ? ' busy' : ' idle') + (isNew ? ' calling' : '') + '">' +
-                        '<div class="win-head"><i class="fas fa-door-open"></i> Window ' + slot.window + '</div>' +
+                        '<div class="win-head">Window ' + slot.window + '</div>' +
                         (s
                             ? '<div class="win-num">' + esc(s.display_number) + '</div>' +
                               '<div class="win-name">' + esc(s.student_name) + '</div>' +
