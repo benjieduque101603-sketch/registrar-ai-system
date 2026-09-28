@@ -1,9 +1,9 @@
-﻿/* ============================================================
+/* ============================================================
    STATUS-TRACKER.CSS
    The registrar's desk: a rail of work beside a directory.
 
    Built entirely on the tokens the rest of the application already
-   defines â€” --brand-500, --success-*, --danger-*, --warning-600,
+   defines — --brand-500, --success-*, --danger-*, --warning-600,
    --surface, --border, --text-*. An earlier pass invented a warm
    "ledger paper" palette that fought the blue system this app uses
    everywhere else; the parchment is gone.
@@ -86,7 +86,7 @@ body[data-page="status-tracker"] .st-desk-grid{
 
 /* â”€â”€ Left rail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    The work. Needs-a-decision on top, status counts below, and the
-   counts double as filters â€” which is why the separate distribution
+   counts double as filters — which is why the separate distribution
    bar and the pill grid are gone. Three renderings of one column of
    data, of which one was actionable. */
 body[data-page="status-tracker"] .st-rail{
@@ -397,6 +397,29 @@ body[data-page="status-tracker"] .st-cell-name{
   font-size:13px;font-weight:600;color:var(--text-strong);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
+/* The program acronym.
+   A small tinted chip rather than plain text, so the column reads as a
+   set of tags at a glance and one narrow column carries what used to be
+   the widest cell in the table. Tabular figures, because these line up
+   in a column and the default proportional face makes them look ragged.
+   A dashed underline marks it as an abbreviation - the full program name
+   is one hover away, and the dash is the conventional signal that this
+   is a short form of something longer rather than the whole value. */
+body[data-page="status-tracker"] .st-prog{
+  display:inline-block;
+  font-family:var(--st-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-size:10.5px;font-weight:600;letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;
+  color:var(--brand-700);background:var(--brand-50);
+  border:1px solid var(--brand-100);
+  border-radius:6px;padding:2px 7px;
+  white-space:nowrap;cursor:help;
+  transition:background .12s,border-color .12s;
+}
+body[data-page="status-tracker"] .st-prog:hover{
+  background:var(--brand-100);border-color:var(--brand-200);
+}
+
 body[data-page="status-tracker"] .st-cell-num{font-size:11px;color:var(--text-subtle)}
 body[data-page="status-tracker"] .st-cell-when{color:var(--text-muted);font-size:12.5px;white-space:nowrap}
 body[data-page="status-tracker"] .st-muted{color:var(--text-subtle)}

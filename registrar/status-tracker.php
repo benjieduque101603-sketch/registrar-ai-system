@@ -1,7 +1,7 @@
-﻿<?php
+<?php
 // ============================================================
 //  REGISTRAR/STATUS-TRACKER.PHP
-//  Student Status Tracker Ã¢â‚¬â€ AI-powered decision console.
+//  Student Status Tracker — AI-powered decision console.
 // ============================================================
 
 require_once __DIR__ . '/../shared/security_headers.php';
@@ -13,7 +13,7 @@ require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/status_evidence.php';
 
 // Who needs a decision today, found by the same contradiction rules the
-// "Check what I missed" button runs â€” computed here so the first screen
+// "Check what I missed" button runs — computed here so the first screen
 // answers that question without a click, and so the count is not a
 // client-side guess. A source that is missing is reported rather than
 // counted as zero findings.
@@ -224,7 +224,7 @@ include '../includes/sidebar.php';
                   <span class="st-rail-item-name"><?= htmlspecialchars($q['student_name']) ?></span>
                   <span class="st-rail-item-badge" style="background:<?= $m['bg'] ?>;color:<?= $m['color'] ?>"><?= htmlspecialchars($q['current_status'] ?: 'unset') ?></span>
                 </span>
-                <span class="st-rail-item-why"><?= htmlspecialchars(implode(' Â· ', array_column($q['issues'], 'title'))) ?></span>
+                <span class="st-rail-item-why"><?= htmlspecialchars(implode(' · ', array_column($q['issues'], 'title'))) ?></span>
               </button>
             </li>
           <?php endforeach; ?>
@@ -397,7 +397,7 @@ include '../includes/sidebar.php';
         <thead>
           <tr>
             <th>Student</th>
-            <th>Course</th>
+            <th>Program</th>
             <th>Status</th>
             <th>Last change</th>
             <th>Attention</th>
@@ -436,7 +436,19 @@ include '../includes/sidebar.php';
                   <?php if ($flag): ?><span class="st-flagdot" title="This record contradicts itself"></span><?php endif; ?>
                 </div>
               </td>
-              <td><?= htmlspecialchars($s['course'] ?: 'â€”') ?></td>
+              <?php // The program, abbreviated. Printed in full it takes most
+                    // of the cell and pushes status and attention off to
+                    // the right. The full name stays in the title, so the
+                    // acronym compresses the column without discarding
+                    // what the record actually says.
+              $acronym = courseAcronym($s['course'] ?? ''); ?>
+              <td>
+                <?php if ($acronym === ''): ?>
+                  <span class="st-muted">&mdash;</span>
+                <?php else: ?>
+                  <span class="st-prog" title="<?= htmlspecialchars(trim((string) $s['course'])) ?>"><?= htmlspecialchars($acronym) ?></span>
+                <?php endif; ?>
+              </td>
               <td><span class="st-badge" style="background:<?= $meta['bg'] ?>;color:<?= $meta['color'] ?>"><?= htmlspecialchars(ucwords(str_replace('-', ' ', (string) $s['status']))) ?></span></td>
               <td class="st-cell-when"><?= $s['last_change']
                     ? date('M j, Y', strtotime((string) $s['last_change']))
@@ -527,7 +539,7 @@ include '../includes/sidebar.php';
         <div class="st-modal-ai-lbl"><i class="fas fa-robot"></i> What to verify</div>
         <span class="st-case-src" id="modalCaseSrc"></span>
       </div>
-      <div class="st-case-note" id="modalCaseNote">Assembling the recordâ€¦</div>
+      <div class="st-case-note" id="modalCaseNote">Assembling the record…</div>
       <div class="st-case-body">
         <div class="st-case-col">
           <h4>Flags</h4>
@@ -857,7 +869,7 @@ window.dismissRec=dismissRec;
 
 /* --- Attention Dots Loader ---
    The endpoint this calls was named status_risks, and the API only ever
-   defined student_risks â€” so every request fell through to "Unknown
+   defined student_risks — so every request fell through to "Unknown
    action". The reply was HTTP 200, so nothing threw; the JSON simply had
    no risks key, and the whole Risk column sat blank with no error
    anywhere. Both names now resolve, and an empty id list means "the
@@ -928,7 +940,7 @@ fetchStudentHistory(id);
 /* --- Assemble a case ---
    Replaces the old "Generate AI profile". It called action=profile, which
    built its brief with sprintf('%s is currently listed as %s...') and
-   returned source:'rules' â€” it never called a model at all, so a button
+   returned source:'rules' — it never called a model at all, so a button
    labelled AI was showing a fill-in-the-blank. This panel renders real
    cross-module evidence and the questions that evidence raises. */
 async function assembleCase(){
@@ -940,7 +952,7 @@ const flagEl=document.getElementById('modalCaseFlags');
 const evEl=document.getElementById('modalCaseEvidence');
 const srcEl=document.getElementById('modalCaseSrc');
 if(btn){btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Reading';btn.disabled=true;}
-if(noteEl)noteEl.textContent='Reading the recordâ€¦';
+if(noteEl)noteEl.textContent='Reading the record…';
 if(flagEl)flagEl.innerHTML='<div class="st-modal-empty"><i class="fas fa-spinner fa-spin"></i> Working</div>';
 if(evEl)evEl.innerHTML='<div class="st-modal-empty"><i class="fas fa-inbox"></i> Not read yet</div>';
 try{
@@ -987,9 +999,9 @@ const pend=(disc.pending||[]).length;
 const res=disc.resolved||0;
 if(pend||res)rows.push(['Disciplinary cases',pend+' pending, '+res+' closed']);
 const docs=ev.documents||{};
-if(docs.open||docs.held)rows.push(['Document requests',docs.open+' open'+(docs.held?(' Â· '+docs.held+' on hold'):'')]);
+if(docs.open||docs.held)rows.push(['Document requests',docs.open+' open'+(docs.held?(' · '+docs.held+' on hold'):'')]);
 const grades=ev.grades||[];
-if(grades.length)rows.push(['GWA (newest first)',grades.slice(0,4).map(g=>Number(g.gwa).toFixed(2)).join(' â†’ ')]);
+if(grades.length)rows.push(['GWA (newest first)',grades.slice(0,4).map(g=>Number(g.gwa).toFixed(2)).join(' ’ ')]);
 if(ev.window&&ev.window.end_date)rows.push(['Status window','ended '+String(ev.window.end_date).slice(0,10)]);
 rows.push(['Guardian',ev.has_guardian?'on file':'none on file']);
 if(ev.last_scan)rows.push(['Last card scan',String(ev.last_scan).slice(0,16).replace('T',' ')]);

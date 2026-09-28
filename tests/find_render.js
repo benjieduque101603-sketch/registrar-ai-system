@@ -1,4 +1,4 @@
-﻿// Render the drawer's finding cards without a browser, and assert their
+// Render the drawer's finding cards without a browser, and assert their
 // structure.
 //
 //   node tests/find_render.js

@@ -841,6 +841,94 @@ function getStatusLabel($status) {
 }
 
 /**
+ * A short, human-readable acronym for a program.
+ *
+ * The `course` column is free text and the office writes it three
+ * different ways: "BS Computer Science", "BSED", and "BACHELOR OF
+ * SCIENCE IN INFORMATION TECHNOLOGY (BSIT)" are all rows in the same
+ * table. Printed in full, the long form takes most of a table cell and
+ * pushes the columns that matter - the status, the attention level -
+ * off to the right.
+ *
+ * Three cases, in order of confidence:
+ *
+ *   1. An acronym is already written out in brackets, as the long form
+ *      usually is. That is authoritative and is used verbatim.
+ *   2. The value is already short and looks like an acronym. Used as is.
+ *   3. Otherwise the initials of the significant words, with the
+ *      connective words dropped, because "Bachelor of Science in
+ *      Information Technology" should not read "BOSIIT".
+ *
+ * Never returns an empty string, and never silently loses the program:
+ * the caller is expected to keep the full name in a title attribute, so
+ * the abbreviation is a compression of the record rather than a
+ * replacement for it.
+ *
+ * @param string $course
+ * @return string 1-6 characters, upper case.
+ */
+function courseAcronym($course) {
+    $course = trim((string) $course);
+    if ($course === '') {
+        return '';
+    }
+
+    // 1. An acronym in brackets: "BACHELOR OF SCIENCE IN IT (BSIT)".
+    if (preg_match('/\(([A-Za-z0-9&.\- ]{2,10})\)\s*$/', $course, $m)) {
+        $inner = strtoupper(trim($m[1]));
+        if (strlen($inner) <= 6) {
+            return $inner;
+        }
+        // Too long to be an acronym - it is a note, not a short form. Drop
+        // it before taking initials, or its first character lands in the
+        // result and the column reads "BSS(".
+        $course = rtrim(trim(substr($course, 0, strrpos($course, '('))));
+    }
+
+    // 2. Already an acronym: short, and not a sentence.
+    if (strlen($course) <= 8 && !preg_match('/\s{2,}/', $course)) {
+        return strtoupper($course);
+    }
+
+    // 3. Initials of the significant words.
+    // 3. Initials of the significant words. The delimiter class escapes the
+    // slash as well as the hyphen: an unescaped "/" ends the pattern, and
+    // the result is a preg_split() that returns false and then counts as
+    // an array a few lines later.
+    $filler = ['of', 'in', 'the', 'and', 'for', 'a', 'an', 'at', 'on', 'to'];
+    $words  = preg_split('/[\s\-\/]+/', $course, -1, PREG_SPLIT_NO_EMPTY);
+    if (!is_array($words)) {
+        $words = [$course];
+    }
+    $keep   = [];
+    foreach ($words as $w) {
+        $lower = strtolower($w);
+        if (in_array($lower, $filler, true)) {
+            continue;
+        }
+        $keep[] = $w;
+    }
+    // A name made only of filler words still has to yield something.
+    if (!$keep) {
+        $keep = $words;
+    }
+    if (count($keep) === 1 && strlen($keep[0]) > 4) {
+        // "Engineering" alone, or a single long word: take its start.
+        return strtoupper(substr($keep[0], 0, 4));
+    }
+
+    $out = '';
+    foreach ($keep as $w) {
+        $out .= strtoupper(mb_substr($w, 0, 1));
+        if (mb_strlen($out) >= 6) {
+            break;
+        }
+    }
+    return $out !== '' ? $out : strtoupper(substr($course, 0, 3));
+}
+
+
+/**
  * Canonical student-status label for the student portal.
  * Legacy values (probation / at-risk / loa) are folded into the
  * 5-value model: Enrolled, Active, Graduated, Transferred, Dropped.

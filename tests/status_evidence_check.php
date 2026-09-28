@@ -15,6 +15,7 @@
 
 require_once __DIR__ . '/../shared/config.php';
 require_once __DIR__ . '/../shared/database.php';
+require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/status_evidence.php';
 
 $db   = Database::getInstance();
@@ -255,6 +256,31 @@ try {
         array_merge(['no-such-status'], $roster)
     );
     check('an empty filter reports zero', $noneMatched === 0);
+
+    // -- Course acronym ---------------------------------------------
+    //
+    // The program column is free text and the office writes it three
+    // ways in the same table. Printed in full it took the widest cell in
+    // the directory, so it is abbreviated. These assert that the
+    // abbreviation is faithful in each of those forms and never returns
+    // something empty or absurd.
+    check('acronym from a bracketed long form',
+        courseAcronym('BACHELOR OF SCIENCE IN INFORMATION TECHNOLOGY (BSIT)') === 'BSIT');
+    check('acronym from initials',
+        courseAcronym('BS Computer Science') === 'BCS');
+    check('an existing acronym passes through',
+        courseAcronym('BSED') === 'BSED');
+    check('connective words are dropped',
+        courseAcronym('Bachelor of Arts in English Language') === 'BAEL');
+    check('two-word program keeps both initials',
+        courseAcronym('BS Business Administration') === 'BBA');
+    check('a single long word is truncated, not emptied',
+        strlen(courseAcronym('Engineering')) >= 3);
+    check('an empty course yields an empty acronym', courseAcronym('') === '');
+    check('a null course does not warn', courseAcronym(null) === '');
+    check('acronym is never longer than six characters', strlen(courseAcronym('Bachelor of Science in Information Technology')) <= 6);
+    check('a bracketed acronym longer than six falls back to initials',
+        courseAcronym('Bachelor of Science in Something (ABCDEFGHIJ)') === 'BSS');
 
 } finally {
     // Probe students cascade their child rows away with them. Deleted by
