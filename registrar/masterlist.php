@@ -391,16 +391,16 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                 <?php $i = 1; foreach ($tbl['rows'] as $student): ?>
                                     <tr style="border-bottom: 1px solid #e2e8f0;" data-student-id="<?= (int)$student['id'] ?>">
                                         <td style="padding: 8px 12px; text-align: center;"><input type="checkbox" class="student-cb" value="<?= (int)$student['id'] ?>" style="width:15px;height:15px;accent-color:#2563eb;"></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap;"><?= $i++ ?></td>
-                                        <td style="padding: 8px 12px; font-weight:600; font-size:12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['student_number']) ?>"><?= htmlspecialchars($student['student_number']) ?></td>
-                                        <td style="padding: 8px 12px; max-width: 200px; white-space: normal; word-break: break-word;"><a href="javascript:void(0)" onclick="viewStudent(<?= (int)$student['id'] ?>)" style="color:#2563eb;font-weight:600;text-decoration:none;cursor:pointer;"><?= htmlspecialchars($student['last_name']) ?>, <?= htmlspecialchars($student['first_name']) ?></a></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['course'] ?? 'N/A') ?>"><?= htmlspecialchars($student['course'] ?? 'N/A') ?></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['year_level'] ?? 'N/A') ?></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['school_year'] ?? '—') ?></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['semester'] ?? '—') ?></td>
-                                        <td class="ml-section-slot" style="padding: 8px 12px; white-space: nowrap;" title="Assigned by the receiving department"><span></span></td>
-                                        <td style="padding: 8px 12px; max-width: 150px; white-space: normal; word-break: break-word; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['adviser_name'] ?? '—') ?>"><?= htmlspecialchars($student['adviser_name'] ?? '—') ?></td>
-                                        <td style="padding: 8px 12px; white-space: nowrap;">
+                                        <td data-field="rowno" style="padding: 8px 12px; white-space: nowrap;"><?= $i++ ?></td>
+                                        <td data-field="student_number" style="padding: 8px 12px; font-weight:600; font-size:12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['student_number']) ?>"><?= htmlspecialchars($student['student_number']) ?></td>
+                                        <td data-field="name" style="padding: 8px 12px; max-width: 200px; white-space: normal; word-break: break-word;"><a href="javascript:void(0)" onclick="viewStudent(<?= (int)$student['id'] ?>)" style="color:#2563eb;font-weight:600;text-decoration:none;cursor:pointer;"><?= htmlspecialchars($student['last_name']) ?>, <?= htmlspecialchars($student['first_name']) ?></a></td>
+                                        <td data-field="course" style="padding: 8px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['course'] ?? 'N/A') ?>"><?= htmlspecialchars($student['course'] ?? 'N/A') ?></td>
+                                        <td data-field="year_level" style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['year_level'] ?? 'N/A') ?></td>
+                                        <td data-field="school_year" style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['school_year'] ?? '—') ?></td>
+                                        <td data-field="semester" style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['semester'] ?? '—') ?></td>
+                                        <td data-field="section" class="ml-section-slot" style="padding: 8px 12px; white-space: nowrap;" title="Assigned by the receiving department"><?= htmlspecialchars($student['section'] ?? '') ?></td>
+                                        <td data-field="adviser" style="padding: 8px 12px; max-width: 150px; white-space: normal; word-break: break-word; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['adviser_name'] ?? '—') ?>"><?= htmlspecialchars($student['adviser_name'] ?? '—') ?></td>
+                                        <td data-field="status" style="padding: 8px 12px; white-space: nowrap;">
                                             <span class="badge badge-<?= in_array($student['status'], ['active', 'enrolled'], true) ? 'success' : ($student['status'] === 'at-risk' || $student['status'] === 'probation' ? 'warning' : 'neutral') ?>">
                                                 <?= ucfirst($student['status'] ?? 'Active') ?>
                                             </span>
@@ -656,7 +656,14 @@ function selectedRows() {
     return Array.from(document.querySelectorAll('#masterlistContent .student-cb:checked'))
         .map(cb => cb.closest('tr'));
 }
-function exportSelectedCSV() { exportCSV(selectedRows()); }
+// A selection gets its own filename. Exporting twice used to write
+// masterlist-full-list.csv both times, so the second download landed on
+// the first and the registrar lost whichever one they wanted to keep.
+function exportSelectedCSV() {
+    const rows = selectedRows();
+    if (!rows.length) { showToast('Select at least one student first.', 'warning'); return; }
+    exportCSV(rows, 'masterlist-selection-' + rows.length + '-' + exportStamp() + '.csv');
+}
 function printSelected() { printRows(selectedRows()); }
 async function bulkArchive() {
     const rows = selectedRows();
@@ -678,34 +685,117 @@ async function bulkArchive() {
 }
 
 // ─── EXPORT CSV ──────────────────────────────────────────────
+// Columns are addressed by data-field, not by position. The old version
+// read t(2), t(3), t(4)... so inserting or reordering a column silently
+// exported the wrong data under a plausible header - the kind of mistake
+// nobody notices until a signed sheet is wrong.
+//
+// The header and the row are generated from the same list, so they cannot
+// drift apart either.
+const EXPORT_FIELDS = [
+    ['student_number', 'Student ID'],
+    ['name',           'Name'],
+    ['course',         'Course'],
+    ['year_level',     'Year'],
+    ['school_year',    'S.Y.'],
+    ['semester',       'Semester'],
+    ['section',        'Section Code'],
+    ['adviser',        'Adviser'],
+    ['status',         'Status'],
+];
+
+function cellText(row, field) {
+    const c = row.querySelector('[data-field="' + field + '"]');
+    return c ? c.textContent.trim() : '';
+}
+
+/**
+ * Pull the exportable rows out of the table.
+ * Returns { rows, skipped } so a short or malformed row is reported to
+ * the registrar rather than vanishing from the file without a word - a
+ * missing student in an official list is worse than a noisy export.
+ */
 function collectRowData(rows) {
     const out = [];
+    let skipped = 0;
     rows.forEach(row => {
-        const cols = row.querySelectorAll('td');
-        if (cols.length < 11) return;
-        const t = i => cols[i].textContent.trim();
-        out.push([t(2), t(3), t(4), t(5), t(6), t(7), t(8), t(9), t(10)]);
+        // A row with no student id cell is not a student row.
+        if (!row.querySelector('[data-field="student_number"]')) { skipped++; return; }
+        out.push(EXPORT_FIELDS.map(f => cellText(row, f[0])));
     });
-    return out;
+    return { rows: out, skipped: skipped };
 }
-function exportCSV(rows) {
-    rows = rows || Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    let csv = 'Student ID,Name,Course,Year,S.Y.,Semester,Section Code,Adviser,Status\n';
-    const escape = v => '"' + String(v).replace(/"/g, '""') + '"';
-    collectRowData(rows).forEach(r => csv += r.map(escape).join(',') + '\n');
-    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'masterlist-full-list.csv');
+
+/** RFC 4180 quoting, plus a guard against a value starting the file as a formula. */
+function csvCell(v) {
+    let s = String(v == null ? '' : v);
+    // Excel treats =, +, -, @ at the start of a cell as a formula. A name
+    // like "-Dela Cruz" would otherwise execute on open.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
 }
+
+function exportStamp() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+
+function exportCSV(rows, filename) {
+    const list = rows || Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
+    const { rows: data, skipped } = collectRowData(list);
+    if (!data.length) {
+        showToast('Nothing to export.', 'warning');
+        return;
+    }
+    // CRLF and a UTF-8 BOM. Without the BOM Excel on Windows reads the
+    // file as the local code page and mangles every accented name
+    // (ñ, é) and the em dash used for a blank field.
+    const header = EXPORT_FIELDS.map(f => csvCell(f[1])).join(',');
+    const body = data.map(r => r.map(csvCell).join(',')).join('\r\n');
+    const csv = '\uFEFF' + header + '\r\n' + body + '\r\n';
+    downloadBlob(
+        new Blob([csv], { type: 'text/csv;charset=utf-8;' }),
+        filename || ('masterlist-full-list-' + exportStamp() + '.csv')
+    );
+    if (skipped > 0) {
+        showToast('Exported ' + data.length + ' student(s). ' + skipped + ' row(s) were malformed and left out.', 'warning');
+    } else {
+        showToast('Exported ' + data.length + ' student(s).', 'success');
+    }
+}
+
+// A real SpreadsheetML workbook, not an HTML table wearing an .xls
+// extension. The old file was HTML, so Excel opened it with the
+// "the file format and extension don't match" warning and a yellow bar,
+// which reads as a corrupt download and trains people not to trust it.
 function exportExcel() {
-    const rows = Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr><th>#</th><th>Student ID</th><th>Name</th><th>Course</th><th>Year</th><th>S.Y.</th><th>Sem</th><th>Section Code</th><th>Adviser</th><th>Status</th></tr>';
-    rows.forEach(row => {
-        const cols = row.querySelectorAll('td');
-        if (cols.length < 11) return;
-        const cells = Array.from(cols).slice(0, 11).map(c => '<td>' + String(c.textContent.trim()).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</td>');
-        html += '<tr>' + cells.join('') + '</tr>';
-    });
-    html += '</table></body></html>';
-    downloadBlob(new Blob([html], { type: 'application/vnd.ms-excel' }), 'masterlist.xls');
+    const list = Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
+    const { rows: data, skipped } = collectRowData(list);
+    if (!data.length) {
+        showToast('Nothing to export.', 'warning');
+        return;
+    }
+    const esc = v => String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const xcell = v => '<Cell><Data ss:Type="String">' + esc(v) + '</Data></Cell>';
+
+    let xml = '<?xml version="1.0"?>\n'
+        + '<?mso-application progid="Excel.Sheet"?>\n'
+        + '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"\n'
+        + '          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n'
+        + '<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/></Style></Styles>\n'
+        + '<Worksheet ss:Name="Masterlist"><Table>\n'
+        + '<Row>' + EXPORT_FIELDS.map(f => '<Cell ss:StyleID="hdr"><Data ss:Type="String">' + esc(f[1]) + '</Data></Cell>').join('') + '</Row>\n';
+    data.forEach(r => { xml += '<Row>' + r.map(xcell).join('') + '</Row>\n'; });
+    xml += '</Table></Worksheet></Workbook>';
+
+    downloadBlob(
+        new Blob(['\uFEFF' + xml], { type: 'application/vnd.ms-excel;charset=utf-8;' }),
+        'masterlist-full-list-' + exportStamp() + '.xls'
+    );
+    showToast('Exported ' + data.length + ' student(s).'
+        + (skipped ? ' ' + skipped + ' malformed row(s) left out.' : ''), skipped ? 'warning' : 'success');
 }
 function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
@@ -782,11 +872,17 @@ function printRows(rows) {
             // table is its own list, not a page of a longer numbered run.
             let seq = 0;
             groupRows.forEach(row => {
-                const cols = row.querySelectorAll('td');
-                if (cols.length < 11) return;
-                const t = i => cols[i].textContent.trim();
-                w.document.write('<tr><td>' + (++seq) + '</td><td>' + t(2) + '</td><td>' + t(3) + '</td><td>' + t(4) +
-                    '</td><td>' + t(5) + '</td><td class="code"><span></span></td><td>' + t(9) + '</td><td>' + t(10) + '</td></tr>');
+                // By field, for the same reason the CSV does. t(2), t(3)...
+                // printed the wrong column as soon as one was inserted.
+                if (!row.querySelector('[data-field="student_number"]')) return;
+                w.document.write('<tr><td>' + (++seq) + '</td><td>' + cellText(row, 'student_number')
+                    + '</td><td>' + cellText(row, 'name')
+                    + '</td><td>' + cellText(row, 'course')
+                    + '</td><td>' + cellText(row, 'year_level')
+                    // The Section Code cell prints as an empty ruled box, the
+                    // same as on screen: the department fills it in by hand.
+                    + '</td><td class="code"><span></span></td><td>' + cellText(row, 'adviser')
+                    + '</td><td>' + cellText(row, 'status') + '</td></tr>');
             });
             w.document.write('</table>');
         });
