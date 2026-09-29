@@ -315,8 +315,8 @@ body[data-page="documents"] .table tbody td{padding:11px 14px;border-bottom:1px 
 body[data-page="documents"] .table tbody tr[data-doc]{cursor:pointer}
 body[data-page="documents"] .table tbody tr[data-doc]:hover{background:#eff6ff}
 body[data-page="documents"] .student-avatar{width:32px;height:32px;font-size:12px}
-body[data-page="documents"] .empty-state td{padding:0}
-body[data-page="documents"] .dq-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:220px;padding:34px 20px;text-align:center}
+body[data-page="documents"] td.empty-state{display:table-cell;height:300px;padding:0;vertical-align:middle;text-align:center}
+body[data-page="documents"] .dq-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:360px;box-sizing:border-box;padding:34px 20px;text-align:center}
 body[data-page="documents"] .dq-empty i{font-size:34px;color:#cbd5e1}
 body[data-page="documents"] .dq-empty p{margin:0;font-size:14px;font-weight:600;color:#64748b}
 body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
@@ -1999,7 +1999,8 @@ function applyFilters() {
     });
     // Say so plainly when nothing matched, instead of leaving a blank table.
     const noMatch = document.getElementById('docNoMatch');
-    if (noMatch) noMatch.style.display = visible === 0 ? '' : 'none';
+    const hasRequests = document.querySelector('table tbody tr[data-doc]') !== null;
+    if (noMatch) noMatch.style.display = hasRequests && visible === 0 ? '' : 'none';
     document.getElementById('showingCount').textContent = visible;
 }
 document.getElementById('docSearch').addEventListener('input', applyFilters);

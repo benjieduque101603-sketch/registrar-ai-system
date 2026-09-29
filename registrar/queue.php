@@ -77,6 +77,7 @@ body[data-page="console"] .chip.blue{background:#dbeafe;color:#1d4ed8}
 body[data-page="console"] .action-btn.delete{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
 body[data-page="console"] .action-btn.delete:hover{background:#dc2626;color:#fff}
 body[data-page="console"] .empty-state{color:#94a3b8}
+body[data-page="console"] td.empty-state{display:table-cell;height:300px;padding:0;vertical-align:middle;text-align:center}
 
 /* ── Side-by-side: now serving + waiting line ──────────── */
 .q-split{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,1.5fr);gap:16px;align-items:start;margin-bottom:16px}
