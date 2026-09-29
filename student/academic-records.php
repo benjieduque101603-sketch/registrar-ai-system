@@ -8,6 +8,7 @@
 require_once __DIR__ . '/../shared/security_headers.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/database.php';
+require_once __DIR__ . '/../shared/term_grades.php';
 
 $page_title = 'Academic Records';
 $APP_ROOT = '../';
@@ -42,17 +43,24 @@ foreach ($gradeRows as $g) {
 }
 
 // Summary
+//
+// GWA comes from careerGwa() in shared/term_grades.php, the same
+// function the registrar's audit and the Transcript of Records use. This
+// page previously averaged the legacy `grade` column inline over a
+// 1.0-3.0 range, while the registrar form writes `final_rating` on a
+// 1.0-5.0 scale and leaves `grade` NULL - so a student was shown an em
+// dash instead of a real GWA. See student/grades.php for the full note;
+// this second page carried the identical copy of the formula.
 $totalUnits = 0;
 $totalSubjects = count($gradeRows);
-$gradeValues = [];
 foreach ($gradeRows as $g) {
     $totalUnits += (float)($g['units'] ?? 0);
-    $gv = is_numeric($g['grade'] ?? null) ? (float)$g['grade'] : null;
-    if ($gv !== null && $gv <= 3.0 && $gv >= 1.0) {
-        $gradeValues[] = $gv;
-    }
 }
-$avgGrade = count($gradeValues) ? number_format(array_sum($gradeValues) / count($gradeValues), 2) : '—';
+$careerGwa = careerGwa(array_map(
+    static fn($t) => ['subjects' => $gradesByTerm[$t['id']] ?? []],
+    $terms
+));
+$avgGrade = $careerGwa !== null ? number_format($careerGwa, 2) : '—';
 ?>
 
 <main class="dashboard-main">

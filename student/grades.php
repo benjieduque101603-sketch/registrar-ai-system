@@ -7,6 +7,7 @@
 require_once __DIR__ . '/../shared/security_headers.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/database.php';
+require_once __DIR__ . '/../shared/term_grades.php';
 
 $page_title = 'Grades &amp; Academic History';
 $APP_ROOT = '../';
@@ -39,15 +40,29 @@ foreach ($gradeRows as $g) {
     $gradesByTerm[$g['academic_history_id']][] = $g;
 }
 
-// Summary
+// Summary.
+//
+// The GWA comes from careerGwa() in shared/term_grades.php - the same
+// function the registrar's audit, the Transcript of Records and the
+// document templates use. This page used to compute its own average
+// inline, over the legacy `grade` column, restricted to 1.0-3.0.
+//
+// That was not a cosmetic difference. The registrar form writes
+// `final_rating` on a 1.0-5.0 scale and leaves `grade` NULL, so the
+// inline loop found no usable value at all and the student was shown an
+// em dash for a term that really had a GWA of 1.77. One definition of
+// GWA now governs the whole system, and this page cannot drift from
+// the transcript again.
 $totalUnits = 0;
-$gradeValues = [];
 foreach ($gradeRows as $g) {
-    $totalUnits += (float)($g['units'] ?? 0);
-    $gv = is_numeric($g['grade'] ?? null) ? (float)$g['grade'] : null;
-    if ($gv !== null && $gv <= 3.0 && $gv >= 1.0) $gradeValues[] = $gv;
+    $totalUnits += (float) ($g['units'] ?? 0);
 }
-$avgGrade = count($gradeValues) ? number_format(array_sum($gradeValues) / count($gradeValues), 2) : '—';
+
+$careerGwa = careerGwa(array_map(
+    static fn($t) => ['subjects' => $gradesByTerm[$t['id']] ?? []],
+    $terms
+));
+$avgGrade = $careerGwa !== null ? number_format($careerGwa, 2) : '—';
 ?>
 
 <main class="dashboard-main">
@@ -129,10 +144,17 @@ $avgGrade = count($gradeValues) ? number_format(array_sum($gradeValues) / count(
                                 <td><?= htmlspecialchars((string)$g['units']) ?></td>
                                 <td>
                                     <?php
-                                    $gm = strtolower((string)($g['grade'] ?? ''));
-                                    $pcls = in_array($gm, ['f', '5.0', '4.0', 'inc', 'ng']) ? 'inactive' : 'active';
+                                    // final_rating is what the registrar form writes;
+                                    // `grade` is the legacy column it leaves NULL. Reading
+                                    // only the legacy one showed an em dash in every
+                                    // subject row, the same way the summary GWA did.
+                                    // Fall back, exactly as student/academic-records.php
+                                    // already did, so a row entered either way renders.
+                                    $shown = $g['final_rating'] ?? ($g['grade'] ?? '');
+                                    $gm = strtolower((string) $shown);
+                                    $pcls = in_array($gm, ['f', '5.0', '4.0', 'inc', 'ng', 'failed', 'dropped', 'incomplete']) ? 'inactive' : 'active';
                                     ?>
-                                    <span class="pill <?= $pcls ?>"><?= htmlspecialchars($g['grade'] ?? '—') ?></span>
+                                    <span class="pill <?= $pcls ?>"><?= htmlspecialchars($shown !== '' ? $shown : '—') ?></span>
                                 </td>
                                 <td style="font-size:13px;color:#64748b;"><?= htmlspecialchars($g['remarks'] ?? '—') ?></td>
                             </tr>
