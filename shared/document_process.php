@@ -296,8 +296,16 @@ function doc_next_step(array $row): ?array
 function doc_refresh_blocker(int $requestId): bool
 {
     $db = Database::getInstance();
+    // sla_days is optional: it arrives with migrations/document_walkin_only.sql.
+    // Naming it unconditionally made this function fatal on an un-migrated
+    // server, which broke every action that re-checks a hold. Probed the same
+    // way doc_hold_source() below probes for its columns, and a missing target
+    // is already handled downstream as "no promise made".
+    $catalogCols = array_column($db->fetchAll('SHOW COLUMNS FROM document_catalog'), 'Field');
+    $slaCol      = in_array('sla_days', $catalogCols, true) ? 'c.sla_days' : 'NULL AS sla_days';
+
     $row = $db->fetchOne(
-        "SELECT dr.*, c.sku, c.sla_days, c.requirement
+        "SELECT dr.*, c.sku, $slaCol, c.requirement
            FROM document_requests dr
            LEFT JOIN document_catalog c ON c.id = dr.catalog_id
           WHERE dr.id = ?",

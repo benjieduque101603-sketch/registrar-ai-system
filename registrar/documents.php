@@ -21,9 +21,24 @@ require_once __DIR__ . '/../shared/document_process.php';
 $db = Database::getInstance();
 
 // ── Requests ────────────────────────────────────────────────────
+// sla_days is selected only when the column is actually there. It is
+// added by migrations/document_walkin_only.sql, and naming it
+// unconditionally made this whole page fatal on any server that
+// migration had not been run against - "Unknown column 'c.sla_days'",
+// with the desk unable to reach the queue at all.
+//
+// A missing target is not an error: document_process.php already treats
+// a row with no sla_days as "no promise made", and the rest of this
+// module is written the same defensive way (it probes for
+// blocked_source rather than assuming it). This restores that rule -
+// one missing optional column degrades the overdue bar, it does not
+// take the page down.
+$catalogCols = array_column($db->fetchAll('SHOW COLUMNS FROM document_catalog'), 'Field');
+$hasSla      = in_array('sla_days', $catalogCols, true);
+
 $requests = $db->fetchAll(
     "SELECT dr.*, c.name AS catalog_name, c.sku, c.fee_type, c.base_fee,
-            c.requirement, c.sla_days,
+            c.requirement, " . ($hasSla ? 'c.sla_days' : 'NULL AS sla_days') . ",
             CONCAT(s.first_name, ' ', s.last_name) AS student_name,
             s.student_number
        FROM document_requests dr
