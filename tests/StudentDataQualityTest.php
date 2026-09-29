@@ -7,6 +7,41 @@ require_once __DIR__ . '/../shared/student_quality.php';
 
 final class StudentDataQualityTest extends TestCase
 {
+    /**
+     * The weights must total 100, so a complete record can actually score 100.
+     *
+     * `section` was removed as a weight - Class Scheduling owns it, so a
+     * Registrar could never fill it and every student was silently docked
+     * points for a field outside this office. Its 5 points moved to `course`.
+     *
+     * A concurrent branch made the same removal but set course to 12, which
+     * leaves the weights summing to 97: no student could ever reach 100, so
+     * every quality dot on the Students page was permanently amber and nothing
+     * in this suite noticed, because every existing assertion checks a record
+     * that is deliberately incomplete. This pins the total instead.
+     */
+    public function testWeightsTotalOneHundred(): void
+    {
+        $src = file_get_contents(__DIR__ . '/../shared/student_quality.php');
+
+        self::assertSame(
+            1,
+            preg_match('/\$weights\s*=\s*\[(.*?)\];/s', $src, $m),
+            'Could not read the $weights table out of shared/student_quality.php.'
+        );
+
+        preg_match_all("/'(\w+)'\s*=>\s*(\d+)/", $m[1], $pairs, PREG_SET_ORDER);
+        self::assertNotEmpty($pairs, 'The weights table parsed to nothing.');
+
+        $total = array_sum(array_map(static fn($p) => (int) $p[2], $pairs));
+        self::assertSame(
+            100,
+            $total,
+            'The data-quality weights no longer total 100, so a complete record cannot score 100. '
+            . 'Fields: ' . implode(', ', array_map(static fn($p) => $p[1] . '=' . $p[2], $pairs))
+        );
+    }
+
     public function testBuildsFieldSpecificIssuesAndSafeRepairs(): void
     {
         $student = [

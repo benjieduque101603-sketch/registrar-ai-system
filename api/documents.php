@@ -397,14 +397,20 @@ try {
             // early on one — so the message here must not claim the hold
             // was re-derived. It says what is actually true: still held,
             // and by whose decision.
-            $before = $db->fetchOne(
-                "SELECT document_status, blocked_reason FROM document_requests WHERE id = ?", [$id]
-            );
+            // blocked_reason is optional: it arrives with
+            // migrations/document_walkin_only.sql. Naming it here made
+            // "re-check this request" fatal on an un-migrated server.
+            // Probed the same way the rest of the module probes, and a
+            // request with no hold recorded is simply not held.
+            $reqCols = array_column($db->fetchAll('SHOW COLUMNS FROM document_requests'), 'Field');
+            $holdCol = in_array('blocked_reason', $reqCols, true)
+                ? 'blocked_reason' : 'NULL AS blocked_reason';
+            $beforeSql = "SELECT document_status, $holdCol FROM document_requests WHERE id = ?";
+
+            $before = $db->fetchOne($beforeSql, [$id]);
             $wasManual = doc_hold_source((int) $id) === 'registrar';
             doc_refresh_blocker((int) $id);
-            $after = $db->fetchOne(
-                "SELECT document_status, blocked_reason FROM document_requests WHERE id = ?", [$id]
-            );
+            $after = $db->fetchOne($beforeSql, [$id]);
             $isManual = doc_hold_source((int) $id) === 'registrar';
             $held = ($after['blocked_reason'] ?? null) !== null;
             $why  = ($isManual ? 'Held at your discretion: ' : 'Still waiting: ') . $after['blocked_reason'];

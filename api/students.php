@@ -840,7 +840,7 @@ try {
                 exit;
             }
 
-            $existing = $db->fetchOne("SELECT id, year_level FROM students WHERE id = ?", [$id]);
+            $existing = $db->fetchOne("SELECT id FROM students WHERE id = ?", [$id]);
             if (!$existing) {
                 echo json_encode(['success' => false, 'message' => 'Student not found.']);
                 exit;

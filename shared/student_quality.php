@@ -40,6 +40,13 @@ function studentQualityScoreValue(array $student): int
     // is what the Registrar does own, and what every Registrar-issued document
     // is built on. The weights still total 100, so scores stay comparable with
     // each other - which is the only comparison this column is ever used for.
+    //
+    // A concurrent pull also removed the section weight and set course to 12.
+    // Kept at 15 deliberately: with course at 12 the weights total 97, so a
+    // complete record could never score 100 and every student's quality dot was
+    // permanently amber. Nothing in the test suite pins this number, so it was a
+    // silent regression rather than a caught one. If course is ever
+    // re-weighted, the sum must stay at 100.
     $weights = [
         'student_number' => 10, 'first_name' => 10, 'last_name' => 10,
         'address' => 8, 'gender' => 8, 'birth_date' => 10, 'course' => 15,

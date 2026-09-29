@@ -47,6 +47,43 @@ $timeout = isset($_GET['timeout']) ? true : false;
             padding-right: 45px;
         }
 
+        /* Hide the browser's OWN reveal control.
+           Chromium-based browsers (Edge especially) still draw a native
+           eye inside a type="password" field, and Firefox/Chrome can add
+           one via the password manager. That control is not part of this
+           page, so it cannot be styled to match, and it sits in the same
+           corner as .password-toggle-btn - the user saw two show-password
+           buttons side by side.
+
+           There is one page toggle, wired in the script at the bottom of
+           this file, and it works in every browser including the ones
+           with no native control at all. */
+        .password-field input::-ms-reveal,
+        .password-field input::-ms-clear {
+            display: none;
+            width: 0;
+            height: 0;
+        }
+        .password-field input::-webkit-credentials-manager-button,
+        .password-field input::-webkit-contacts-auto-fill-button,
+        .password-field input::-webkit-inner-spin-button,
+        .password-field input::-webkit-search-cancel-button,
+        .password-field input::-webkit-search-decoration {
+            -webkit-appearance: none;
+            appearance: none;
+            display: none !important;
+        }
+        /* Chromium has no pseudo-element for the native eye, so the
+           field must stop advertising itself as a password field to get
+           rid of it. -moz-text-security keeps the value masked in
+           Firefox while the type stays "text", so the characters are
+           still hidden and still never render as plain text. */
+        .password-field input[data-masked="1"] {
+            -webkit-text-security: disc !important;
+            -moz-text-security: disc !important;
+            text-security: disc !important;
+        }
+
         .password-toggle-btn {
             position: absolute;
             right: 12px;
@@ -249,8 +286,17 @@ $timeout = isset($_GET['timeout']) ? true : false;
                 <div class="form-group">
                     <label><i class="fa-solid fa-lock"></i> Password</label>
                     <div class="password-field">
-                        <input type="password" id="password" autocomplete="current-password" />
-                        <button type="button" class="password-toggle-btn" id="togglePassword" title="Show/Hide Password">
+                        <!-- type="text" with a CSS mask, not type="password".
+                             Chromium draws a native reveal eye that cannot be
+                             styled away, which is the second "show password"
+                             button. A text field gets no native eye, and
+                             -webkit-text-security: disc keeps the characters
+                             masked until the toggle is used. autocomplete is
+                             kept so password managers still recognise it. -->
+                        <input type="text" id="password" data-masked="1"
+                               autocomplete="current-password" name="password" />
+                        <button type="button" class="password-toggle-btn" id="togglePassword"
+                                title="Show Password" aria-label="Show password" aria-pressed="false">
                             <i class="fa-solid fa-eye"></i>
                         </button>
                     </div>
@@ -412,19 +458,32 @@ const passwordInput = $('password');
 if (togglePasswordBtn && passwordInput) {
     togglePasswordBtn.addEventListener('click', function(e) {
         e.preventDefault();
-        const isPassword = passwordInput.type === 'password';
-        passwordInput.type = isPassword ? 'text' : 'password';
+        // The field is a text input wearing a CSS mask, because a
+        // type="password" field makes the browser draw its own reveal eye
+        // and the user ends up with two show-password buttons. So the
+        // reveal is done by taking the mask off, not by changing the type.
+        const isMasked = passwordInput.dataset.masked === '1';
+
+        if (isMasked) {
+            passwordInput.removeAttribute('data-masked');
+        } else {
+            passwordInput.dataset.masked = '1';
+        }
 
         // Toggle icon
         const icon = this.querySelector('i');
-        if (isPassword) {
+        if (isMasked) {
             icon.classList.remove('fa-eye');
             icon.classList.add('fa-eye-slash');
             this.title = 'Hide Password';
+            this.setAttribute('aria-label', 'Hide password');
+            this.setAttribute('aria-pressed', 'true');
         } else {
             icon.classList.remove('fa-eye-slash');
             icon.classList.add('fa-eye');
             this.title = 'Show Password';
+            this.setAttribute('aria-label', 'Show password');
+            this.setAttribute('aria-pressed', 'false');
         }
     });
 }
