@@ -42,25 +42,60 @@ foreach ($gradeRows as $g) {
     $gradesByTerm[$g['academic_history_id']][] = $g;
 }
 
-// Summary
-//
-// GWA comes from careerGwa() in shared/term_grades.php, the same
-// function the registrar's audit and the Transcript of Records use. This
-// page previously averaged the legacy `grade` column inline over a
+// ── Term picker ──────────────────────────────────────────────
+// Same picker as student/grades.php, driven by the same two helpers in
+// shared/term_grades.php so the two pages cannot disagree about which
+// terms exist or which one is selected.
+$allTerms    = $terms;
+$termOptions = studentTermOptions($allTerms);
+$selected    = resolveStudentTerm(
+    $termOptions,
+    $_GET['sy'] ?? null,
+    $_GET['sem'] ?? null
+);
+
+$terms = ($selected['sy'] === '' && $selected['sem'] === '')
+    ? []
+    : array_values(array_filter($allTerms, static function ($t) use ($selected) {
+        return (string) $t['school_year'] === $selected['sy']
+            && strcasecmp((string) $t['semester'], $selected['sem']) === 0;
+    }));
+
+// Summary. GWA comes from careerGwa() in shared/term_grades.php - the
+// same function the registrar's audit and the Transcript of Records use.
+// This page used to average the legacy `grade` column inline over a
 // 1.0-3.0 range, while the registrar form writes `final_rating` on a
-// 1.0-5.0 scale and leaves `grade` NULL - so a student was shown an em
-// dash instead of a real GWA. See student/grades.php for the full note;
-// this second page carried the identical copy of the formula.
-$totalUnits = 0;
-$totalSubjects = count($gradeRows);
-foreach ($gradeRows as $g) {
-    $totalUnits += (float)($g['units'] ?? 0);
+// 1.0-5.0 scale and leaves `grade` NULL, so a student saw an em dash
+// instead of a real GWA. See student/grades.php for the full note.
+//
+// The strip describes the term on screen; the career figures are the one
+// exception and deliberately stay put when the picker moves.
+$shownSubjects = [];
+foreach ($terms as $t) {
+    foreach ($gradesByTerm[$t['id']] ?? [] as $g) {
+        $shownSubjects[] = $g;
+    }
 }
-$careerGwa = careerGwa(array_map(
+
+$totalUnits    = 0;
+$totalSubjects = count($shownSubjects);
+foreach ($shownSubjects as $g) {
+    $totalUnits += (float) ($g['units'] ?? 0);
+}
+$termGwa  = careerGwa(array_map(
     static fn($t) => ['subjects' => $gradesByTerm[$t['id']] ?? []],
     $terms
 ));
-$avgGrade = $careerGwa !== null ? number_format($careerGwa, 2) : '—';
+$avgGrade = $termGwa !== null ? number_format($termGwa, 2) : '—';
+
+$careerTotal = careerGwa(array_map(
+    static fn($t) => ['subjects' => $gradesByTerm[$t['id']] ?? []],
+    $allTerms
+));
+$careerUnits = 0;
+foreach ($gradeRows as $g) {
+    $careerUnits += (float) ($g['units'] ?? 0);
+}
 ?>
 
 <main class="dashboard-main">
@@ -115,13 +150,67 @@ $avgGrade = $careerGwa !== null ? number_format($careerGwa, 2) : '—';
             </div>
         <?php else: ?>
 
+        <?php // The picker. Two selects and a button, submitted by GET so the
+              // choice survives a refresh and can be bookmarked. A form with a
+              // real submit button rather than an onchange handler, so Enter
+              // works and the page still functions without JavaScript. ?>
+        <form class="st-picker" method="get" action="academic-records.php">
+            <div class="st-picker-fields">
+                <label class="st-picker-field">
+                    <span>School Year</span>
+                    <select name="sy" class="form-control">
+                        <?php
+                        $years = [];
+                        foreach ($termOptions as $o) {
+                            if ($o['sy'] !== '' && !isset($years[$o['sy']])) {
+                                $years[$o['sy']] = $o['sy'];
+                            }
+                        }
+                        foreach ($years as $y): ?>
+                            <option value="<?= htmlspecialchars($y) ?>" <?= $selected['sy'] === $y ? 'selected' : '' ?>><?= htmlspecialchars($y) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label class="st-picker-field">
+                    <span>Semester</span>
+                    <select name="sem" class="form-control">
+                        <?php
+                        // Semesters the student actually has for the chosen
+                        // year, so the pair can never name a term that does
+                        // not exist.
+                        $sems = [];
+                        foreach ($termOptions as $o) {
+                            if ($o['sy'] !== $selected['sy']) { continue; }
+                            $sems[$o['sem']] = $o['sem'];
+                        }
+                        if (!$sems) {
+                            $sems[$selected['sem']] = $selected['sem'];
+                        }
+                        foreach ($sems as $sm): ?>
+                            <option value="<?= htmlspecialchars($sm) ?>" <?= strcasecmp($selected['sem'], $sm) === 0 ? 'selected' : '' ?>><?= htmlspecialchars($sm) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <button type="submit" class="btn btn-primary st-picker-go">View</button>
+            </div>
+            <p class="st-picker-note">
+                Showing <strong><?= htmlspecialchars($selected['label']) ?></strong>
+                <?php if ($careerTotal !== null): ?>
+                    &middot; Career GWA <strong><?= number_format($careerTotal, 2) ?></strong> across <?= number_format($careerUnits, 0) ?> units
+                <?php endif; ?>
+            </p>
+            <?php if ($selected['adjusted']): ?>
+                <p class="st-picker-warn" role="status">That term is not on your record. Showing your most recent term instead.</p>
+            <?php endif; ?>
+        </form>
+
         <!-- Summary strip -->
         <div class="status-strip" style="margin-top:24px;margin-bottom:24px;">
             <div class="s-item">
-                <div class="s-icon blue"><i class="fa-solid fa-layer-group"></i></div>
+                <div class="s-icon blue"><i class="fa-solid fa-calendar-days"></i></div>
                 <div>
-                    <div class="s-value"><?= count($terms) ?></div>
-                    <div class="s-label">Terms / Semesters</div>
+                    <div class="s-value"><?= htmlspecialchars($selected['sem'] !== '' ? $selected['sem'] : '—') ?></div>
+                    <div class="s-label">Semester Shown</div>
                 </div>
             </div>
             <div class="s-item">
@@ -135,14 +224,14 @@ $avgGrade = $careerGwa !== null ? number_format($careerGwa, 2) : '—';
                 <div class="s-icon purple"><i class="fa-solid fa-calculator"></i></div>
                 <div>
                     <div class="s-value"><?= htmlspecialchars($avgGrade) ?></div>
-                    <div class="s-label">Average Grade</div>
+                    <div class="s-label">Term GWA</div>
                 </div>
             </div>
             <div class="s-item">
                 <div class="s-icon yellow"><i class="fa-solid fa-scale-balanced"></i></div>
                 <div>
                     <div class="s-value"><?= number_format($totalUnits, 1) ?></div>
-                    <div class="s-label">Total Units</div>
+                    <div class="s-label">Term Units</div>
                 </div>
             </div>
         </div>
