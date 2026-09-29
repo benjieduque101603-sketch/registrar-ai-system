@@ -80,18 +80,31 @@ try {
     ]);
 
     // -- Balance against a status that should be terminal --
-    $owing = mkStudent($db, 'graduated', '2002-01-01');
+    //
+    // 'graduate', not 'graduated'. The five-value status model renamed this
+    // value, and isTerminalStudentStatus() matches the new one. Seeding the old
+    // token left this row on a status the column cannot store, so the sweep had
+    // nothing to match and the finding silently stopped firing - a test that
+    // reports a failure for the right reason but no longer describes a state
+    // the app can actually hold.
+    $owing = mkStudent($db, 'graduate', '2002-01-01');
     $ids[] = $owing;
     $db->insert('finance', ['student_id' => $owing, 'balance' => 4250.50]);
 
     // -- A window that closed in the past --
-    $expired = mkStudent($db, 'loa', '2003-04-04');
+    //
+    // 'loa' is retired, so there is no status to attach a leave window to any
+    // more: none of the five is time-boxed. This case now uses the tracker
+    // record alone - a change that stood for 120 days and was never revisited -
+    // which is the same evidence the old row was asserting, and is still a
+    // thing statusCohortFindings() can see.
+    $expired = mkStudent($db, 'active', '2003-04-04');
     $ids[] = $expired;
     $db->insert('status_tracker', [
         'student_id'     => $expired,
-        'previous_status'=> 'active',
-        'current_status' => 'loa',
-        'reason'         => 'Medical leave',
+        'previous_status'=> 'enrolled',
+        'current_status' => 'active',
+        'reason'         => 'Enrolled, no further change recorded',
         'changed_by'     => $uid,
         'created_at'     => date('Y-m-d H:i:s', strtotime('-120 days')),
         'effective_date' => date('Y-m-d', strtotime('-120 days')),
@@ -99,13 +112,20 @@ try {
     ]);
 
     // -- A window still running must not read as expired --
-    $current = mkStudent($db, 'loa', '2003-08-08');
+    //
+    // 'active', not 'loa'. No current status is time-boxed, so this row no
+    // longer describes a leave: it is a change 20 days old whose end_date is
+    // still in the future, which is the same negative case the assertion below
+    // cares about - a window that has NOT closed must not be reported as one
+    // that has. Seeding 'loa' put the row on a status the column cannot store,
+    // and MySQL silently truncated it to ''.
+    $current = mkStudent($db, 'active', '2003-08-08');
     $ids[] = $current;
     $db->insert('status_tracker', [
         'student_id'     => $current,
-        'previous_status'=> 'active',
-        'current_status' => 'loa',
-        'reason'         => 'Family matter',
+        'previous_status'=> 'enrolled',
+        'current_status' => 'active',
+        'reason'         => 'Confirmed attending',
         'changed_by'     => $uid,
         'created_at'     => date('Y-m-d H:i:s', strtotime('-20 days')),
         'end_date'       => date('Y-m-d', strtotime('+60 days')),
