@@ -371,15 +371,15 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                 <tr style="background: #1a2d4a; color: white;">
                                     <th style="padding: 10px 12px; text-align: center; width: 34px;"><input type="checkbox" class="block-select-all" style="width:15px;height:15px;accent-color:#2563eb;" title="Select all"></th>
                                     <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">#</th>
-                                    <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="student_number"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Student ID</th>
-                                    <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="name"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Name</th>
-                                    <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="course"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Course</th>
-                                    <th style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="year_level"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Year</th>
-                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">S.Y.</th>
-                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Sem</th>
-                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Section Code</th>
-                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Adviser</th>
-                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">Status</th>
+                                    <th data-field="student_number" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="student_number"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Student ID</th>
+                                    <th data-field="name" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="name"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Name</th>
+                                    <th data-field="course" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="course"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Course</th>
+                                    <th data-field="year_level" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="year_level"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Year</th>
+                                    <th data-field="school_year" style="padding: 10px 12px; text-align: left; white-space: nowrap;">S.Y.</th>
+                                    <th data-field="semester" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Sem</th>
+                                    <th data-field="section" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Section Code</th>
+                                    <th data-field="adviser" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Adviser</th>
+                                    <th data-field="status" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Status</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -692,7 +692,21 @@ async function bulkArchive() {
 //
 // The header and the row are generated from the same list, so they cannot
 // drift apart either.
-const EXPORT_FIELDS = [
+// The export columns come from the table's own header, so a column added to
+// the roster appears in the CSV, the Excel file and the print sheet without
+// anyone editing this file. The old list was hand-written: adding a column
+// to the table silently left it out of every export, which is the quieter
+// half of the same bug that reading by position caused.
+//
+// Each <th> carries the same data-field as the cells beneath it, and its
+// visible text is the header. The two control columns - the select-all
+// checkbox and the row number - have no data-field, so they are skipped
+// rather than exported as a blank column.
+//
+// FALLBACK_FIELDS is only used when there is no table to read, so a list
+// filtered to empty still produces the right headers instead of a file with
+// no columns at all.
+const FALLBACK_FIELDS = [
     ['student_number', 'Student ID'],
     ['name',           'Name'],
     ['course',         'Course'],
@@ -703,6 +717,21 @@ const EXPORT_FIELDS = [
     ['adviser',        'Adviser'],
     ['status',         'Status'],
 ];
+
+function exportFields() {
+    const ths = document.querySelectorAll(
+        '#masterlistContent .masterlist-table thead th[data-field]'
+    );
+    if (!ths.length) return FALLBACK_FIELDS;
+
+    const out = [];
+    ths.forEach(th => {
+        const label = th.textContent.replace(/\s+/g, ' ').trim();
+        if (label === '') return;           // a header with no words carries nothing
+        out.push([th.dataset.field, label]);
+    });
+    return out.length ? out : FALLBACK_FIELDS;
+}
 
 function cellText(row, field) {
     const c = row.querySelector('[data-field="' + field + '"]');
@@ -715,13 +744,14 @@ function cellText(row, field) {
  * the registrar rather than vanishing from the file without a word - a
  * missing student in an official list is worse than a noisy export.
  */
-function collectRowData(rows) {
+function collectRowData(rows, fields) {
+    fields = fields || exportFields();
     const out = [];
     let skipped = 0;
     rows.forEach(row => {
         // A row with no student id cell is not a student row.
         if (!row.querySelector('[data-field="student_number"]')) { skipped++; return; }
-        out.push(EXPORT_FIELDS.map(f => cellText(row, f[0])));
+        out.push(fields.map(f => cellText(row, f[0])));
     });
     return { rows: out, skipped: skipped };
 }
@@ -743,7 +773,8 @@ function exportStamp() {
 
 function exportCSV(rows, filename) {
     const list = rows || Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    const { rows: data, skipped } = collectRowData(list);
+    const fields = exportFields();
+    const { rows: data, skipped } = collectRowData(list, fields);
     if (!data.length) {
         showToast('Nothing to export.', 'warning');
         return;
@@ -751,7 +782,7 @@ function exportCSV(rows, filename) {
     // CRLF and a UTF-8 BOM. Without the BOM Excel on Windows reads the
     // file as the local code page and mangles every accented name
     // (ñ, é) and the em dash used for a blank field.
-    const header = EXPORT_FIELDS.map(f => csvCell(f[1])).join(',');
+    const header = fields.map(f => csvCell(f[1])).join(',');
     const body = data.map(r => r.map(csvCell).join(',')).join('\r\n');
     const csv = '\uFEFF' + header + '\r\n' + body + '\r\n';
     downloadBlob(
@@ -771,7 +802,8 @@ function exportCSV(rows, filename) {
 // which reads as a corrupt download and trains people not to trust it.
 function exportExcel() {
     const list = Array.from(document.querySelectorAll('#masterlistContent .masterlist-table tbody tr'));
-    const { rows: data, skipped } = collectRowData(list);
+    const fields = exportFields();
+    const { rows: data, skipped } = collectRowData(list, fields);
     if (!data.length) {
         showToast('Nothing to export.', 'warning');
         return;
@@ -786,7 +818,7 @@ function exportExcel() {
         + '          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n'
         + '<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/></Style></Styles>\n'
         + '<Worksheet ss:Name="Masterlist"><Table>\n'
-        + '<Row>' + EXPORT_FIELDS.map(f => '<Cell ss:StyleID="hdr"><Data ss:Type="String">' + esc(f[1]) + '</Data></Cell>').join('') + '</Row>\n';
+        + '<Row>' + fields.map(f => '<Cell ss:StyleID="hdr"><Data ss:Type="String">' + esc(f[1]) + '</Data></Cell>').join('') + '</Row>\n';
     data.forEach(r => { xml += '<Row>' + r.map(xcell).join('') + '</Row>\n'; });
     xml += '</Table></Worksheet></Workbook>';
 
@@ -867,6 +899,12 @@ function printRows(rows) {
 
         groups.forEach((groupRows, title) => {
             w.document.write('<h3>' + title + '</h3>');
+            // Deliberately NOT exportFields(). The printed sheet is a
+            // narrower shape than the CSV: it drops S.Y. and Semester
+            // because the sheet's own heading already names the term, and
+            // repeating it on every row of a signed document is noise.
+            // The cell VALUES still come from data-field, so this header
+            // cannot drift out of step with the table it prints.
             w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Course</th><th>Year</th><th>Section Code</th><th>Adviser</th><th>Status</th></tr>');
             // Numbering restarts per printed table, matching the screen: each
             // table is its own list, not a page of a longer numbered run.
