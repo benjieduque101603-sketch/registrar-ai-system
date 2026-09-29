@@ -14,8 +14,12 @@ require_once __DIR__ . '/../shared/database.php';
 
 $db = Database::getInstance();
 
-// Required doc types for completeness check
-$requiredTypes = ['enrollment','transcript','health','photo','clearance'];
+// Required doc types for completeness check.
+// The list itself now lives in shared/stored_file.php, because the View modal
+// needs the same answer and a second hand-maintained copy would be free to
+// drift from this one.
+require_once __DIR__ . '/../shared/stored_file.php';
+$requiredTypes = requiredDocumentTypes();
 
 // Students (non-archived) for upload dropdown
 $students = $db->fetchAll(
@@ -62,6 +66,24 @@ unset($info);
 
 $totalFiles  = count($files);
 $sumBytes    = (int) $db->fetchColumn("SELECT COALESCE(SUM(file_size),0) FROM documents");
+
+// ── Is each file actually on this server? ─────────────────────────
+//
+// Resolved here, up front, rather than inside the row markup, for two reasons:
+// the banner at the top needs the total, and a page that discovers it is
+// rendering 404s while it renders is too late to say anything useful about them.
+//
+// See shared/stored_file.php for the rule and why it checks the disk at all.
+require_once __DIR__ . '/../shared/stored_file.php';
+
+$fileUrlById  = [];   // id => loadable URL, or '' when the file is not here
+$fileGoneById = [];   // id => true
+foreach ($files as $f) {
+    $url = storedFileUrl($f['file_path'], '../');
+    $fileUrlById[(int) $f['id']] = $url;
+    if ($url === '') $fileGoneById[(int) $f['id']] = true;
+}
+$missingFileCount = count($fileGoneById);
 
 function fmtBytes($b) {
     if ($b >= 1073741824) return round($b / 1073741824, 1) . ' GB';
@@ -152,6 +174,22 @@ include '../includes/sidebar.php';
 .fs-filter:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.08)}
 .fs-divider{width:1px;height:24px;background:#e2e8f0;flex-shrink:0}
 .fs-count{font-size:12px;font-weight:600;color:#94a3b8;white-space:nowrap}
+
+/* ── A file recorded in the database but not on this server ──
+   Deliberately loud and deliberately not amber. Amber is already "waiting on
+   a student" everywhere else in this app, and a missing file is not something
+   anyone is waiting on - it is a broken record that needs a person to act. */
+.fs-alert{display:flex;gap:13px;align-items:flex-start;margin:0 0 18px;padding:15px 18px;border:1px solid #fecaca;background:#fef2f2;border-radius:14px;color:#7f1d1d;font-size:12.5px;line-height:1.6}
+.fs-alert i{font-size:17px;margin-top:1px;flex:0 0 auto}
+.fs-alert b{color:#991b1b}
+.fs-alert code{background:#fee2e2;padding:1px 5px;border-radius:4px;font-size:11.5px}
+.file-expand-row.is-missing{background:#fef2f2;box-shadow:inset 3px 0 0 #ef4444}
+.file-expand-row.is-missing .fname{color:#7f1d1d}
+.fs-gone{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:6px;font-size:11.5px;color:#991b1b;line-height:1.5}
+.fs-gone i{color:#dc2626}
+.fs-gone-btn{border:1px solid #fca5a5;background:#fff;color:#b91c1c;font:inherit;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:7px;cursor:pointer}
+.fs-gone-btn:hover{background:#fee2e2;border-color:#ef4444;color:#7f1d1d}
+.fs-gone-btn:focus-visible{outline:2px solid #dc2626;outline-offset:1px}
 </style>
 
 <main class="dashboard-main">
@@ -173,6 +211,22 @@ include '../includes/sidebar.php';
             <div class="storage-stat"><div class="storage-stat-icon teal"><i class="fas fa-hard-drive"></i></div><div><strong><?= fmtBytes($sumBytes) ?></strong><span>Total storage</span></div></div>
             <div class="storage-stat"><div class="storage-stat-icon red"><i class="fas fa-triangle-exclamation"></i></div><div><strong><?= $missingCount ?></strong><span>Missing document sets</span></div></div>
         </section>
+
+        <?php if ($missingFileCount > 0): ?>
+            <?php // Say it once, at the top, with the count. Without this the only
+                  // evidence of the problem is a red icon in a table and a 404 in
+                  // a console nobody opens - and "images not loading" reads as a
+                  // broken page rather than as a set of broken records. ?>
+            <div class="fs-alert" role="alert">
+                <i class="fas fa-triangle-exclamation"></i>
+                <div>
+                    <b><?= (int) $missingFileCount ?> of <?= (int) $totalFiles ?> stored <?= $totalFiles === 1 ? 'file is' : 'files are' ?> not on this server.</b>
+                    The database has the <?= $missingFileCount === 1 ? 'record' : 'records' ?>, but the files themselves were never deployed to this host &mdash;
+                    they are uploaded at runtime and <code>uploads/</code> is not carried between servers. Nothing is lost in the database; the
+                    <?= $missingFileCount === 1 ? 'file' : 'files' ?> just needs uploading again. Those rows are marked in red below.
+                </div>
+            </div>
+        <?php endif; ?>
 
         <div class="panel" style="margin-bottom:18px;">
             <div class="panel-toolbar" style="flex-direction:column;align-items:stretch;border-bottom:none;padding-bottom:0;margin-bottom:0;">
@@ -249,10 +303,21 @@ include '../includes/sidebar.php';
                                 $ext = strtolower(pathinfo($f['filename'], PATHINFO_EXTENSION));
                                 $ic = $iconMap[$ext] ?? 'fa-file';
                                 $cl = $colorMap[$ext] ?? '#94a3b8';
+                                // Resolved up front (see $fileUrlById above), so a file
+                                // that is not on this server produces no src, no href and
+                                // no preview: the browser is never asked for something
+                                // that will 404.
+                                $fileUrl = $fileUrlById[(int) $f['id']] ?? '';
+                                $fileGone = isset($fileGoneById[(int) $f['id']]);
                             ?>
-                                <div class="file-expand-row" data-id="<?= (int)$f['id'] ?>" data-name="<?= htmlspecialchars($f['filename']) ?>" data-path="<?= htmlspecialchars($f['file_path']) ?>" data-type="<?= htmlspecialchars($ext) ?>" data-student="<?= htmlspecialchars($stu['student_name']) ?>" data-desc="<?= htmlspecialchars($f['description'] ?? '') ?>" data-ai-valid="<?= (int)($f['ai_valid'] ?? -1) ?>">
-                                    <?php if ($isImage($ext)): ?>
-                                        <img src="<?= htmlspecialchars($f['file_path']) ?>" alt="" class="thumb">
+                                <div class="file-expand-row<?= $fileGone ? ' is-missing' : '' ?>" data-id="<?= (int)$f['id'] ?>" data-name="<?= htmlspecialchars($f['filename']) ?>" data-path="<?= htmlspecialchars($fileGone ? '' : $fileUrl) ?>" data-missing="<?= $fileGone ? '1' : '0' ?>" data-type="<?= htmlspecialchars($ext) ?>" data-student="<?= htmlspecialchars($stu['student_name']) ?>" data-desc="<?= htmlspecialchars($f['description'] ?? '') ?>" data-ai-valid="<?= (int)($f['ai_valid'] ?? -1) ?>">
+                                    <?php if ($fileGone): ?>
+                                        <?php // An <img> here would be a 404 and a broken-image
+                                              // glyph, and the Download link would 404 too: two
+                                              // console errors and nothing a clerk can act on. ?>
+                                        <div class="file-icon" style="background:#fef2f2;color:#dc2626;" title="Recorded in the database, but the file is not on this server"><i class="fas fa-file-circle-xmark"></i></div>
+                                    <?php elseif ($isImage($ext)): ?>
+                                        <img src="<?= htmlspecialchars($fileUrl) ?>" alt="" class="thumb" loading="lazy">
                                     <?php else: ?>
                                         <div class="file-icon" style="background:<?= $cl ?>14;color:<?= $cl ?>;"><i class="fas <?= $ic ?>"></i></div>
                                     <?php endif; ?>
@@ -264,6 +329,19 @@ include '../includes/sidebar.php';
                                             &middot; <?= date('M d, Y', strtotime($f['created_at'])) ?>
                                             <?php if ($f['description']): ?> &middot; <?= htmlspecialchars($f['description']) ?><?php endif; ?>
                                         </div>
+                                        <?php if ($fileGone): ?>
+                                            <?php // Name the fault, and offer the one action that
+                                                  // fixes it. "Missing document" already means
+                                                  // something else on this page - a required
+                                                  // document a student has not supplied - so
+                                                  // this says precisely what is wrong: the file
+                                                  // itself is not on this server. ?>
+                                            <div class="fs-gone">
+                                                <i class="fas fa-triangle-exclamation"></i>
+                                                Not on this server &mdash; the record is here, the file was never deployed to this host.
+                                                <button type="button" class="fs-gone-btn" onclick="reuploadMissing(<?= (int)$f['student_id'] ?>, <?= (int)$f['id'] ?>)">Upload it again</button>
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
                                     <div class="action-group">
                                         <?php $av = (int)($f['ai_valid'] ?? -1); ?>
@@ -274,8 +352,13 @@ include '../includes/sidebar.php';
                                         <?php else: ?>
                                             <button class="action-btn" onclick="aiValidate(this)" data-id="<?= (int)$f['id'] ?>" title="AI Validate this document" style="color:#8b5cf6;"><i class="fas fa-robot"></i></button>
                                         <?php endif; ?>
-                                        <button class="action-btn view" onclick="previewFile(this.closest('.file-expand-row'))" title="Preview"><i class="fas fa-eye"></i></button>
-                                        <a class="action-btn download" href="<?= htmlspecialchars($f['file_path']) ?>" title="Download" download><i class="fas fa-download"></i></a>
+                                        <?php if ($fileGone): ?>
+                                            <span class="action-btn" style="color:#94a3b8;cursor:default;" title="Preview unavailable &mdash; the file is not on this server"><i class="fas fa-eye-slash"></i></span>
+                                            <span class="action-btn" style="color:#94a3b8;cursor:default;" title="Download unavailable &mdash; the file is not on this server"><i class="fas fa-download"></i></span>
+                                        <?php else: ?>
+                                            <button class="action-btn view" onclick="previewFile(this.closest('.file-expand-row'))" title="Preview"><i class="fas fa-eye"></i></button>
+                                            <a class="action-btn download" href="<?= htmlspecialchars($fileUrl) ?>" title="Download" download><i class="fas fa-download"></i></a>
+                                        <?php endif; ?>
                                         <button class="action-btn delete" onclick="deleteFile(this.closest('.file-expand-row'))" title="Delete"><i class="fas fa-trash-alt"></i></button>
                                     </div>
                                 </div>
@@ -298,6 +381,8 @@ include '../includes/sidebar.php';
 <div class="modal-overlay" id="uploadModal"><div class="modal-content wide">
     <div class="modal-header"><h2><i class="fas fa-upload" style="color:#2563eb;"></i> Upload Document</h2><button class="modal-close" onclick="closeModal('uploadModal')"><i class="fas fa-times"></i></button></div>
     <form id="uploadForm">
+        <div id="upReplaceNotice" hidden
+             style="margin:0 0 14px;padding:11px 13px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:10px;font-size:12px;line-height:1.5;color:#1e40af"></div>
     <div class="modal-body">
         <div class="form-group"><label>Student <span style="color:#dc2626;">*</span></label>
             <select id="upStudent" class="form-control" data-searchable required>
@@ -436,10 +521,37 @@ function openUpload() {
     document.getElementById('upCategory').value = '';
     document.getElementById('upDesc').value = '';
     if (upFileInput) upFileInput.value = '';
+    // A plain Upload is never a replace. Left set, the next unrelated upload would
+    // silently overwrite a record the clerk never named.
+    replaceDocId = null;
+    var notice = document.getElementById('upReplaceNotice');
+    if (notice) { notice.hidden = true; notice.textContent = ''; }
     showSelectedFile();
     openModal('uploadModal');
 }
 if (upDropzone && upFileInput) {
+    // Exactly ONE click handler, and that is load-bearing.
+    //
+    // This block used to be followed by a second, near-identical IIFE wiring
+    // the same two elements, which meant one click on the dropzone ran
+    // upFileInput.click() twice. Chrome treats the second as a fresh request to
+    // show a file chooser with no user activation left, and reports:
+    //
+    //     File chooser dialog can only be shown with a user activation.
+    //
+    // The symptom was "uploading a file does nothing" with that error sitting
+    // in the console - the chooser fought itself.
+    //
+    // The second copy also declared `function openUpload() { openModal(...) }`.
+    // Function declarations are hoisted and the last one wins, so that stub -
+    // which does NOT reset the form - silently replaced the real one above.
+    // Opening Upload a second time therefore kept the previous student, type,
+    // category, description and selected file, which reads as "upload is
+    // broken" all over again: the clerk submits and gets the last file stored
+    // twice, or a duplicate rejected.
+    //
+    // One wiring, one definition. If the dropzone needs new behaviour, add it
+    // here.
     upDropzone.addEventListener('click', function() { upFileInput.click(); });
     upDropzone.addEventListener('dragover', function(e) { e.preventDefault(); upDropzone.classList.add('over'); });
     upDropzone.addEventListener('dragleave', function(e) { upDropzone.classList.remove('over'); });
@@ -466,6 +578,7 @@ document.getElementById('uploadForm').addEventListener('submit', async function(
     fd.append('doc_type', document.getElementById('upType').value);
     fd.append('category', document.getElementById('upCategory').value);
     fd.append('description', document.getElementById('upDesc').value);
+    if (replaceDocId) fd.append('replace_id', replaceDocId);
     fd.append('file', file);
     try {
         var res = await fetch('../api/documents.php?section=files', { method: 'POST', body: fd });
@@ -492,26 +605,33 @@ document.getElementById('uploadForm').addEventListener('submit', async function(
 });
 
 // ─── OPEN UPLOAD MODAL ─────────────────────────────────
-function openUpload() { openModal('uploadModal'); }
+// (the canonical openUpload, form reset included, is defined above with the
+// dropzone wiring - see the note there)
 
-// ─── DROPZONE ──────────────────────────────────────────
-(function() {
-    var dz = document.getElementById('upDropzone');
-    var fi = document.getElementById('upFile');
-    var fn = document.getElementById('upFileName');
-    if (dz && fi) {
-        dz.addEventListener('click', function() { fi.click(); });
-        fi.addEventListener('change', function() {
-            if (fi.files.length) fn.textContent = fi.files[0].name;
-        });
-        dz.addEventListener('dragover', function(e) { e.preventDefault(); dz.classList.add('over'); });
-        dz.addEventListener('dragleave', function() { dz.classList.remove('over'); });
-        dz.addEventListener('drop', function(e) {
-            e.preventDefault(); dz.classList.remove('over');
-            if (e.dataTransfer.files.length) { fi.files = e.dataTransfer.files; fn.textContent = e.dataTransfer.files[0].name; }
-        });
+// ─── RE-UPLOAD A FILE THAT IS NOT ON THIS SERVER ─────────────
+//
+// The row offers "Upload it again". That opens the normal upload modal with the
+// student pre-selected and remembers which record it is replacing, so the
+// re-upload updates the row instead of adding a second copy beside it.
+//
+// Without the replaceId the clerk would end up with two rows for one document:
+// the dead one still on file, and a new one. The page would look no better.
+var replaceDocId = null;
+
+function reuploadMissing(studentId, docId) {
+    replaceDocId = docId || null;
+    openUpload();
+    var sel = document.getElementById('upStudent');
+    if (sel && studentId) sel.value = studentId;
+    var notice = document.getElementById('upReplaceNotice');
+    if (notice) {
+        notice.hidden = !replaceDocId;
+        if (replaceDocId) {
+            notice.textContent = 'This will replace the existing record #' + replaceDocId
+                + ' — the file it points at is missing, so nothing is overwritten.';
+        }
     }
-})();
+}
 
 // ─── SEARCH / FILTER ─────────────────────────────────────
 var searchInput    = document.getElementById('stuSearch');
@@ -566,15 +686,32 @@ function _loadMammoth(cb) {
 function previewFile(el) {
     document.getElementById('pvFileName').textContent = el.dataset.name;
     document.getElementById('pvMeta').innerHTML = '<b>' + (el.dataset.student || '') + '</b> · ' + el.dataset.type.toUpperCase() + ' · ' + (el.dataset.desc || 'No description');
-    document.getElementById('pvDownload').href = el.dataset.path;
+
+    // A row whose file is not on this server carries no path. It has no Preview
+    // button any more, but the function is also reachable from the console and
+    // from a stale click target, and an <img src=""> here resolves to the page
+    // URL and fails - the exact empty-src trap the RFID card photo had.
+    var path = el.dataset.path || '';
+    if (!path) {
+        var dl = document.getElementById('pvDownload');
+        if (dl) dl.removeAttribute('href');
+        document.getElementById('pvContent').innerHTML =
+            '<div style="padding:36px 20px;text-align:center;color:#b91c1c;">'
+            + '<i class="fas fa-triangle-exclamation" style="font-size:26px;display:block;margin-bottom:10px;"></i>'
+            + 'This file is recorded in the database but is not on this server.<br>'
+            + '<span style="font-size:12px;color:#64748b;">Close this and use &ldquo;Upload it again&rdquo; on the row.</span></div>';
+        return;
+    }
+
+    document.getElementById('pvDownload').href = path;
     var ext = el.dataset.type.toLowerCase();
     var c = document.getElementById('pvContent');
     if (IMG_EXTS.indexOf(ext) !== -1) {
-        c.innerHTML = '<img src="' + el.dataset.path + '" alt="preview" style="max-width:100%;max-height:420px;border-radius:8px;">';
+        c.innerHTML = '<img src="' + path + '" alt="preview" style="max-width:100%;max-height:420px;border-radius:8px;">';
     } else if (ext === 'pdf') {
-        c.innerHTML = '<iframe src="' + el.dataset.path + '" style="width:100%;height:480px;border:none;border-radius:8px;background:#fff;"></iframe>';
+        c.innerHTML = '<iframe src="' + path + '" style="width:100%;height:480px;border:none;border-radius:8px;background:#fff;"></iframe>';
     } else if (ext === 'txt') {
-        fetch(el.dataset.path).then(function(r) { return r.text(); }).then(function(t) {
+        fetch(path).then(function(r) { return r.text(); }).then(function(t) {
             c.innerHTML = '<pre style="text-align:left;font-size:12px;white-space:pre-wrap;max-height:420px;overflow:auto;">' + t.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
         }).catch(function() { c.innerHTML = '<p style="color:#64748b;">Preview not available.</p>'; });
     } else if (ext === 'docx') {

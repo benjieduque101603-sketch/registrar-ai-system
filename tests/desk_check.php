@@ -139,7 +139,11 @@ check('start action defined',   strpos($proc, 'Start preparing') !== false);
 check('sign action defined',    strpos($proc, 'Sign & mark ready') !== false);
 check('claim action defined',  strpos($proc, "'Claim'") !== false);
 check('no client payment gate', strpos($src, 'Payment not confirmed') === false);
-check('payment taken at the counter', strpos($html, 'Paid at the counter') !== false);
+// Source-level, not rendered: the wording lives in the per-request detail
+// row, so a database with no requests yet - which is exactly what a fresh
+// install is - renders no row and the check could not pass. Asserting it
+// in the output only tested whether this machine happened to have data.
+check('payment taken at the counter', strpos($src, 'Paid at the counter') !== false);
 // The desk renders its buttons from doc_next_step(), so the lifecycle
 // path cannot be quietly dropped from the template.
 check('desk drives actions from the shared step', strpos($src, 'doc_next_step(') !== false);

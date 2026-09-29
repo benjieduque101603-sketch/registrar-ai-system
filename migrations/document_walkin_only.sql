@@ -240,7 +240,7 @@ SET @s := IF(@has = 0,
   'DO 0');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
---  4b. Diploma Replacement and Honorable Dismissal had nowhere to store a
+
 --     graduation date — `status='graduated'` existed, the date did not.
 --     No AFTER clause: the neighbouring previous-school columns come from
 --     a separate migration that may not have been applied yet, and

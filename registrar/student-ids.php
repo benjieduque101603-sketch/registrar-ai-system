@@ -182,7 +182,10 @@ include '../includes/sidebar.php';
                     data-issued="<?= htmlspecialchars($i['issue_date'] ?? '', ENT_QUOTES) ?>"
                     data-expiry="<?= htmlspecialchars($i['expiry_date'] ?? '', ENT_QUOTES) ?>"
                     data-status="<?= htmlspecialchars($i['status'], ENT_QUOTES) ?>"
-                    data-qr="<?= htmlspecialchars($i['qr_code_path'] ?? '', ENT_QUOTES) ?>"
+                    <?php // Resolved, for the same reason as the thumbnail below: the card
+                          // view falls back to the generated QR only when data-qr is empty,
+                          // and a raw column value would send it to a file that 404s. ?>
+                    data-qr="<?= htmlspecialchars(resolveStudentQrUrl($i['qr_code_path'] ?? '', $APP_ROOT), ENT_QUOTES) ?>"
                     data-photo="<?= htmlspecialchars($i['photo'] ?? '', ENT_QUOTES) ?>"
                     data-course="<?= htmlspecialchars($i['course'] ?? '', ENT_QUOTES) ?>"
                     data-search="<?= htmlspecialchars(strtolower($i['student_name'] . ' ' . $i['student_number'] . ' ' . $i['id_number']), ENT_QUOTES) ?>">
@@ -192,7 +195,15 @@ include '../includes/sidebar.php';
                     <td><?= $i['issue_date'] ? date('M d, Y', strtotime($i['issue_date'])) : '—' ?></td>
                     <td><?= $i['expiry_date'] ? date('M d, Y', strtotime($i['expiry_date'])) : '—' ?></td>
                     <td><span class="badge <?= $i['status'] ?>"><?= ucfirst($i['status']) ?></span></td>
-                    <td><?php if ($i['qr_code_path']): ?><img class="qr-thumb" src="<?= htmlspecialchars(resolveStudentQrUrl($i['qr_code_path'], $APP_ROOT)) ?>" alt="QR" onclick="showQrModal(this)" data-name="<?= htmlspecialchars($i['student_name'], ENT_QUOTES) ?>" data-id="<?= htmlspecialchars($i['student_number'], ENT_QUOTES) ?>"><?php elseif (!empty($i['student_id'])): ?><img class="qr-thumb qr-auto" data-qr-student-id="<?= (int)$i['student_id'] ?>" data-qr-name="<?= htmlspecialchars($i['student_name'], ENT_QUOTES) ?>" data-qr-number="<?= htmlspecialchars($i['student_number'], ENT_QUOTES) ?>" alt="QR" style="cursor:pointer;" onclick="showQrModal(this)"><?php else: ?>—<?php endif; ?></td>
+                    <?php // Resolved, not raw: a stored qr_code_path can name a file this
+                          // host does not have (uploads/ is gitignored, so a database
+                          // carried over from elsewhere points at files that were never
+                          // deployed). Branching on the column asked the browser for a file
+                          // that cannot exist - a 404 and a broken image. resolveStudentQrUrl()
+                          // returns '' for that, and the qr-auto branch draws the QR from the
+                          // student id with the bundled library instead. ?>
+                    <?php $qrUrl = resolveStudentQrUrl($i['qr_code_path'] ?? '', $APP_ROOT); ?>
+                    <td><?php if ($qrUrl !== ''): ?><img class="qr-thumb" src="<?= htmlspecialchars($qrUrl) ?>" alt="QR" onclick="showQrModal(this)" data-name="<?= htmlspecialchars($i['student_name'], ENT_QUOTES) ?>" data-id="<?= htmlspecialchars($i['student_number'], ENT_QUOTES) ?>"><?php elseif (!empty($i['student_id'])): ?><img class="qr-thumb qr-auto" data-qr-student-id="<?= (int)$i['student_id'] ?>" data-qr-name="<?= htmlspecialchars($i['student_name'], ENT_QUOTES) ?>" data-qr-number="<?= htmlspecialchars($i['student_number'], ENT_QUOTES) ?>" alt="QR" style="cursor:pointer;" onclick="showQrModal(this)"><?php else: ?>—<?php endif; ?></td>
                     <td><div class="action-group">
                         <button class="action-btn view" onclick="viewCard(this)" title="View ID Card"><i class="fas fa-id-card"></i></button>
                         <button class="action-btn edit" onclick="editStatus(this)" title="Update Status"><i class="fas fa-pen"></i></button>

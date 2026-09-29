@@ -1,0 +1,13 @@
+# Uploaded files are data, never code: block script execution.
+# Kept alongside the other upload directories (uploads/ids/, uploads/, assets/)
+# rather than relying on uploads/.htaccess inheriting, so the guard travels with
+# this directory if it is ever served directly.
+<FilesMatch \.(?i:php|php3|php4|php5|php7|phar|phtml|pl|py|cgi|sh)$>
+    Require all denied
+</FilesMatch>
+Options -ExecCGI
+RemoveHandler .php .phtml .phar
+
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>

@@ -7,9 +7,17 @@
 // ============================================================
 
 require_once __DIR__ . '/../shared/security_headers.php';
+// For app_url() only. Deliberately NOT config.php: this page is public and
+// must render on a wall display even when the database is unreachable, and
+// config.php opens a mysqli connection at include time.
+require_once __DIR__ . '/../shared/app_path.php';
 
 $APP_ROOT = '../';
 $page_title = 'Queue Kiosk';
+// Where the API actually is, told to the client by the server that knows.
+// See the note in js/queue.js: counting slashes in window.location works on
+// one deployment and 404s on another.
+$api_base = rtrim(app_url('/api'), '/') . '/';
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -21,7 +29,7 @@ $page_title = 'Queue Kiosk';
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="<?= $APP_ROOT ?>css/queue.css" />
 </head>
-<body class="queue-body" data-page="kiosk">
+<body class="queue-body" data-page="kiosk" data-api-base="<?= htmlspecialchars($api_base, ENT_QUOTES) ?>">
 <div class="queue-screen">
 
     <div class="queue-brand">

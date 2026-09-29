@@ -8,7 +8,7 @@ which document templates may populate real data versus print `N/A`.
 
 | Capability | Status |
 |---|---|
-| Personal Info Database | ✅ In scope — `students` |
+| Personal Info Database | ✅ In scope — `students` (except **section** — see below) |
 | Guardian & Emergency Contact | ✅ In scope — `guardians`, `emergency_contacts` |
 | Academic History | ✅ In scope — `academic_history` |
 | Health Record Log | ✅ In scope — `health_records`, `health_visits` |
@@ -18,6 +18,37 @@ which document templates may populate real data versus print `N/A`.
 | Student Status Tracker | ✅ In scope — `status_tracker` |
 | Digital File Storage | ✅ In scope — `documents` |
 | Student Masterlist Generator | ✅ In scope — `registrar/masterlist.php` |
+
+### Note on "Section"
+
+`students.section` is **Class Scheduling (#297)** to assign. A block is a
+schedule artefact: it exists for a term, it is created when enrolment is
+planned, and it is changed when a student shifts. The Registrar records the
+enrolment — course, year level, term — and does not decide how that
+enrolment is grouped into blocks.
+
+So the Registrar does not ask for it, does not display it as its own data,
+and does not score it. Concretely:
+
+| Surface | Treatment |
+|---|---|
+| Add Student modal | No section field. A dashed row reads *"Section — assigned by Class Scheduling"* and prints `N/A`. |
+| Student list | No section column, no section filter. |
+| View Student | Year level and Section are separate rows; Section reads `N/A`. |
+| Quality score | `section` removed from the weights; its 5 points went to `course`. |
+
+The field is **shown as `N/A`, never hidden**, and that is deliberate. The
+print convention below already requires it on documents — "No section is
+hidden and no 'no data' message is shown, so a registrar can distinguish a
+genuinely empty record from a rendering failure" — and a modal that silently
+dropped a column would read as data loss rather than as a boundary. Naming
+the owning department makes the absence a decision.
+
+`students.section` and the Masterlist "Auto-assign sections" feature still
+exist, and `shared/section_code.php` still computes section codes. They are
+**not** removed here: Masterlist generation remains Registrar-owned, and
+deciding whether the office may auto-assign blocks at all is a scheduling
+question that this document does not settle. Left as a known open question.
 
 ### Note on "Document Requests (Form 137, Good Moral)"
 
@@ -76,7 +107,7 @@ or employer holding the certificate. Ownership is recorded here, in
 | Accreditation Management | #294 | None |
 | Payment Management | #295 | Counter payment replaces the online gateway |
 | Faculty Management | #296 | None |
-| Class Scheduling | #297 | None |
+| Class Scheduling | #297 | **Owns `students.section`** |
 | Co-curricular & Club Management | #298 | None |
 | Online Learning & LMS | #299 | None |
 | CRAD | #300 | None |

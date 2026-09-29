@@ -26,6 +26,7 @@ require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/document_process.php';
+require_once __DIR__ . '/../shared/stored_file.php';   // storedFileDiskPath()
 
 // Require login
 if (!isLoggedIn()) {
@@ -143,6 +144,44 @@ try {
 
             if (move_uploaded_file($file['tmp_name'], $dest)) {
                 $filePath = '../uploads/' . $dirKey . '/' . $filename;
+
+                // ── Replace a record whose file is not on this server ──
+                //
+                // The page offers "Upload it again" on rows whose file_path names
+                // something this host does not have. Without this, that upload would
+                // INSERT a second row beside the dead one: two records for one
+                // document, the old one still broken, and the page looking no
+                // better than before.
+                //
+                // Guarded twice, and both matter:
+                //   · the target must belong to the same student, so a crafted
+                //     replace_id cannot rewrite somebody else's record;
+                //   · the target's current file must be MISSING, so this can only
+                //     ever replace a dead pointer. It can never overwrite a file
+                //     that exists, which makes the operation safe by construction
+                //     rather than by trusting the caller.
+                $replaceId = isset($_POST['replace_id']) ? (int) $_POST['replace_id'] : 0;
+                if ($replaceId > 0) {
+                    $target = $db->fetchOne(
+                        "SELECT id, student_id, file_path FROM documents WHERE id = ?",
+                        [$replaceId]
+                    );
+                    if (!$target
+                        || (int) $target['student_id'] !== (int) $studentId
+                        || storedFileDiskPath($target['file_path']) !== null) {
+                        // The record is fine; it is this REQUEST that is wrong. Remove
+                        // the file we just wrote and leave every row alone. Deleting
+                        // the target here would destroy exactly the record the clerk
+                        // is trying to rescue.
+                        if (is_file($dest)) @unlink($dest);
+                        echo json_encode([
+                            'success' => false,
+                            'message'  => 'That record cannot be replaced. Refresh the page and try again.',
+                        ]);
+                        exit;
+                    }
+                }
+
                 // Guard against missing columns on older schemas
                 $cols = $db->fetchAll("SHOW COLUMNS FROM documents");
                 $colNames = array_column($cols, 'Field');
@@ -165,6 +204,33 @@ try {
                 if (in_array('file_hash', $colNames, true)) {
                     $ins['file_hash'] = $fileHash;
                 }
+                // Replace, or insert. The target was validated above and is known
+                // to be a record whose file is missing, so overwriting its pointer
+                // destroys nothing. ai_valid is cleared deliberately: the AI verdict
+                // described the file that is gone, and carrying it over to a
+                // different file would assert something untrue about this one.
+                if ($replaceId > 0) {
+                    $upd = $ins;
+                    unset($upd['student_id'], $upd['enroll_no'], $upd['enroll_status']);
+                    if (in_array('ai_valid', $colNames, true)) {
+                        $upd['ai_valid'] = null;
+                        $upd['ai_validation_note'] = null;
+                    }
+                    if (in_array('ai_classified', $colNames, true)) {
+                        $upd['ai_classified'] = 0;
+                    }
+                    $db->update('documents', $upd, 'id = ?', [$replaceId]);
+                    $id = $replaceId;
+                    $response = [
+                        'success'  => true,
+                        'message'  => 'File re-uploaded and the old record repaired.',
+                        'replaced' => true,
+                        'data'     => ['id' => $id],
+                    ];
+                    echo json_encode($response);
+                    exit;
+                }
+
                 $id = $db->insert('documents', $ins);
                 $response = ['success' => true, 'message' => 'File uploaded.', 'data' => ['id' => $id]];
                 if ($existingDupe) {

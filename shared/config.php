@@ -51,56 +51,12 @@ define('APP_VERSION', '1.0.0');
 define('APP_ENV', getenv('APP_ENV') ?: 'development');
 define('APP_ROOT', dirname(__DIR__) . '/');
 
-/**
- * Root-relative URL path to the application base, e.g. "/registrar-ai-system".
- * Used for Header('Location: ...') redirects so they resolve from any depth
- * (root pages, registrar/, student/, api/, ai/). Falls back to "/" when the
- * doc root mapping can't be inferred.
- */
-function app_base_path(): string {
-    static $base = null;
-    if ($base !== null) {
-        return $base;
-    }
-    $docRoot = rtrim(str_replace('\\', '/', (string)($_SERVER['DOCUMENT_ROOT'] ?? '')), '/');
-    $script  = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
-    // SCRIPT_NAME may already be root-relative; if DOCUMENT_ROOT is usable,
-    // derive base by stripping the doc root off APP_ROOT.
-    $fsBase = str_replace('\\', '/', APP_ROOT);               // …/htdocs/registrar-ai-system/
-    // strncmp, not str_starts_with. This is the one place the app needs a
-    // path test on every request that touches app_url(), and str_starts_with
-    // is PHP 8.0+ - a fatal on 7.x, not a fallback. registrar/documents.php
-    // calls app_url() at the top level of the page, so it was the only
-    // registrar page that died on a PHP 7 host while the rest rendered fine.
-    if ($docRoot !== '' && strncmp($fsBase, $docRoot, strlen($docRoot)) === 0) {
-        $base = rtrim(substr($fsBase, strlen($docRoot)), '/'); // /registrar-ai-system
-        return $base;
-    }
-    // Fallback: strip the leading filename component off SCRIPT_NAME.
-    // Only trust it when it really is a root-relative web path. Under
-    // the CLI (PHPUnit, scripts) SCRIPT_NAME is the executed file's
-    // FILESYSTEM path — e.g. "C:/xampp/htdocs/app/vendor/bin/phpunit" —
-    // which would otherwise leak an absolute disk path into every
-    // generated URL, including the verification QR.
-    if ($script !== '' && $script[0] === '/') {
-        $pos = strrpos($script, '/');
-        $base = ($pos !== false && $pos > 0) ? substr($script, 0, $pos) : '';
-        return $base;
-    }
-    return $base = '';
-}
-
-/**
- * Root-relative URL to a resource, e.g. app_url('/login.php') → "/registrar-ai-system/login.php".
- */
-function app_url(?string $path = null): string {
-    $base = rtrim(app_base_path(), '/');
-    if ($path === null || $path === '' || $path === '/') {
-        return ($base === '' ? '/' : $base . '/');
-    }
-    $path = '/' . ltrim($path, '/');
-    return $base . $path;
-}
+// app_base_path() and app_url() live in shared/app_path.php so that a public
+// page can work out where the app is mounted without pulling in this file and
+// opening a mysqli connection it has no use for (the queue kiosk and monitor
+// are exactly that). The functions are guarded against redeclaration there, so
+// including both is safe and order does not matter.
+require_once __DIR__ . '/app_path.php';
 
 // Idle session timeout in seconds. Users are logged out after this long
 // with no activity (default 20 minutes). Override with the

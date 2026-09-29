@@ -14,6 +14,11 @@ if (empty($_SESSION['user_id'])) {
 requireRole('registrar');
 
 require_once __DIR__ . '/../shared/database.php';
+// The card query below selects each student's photograph from Digital File
+// Storage, so this has to be loaded before the query runs, not later in the
+// file next to qr_generator where it used to sit. stored_file.php guards
+// against double-inclusion, so the lower require is harmless.
+require_once __DIR__ . '/../shared/stored_file.php';
 
 $db = Database::getInstance();
 
@@ -28,13 +33,10 @@ $cards = $db->fetchAll("
         s.course,
         s.year_level,
         s.photo AS student_photo,
-        (SELECT d.file_path
-         FROM documents d
-         WHERE d.student_id = s.id
-           AND d.doc_type = 'photo'
-           AND LOWER(d.file_type) IN ('jpg', 'jpeg', 'png', 'webp', 'gif')
-         ORDER BY d.created_at DESC, d.id DESC
-         LIMIT 1) AS id_photo,
+        /* This subquery was written out inline here AND in
+           registrar/students.php, and two hand-maintained copies are free to
+           drift. It is now the one fragment from shared/stored_file.php. */
+        " . studentPhotoSelectSql() . " AS photo_path,
         s.address AS student_address,
         si.id_number AS student_id_number,
         si.qr_code_path,
@@ -131,6 +133,13 @@ if ($idStudentIds) {
 }
 
 require_once __DIR__ . '/../shared/qr_generator.php';
+// The avatar falls back to the photograph held in Digital File Storage, and
+// only when that file is actually on this server. See the note where the
+// avatar is resolved. This require used to sit here, far below the cards query
+// at the top of the page - but that query calls studentPhotoSelectSql(), so the
+// function has to be declared before the first call, not merely before the
+// first render.
+require_once __DIR__ . '/../shared/stored_file.php';
 
 $page_title = 'RFID Cards';
 $page_description = 'Issue, track, and archive student RFID cards';
@@ -1555,13 +1564,35 @@ body[data-page="rfid"] .rfid-table-header{
                             $initials = strtoupper(substr($names[0], 0, 1) . (isset($names[1]) ? substr($names[1], 0, 1) : ''));
                         }
                         $avatarClass = $avatarClasses[$card['id']] ?? 'blue';
+                        // The avatar: the photograph from Digital File Storage if it
+                        // is actually on this server, otherwise the initials.
+                        //
+                        // It used to read students.photo and nothing else, and
+                        // students.photo is NULL for every student here - the
+                        // pictures were uploaded through Digital File Storage,
+                        // which writes to the documents table. So the table
+                        // showed "RT" for a student whose photograph was sitting
+                        // in the database the whole time.
+                        //
+                        // This now calls the shared studentPhotoUrl(), the same
+                        // one registrar/students.php uses. The loop that was
+                        // written out here is identical to the one that was
+                        // written out there, and two identical loops in two
+                        // places are one bug-fix away from being two different
+                        // behaviours.
+                        //
+                        // The disk check is the load-bearing part: a path naming
+                        // a file this host does not have yields '', so a missing
+                        // photograph produces initials rather than a broken-image
+                        // glyph and a 404.
+                        $avatarUrl = studentPhotoUrl($card, $APP_ROOT);
                     ?>
                         <tr data-card='<?= htmlspecialchars(json_encode($card), ENT_QUOTES, 'UTF-8') ?>'
                             data-retired="<?= $isRetired ? '1' : '0' ?>"
                             data-id="<?= (int)$card['id'] ?>"
                             data-student-id="<?= (int)($card['student_id'] ?? 0) ?>"
                             data-name="<?= htmlspecialchars($card['student_name'] ?? '', ENT_QUOTES) ?>"
-                            data-photo="<?= htmlspecialchars($card['id_photo'] ?? '', ENT_QUOTES) ?>"
+                            data-photo="<?= htmlspecialchars($avatarUrl, ENT_QUOTES) ?>"
                             data-course="<?= htmlspecialchars($card['course'] ?? '', ENT_QUOTES) ?>"
                             data-year="<?= htmlspecialchars($card['year_level'] ?? '', ENT_QUOTES) ?>"
                             data-idnumber="<?= htmlspecialchars($card['student_id_number'] ?? '', ENT_QUOTES) ?>"
@@ -1580,12 +1611,17 @@ body[data-page="rfid"] .rfid-table-header{
                             <td>
                                 <?php if (!empty($card['student_id'])): ?>
                                     <div class="student-info">
-                                        <?php $photoPath = !empty($card['student_photo']) ? htmlspecialchars($card['student_photo']) : ''; ?>
-                                        <?php if ($photoPath): ?>
-                                            <img class="student-avatar" src="<?= $APP_ROOT . ltrim($photoPath, './') ?>" alt="<?= htmlspecialchars($card['student_name']) ?>" style="object-fit:cover;">
-                                        <?php else: ?>
-                                            <div class="student-avatar <?= $avatarClass ?>"><?= $initials ?: '?' ?></div>
+                                        <?php // Both are always rendered; the photo simply
+                                              // covers the initials. If the file is deleted
+                                              // between render and paint, or the host is
+                                              // momentarily unreachable, onerror uncovers
+                                              // the initials rather than leaving a broken
+                                              // image icon in a table a clerk reads all
+                                              // day. ?>
+                                        <?php if ($avatarUrl !== ''): ?>
+                                            <img class="student-avatar" src="<?= htmlspecialchars($avatarUrl) ?>" alt="<?= htmlspecialchars($card['student_name']) ?>" style="object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';this.onerror=null;">
                                         <?php endif; ?>
+                                        <div class="student-avatar <?= $avatarClass ?>" style="<?= $avatarUrl !== '' ? 'display:none;' : '' ?>"><?= $initials ?: '?' ?></div>
                                         <div>
                                             <div class="student-name"><?= htmlspecialchars($card['student_name']) ?></div>
                                             <div class="student-detail"><?= htmlspecialchars($card['student_number']) ?></div>
@@ -1603,8 +1639,23 @@ body[data-page="rfid"] .rfid-table-header{
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <?php if (!empty($card['qr_code_path'])): ?>
-                                    <img class="qr-thumb" src="<?= htmlspecialchars(resolveStudentQrUrl($card['qr_code_path'], $APP_ROOT)) ?>" alt="QR"
+                                <?php // Branch on the RESOLVED url, not on qr_code_path.
+                                      // The column can hold a filename that is not on this
+                                      // host - uploads/ is gitignored, so a database that
+                                      // arrived from elsewhere carries QR files that were
+                                      // never deployed. Testing the column therefore picked
+                                      // the <img src> branch and asked the browser for a
+                                      // file that cannot exist, which is a 404 and a broken
+                                      // image where the QR should be.
+                                      //
+                                      // resolveStudentQrUrl() returns '' for a file that is
+                                      // not there, so the elseif below takes over and the
+                                      // bundled QR library draws it from the student id.
+                                      // The onerror is kept as a second line of defence for
+                                      // a file deleted between render and click. ?>
+                                <?php $qrUrl = resolveStudentQrUrl($card['qr_code_path'] ?? '', $APP_ROOT); ?>
+                                <?php if ($qrUrl !== ''): ?>
+                                    <img class="qr-thumb" src="<?= htmlspecialchars($qrUrl) ?>" alt="QR"
                                          onerror="this.onerror=null;this.classList.add('qr-auto');this.removeAttribute('data-qr-student-id');generateQrThumbFallback(this);"
                                          onclick="showQrModal(this)"
                                          data-name="<?= htmlspecialchars($card['student_name'] ?? '', ENT_QUOTES) ?>"
@@ -2082,7 +2133,23 @@ body[data-page="rfid"] .rfid-table-header{
                         <div class="school">BESTLINK COLLEGE OF THE PHILIPPINES<small>Official Student Identification</small></div>
                     </div>
                     <div class="idcard-photo-wrap">
-                        <img class="idcard-photo" id="cardPhoto" src="" alt="photo" style="display:none;" onerror="showIdInitialsFallback()">
+                        <?php // No src attribute, and no inline onerror.
+                              //
+                              // This used to read:
+                              //     <img id="cardPhoto" src="" onerror="showIdInitialsFallback()">
+                              // An empty src is not "no source" - the browser resolves it to
+                              // the document URL, fails to decode the result as an image, and
+                              // fires error WHILE PARSING. That is long before the <script>
+                              // at the bottom of this file has run, so the handler called a
+                              // function that did not exist yet:
+                              //     Uncaught ReferenceError: showIdInitialsFallback is not defined
+                              // display:none did not help - a hidden image is still fetched.
+                              //
+                              // The handler is attached in viewIdCard(), immediately before
+                              // the src is assigned, which is the only moment a real load
+                              // failure can happen and the only moment the function is
+                              // certain to be defined. ?>
+                        <img class="idcard-photo" id="cardPhoto" alt="photo" style="display:none;">
                         <div class="idcard-initials" id="cardInitials" style="display:none;">&mdash;</div>
                     </div>
                     <div class="idcard-center">
@@ -3026,6 +3093,16 @@ function viewIdCard(btn) {
     const ini = document.getElementById('cardInitials');
     const src = normalizePhotoPath(d.photo);
     ini.style.display = 'none';
+    // Attached here, not in the markup. This is the moment a photo load can
+    // actually fail, and the moment the fallback is certain to exist: the old
+    // inline onerror fired during parsing, before this script had run at all,
+    // which is why a missing student photo threw a ReferenceError instead of
+    // quietly showing the initials it was written to show.
+    img.onerror = function () {
+        img.onerror = null;
+        img.removeAttribute('src');
+        showIdInitialsFallback();
+    };
     if (src) { img.style.display = 'block'; img.src = src; }
     else { img.style.display = 'none'; ini.textContent = idInitialsOf(d.name); ini.style.display = 'flex'; }
     document.getElementById('cardName').textContent = d.name || '—';

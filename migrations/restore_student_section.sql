@@ -36,20 +36,46 @@ SET @sql := IF(
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- Put the archived values back.
-UPDATE `students` s
-  JOIN `retired_student_sections` r
-    ON r.student_id = s.id AND r.table_name = 'students'
-  SET s.section = r.section
-  WHERE s.section IS NULL OR TRIM(s.section) = '';
+--
+-- Guarded on the archive table existing. retired_student_sections was
+-- created by drop_student_section.sql, the migration that took the
+-- values away before dropping the column - and that file is deleted, so
+-- a database created from registrar_ai.sql never had it. The three
+-- restore UPDATEs are the only reason this file was not a no-op on a
+-- fresh install: the guarded ALTERs above all correctly did nothing,
+-- and then the very next statement died on a table that had never
+-- existed. A no-op has to be a no-op all the way through, or an
+-- operator importing the dump still has to work out which migrations
+-- are safe to skip.
+--
+-- Double-quoted, as in every sibling migration here: the statement is a
+-- string literal for PREPARE, and ANSI_QUOTES is not part of the SQL
+-- mode this app runs under.
+SET @has := (
+  SELECT COUNT(*) FROM information_schema.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'retired_student_sections'
+);
+SET @s := IF(@has = 0, 'DO 0',
+  "UPDATE `students` s
+     JOIN `retired_student_sections` r
+       ON r.student_id = s.id AND r.table_name = 'students'
+     SET s.section = r.section
+   WHERE s.section IS NULL OR TRIM(s.section) = ''");
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
-UPDATE `enrollments` e
-  JOIN `retired_student_sections` r
-    ON r.student_id = e.id AND r.table_name = 'enrollments'
-  SET e.section = r.section
-  WHERE e.section IS NULL OR TRIM(e.section) = '';
+SET @s := IF(@has = 0, 'DO 0',
+  "UPDATE `enrollments` e
+     JOIN `retired_student_sections` r
+       ON r.student_id = e.id AND r.table_name = 'enrollments'
+     SET e.section = r.section
+   WHERE e.section IS NULL OR TRIM(e.section) = ''");
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
-UPDATE `enrollment_history` h
-  JOIN `retired_student_sections` r
-    ON r.student_id = h.id AND r.table_name = 'enrollment_history'
-  SET h.section = r.section
-  WHERE h.section IS NULL OR TRIM(h.section) = '';
+SET @s := IF(@has = 0, 'DO 0',
+  "UPDATE `enrollment_history` h
+     JOIN `retired_student_sections` r
+       ON r.student_id = h.id AND r.table_name = 'enrollment_history'
+     SET h.section = r.section
+   WHERE h.section IS NULL OR TRIM(h.section) = ''");
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+

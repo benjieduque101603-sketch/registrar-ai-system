@@ -28,12 +28,23 @@ function studentQualityNormalizePhone(string $phone): string
 
 function studentQualityScoreValue(array $student): int
 {
+    // `section` was weighted here and has been removed.
+    //
+    // A student's section is assigned by Class Scheduling (#297), not by the
+    // Registrar - see DEPARTMENTS.md. Leaving the weight in place meant every
+    // student was silently docked up to 5 points for a field no Registrar can
+    // fill, so a perfect record scored 95 and the Quality column read as a
+    // data-quality complaint about something outside this office.
+    //
+    // Its 5 points went to `course`, the heaviest remaining field: the program
+    // is what the Registrar does own, and what every Registrar-issued document
+    // is built on. The weights still total 100, so scores stay comparable with
+    // each other - which is the only comparison this column is ever used for.
     $weights = [
         'student_number' => 10, 'first_name' => 10, 'last_name' => 10,
-        'address' => 8, 'gender' => 8, 'birth_date' => 10, 'course' => 12,
+        'address' => 8, 'gender' => 8, 'birth_date' => 10, 'course' => 15,
         'contact_number' => 8, 'email' => 6, 'nationality' => 4,
-        'section' => 5, 'school_year' => 5,
-        'year_level' => 3, 'semester' => 3,
+        'school_year' => 5, 'year_level' => 3, 'semester' => 3,
     ];
     $score = 100;
     foreach ($weights as $field => $points) {
@@ -110,7 +121,11 @@ function buildStudentQualityReport(array $student, ?callable $courseNormalizer =
         'email' => ['contact', 'Email'],
         'course' => ['academic', 'Course'],
         'year_level' => ['academic', 'Year level'],
-        'section' => ['academic', 'Section'],
+        // `section` was here and is not, for the same reason it left the
+        // weights above: this office cannot fill it, so an issue reading
+        // "Section is missing" is a task with no possible completion. It put a
+        // permanently unfixable row on the Quality Desk for every student who
+        // has not been placed in a block yet.
         'school_year' => ['academic', 'School year'],
         'semester' => ['academic', 'Semester'],
     ];

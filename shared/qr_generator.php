@@ -17,8 +17,25 @@
  * mounted. Absolute URLs and data:/blob: URIs are passed through untouched, and
  * traversal segments cannot escape uploads/ids/.
  *
+ * EXISTENCE-AWARE, and that is the whole point of it.
+ *
+ * uploads/ is gitignored: QR files are runtime artifacts, generated on the host
+ * that issues the card. So a database whose rows were created elsewhere - a
+ * migrated server, a staging copy promoted to production - carries filenames
+ * that do not exist here, and every one of them is a 404 in the browser and a
+ * broken image where the QR should be.
+ *
+ * Returning '' for a file that is not there lets the caller take the branch it
+ * already has for "no QR on file": render the thumbnail from the student id with
+ * the bundled QR library instead. The QR is correct, nothing 404s, and no file
+ * is written during a page render. What it deliberately does NOT do is quietly
+ * regenerate the SVG and update the row - that is a write inside a GET, done
+ * once per card per page load, to work around a deployment step that belongs in
+ * a migration rather than in a page render.
+ *
  * @param string|null $stored  Raw qr_code_path value
  * @param string      $appRoot Prefix from the including page, e.g. '../'
+ * @return string  A loadable URL, or '' when there is nothing loadable to point at.
  */
 function resolveStudentQrUrl(?string $stored, string $appRoot = './'): string {
     $stored = trim((string) $stored);
@@ -26,6 +43,11 @@ function resolveStudentQrUrl(?string $stored, string $appRoot = './'): string {
     if (preg_match('#^(https?:)?//|^data:|^blob:#i', $stored)) return $stored;
     $file = basename(str_replace('\\', '/', $stored));
     if ($file === '' || $file === '.' || $file === '..') return '';
+
+    // Only ever looked up under uploads/ids/, whatever the stored string claimed.
+    $abs = __DIR__ . '/../uploads/ids/' . $file;
+    if (!is_file($abs)) return '';
+
     return rtrim($appRoot, '/') . '/uploads/ids/' . rawurlencode($file);
 }
 

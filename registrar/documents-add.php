@@ -16,6 +16,7 @@ if (empty($_SESSION['user_id'])) {
 requireRole('registrar');
 
 require_once __DIR__ . '/../shared/database.php';
+require_once __DIR__ . '/../shared/schema.php';
 
 $db = Database::getInstance();
 // Same status filter as documents.php: the column default is 'enrolled', so
@@ -26,7 +27,11 @@ $students = $db->fetchAll(
       WHERE status IS NULL OR status NOT IN ('archived')
       ORDER BY name"
 );
-$catalog = $db->fetchAll("SELECT * FROM document_catalog WHERE is_active = 1 ORDER BY id");
+$catalog = db_fill_optional(
+    $db->fetchAll("SELECT * FROM document_catalog WHERE is_active = 1 ORDER BY id"),
+    'document_catalog',
+    ['sla_days', 'requirement']
+);
 
 $page_title = 'New Document Request';
 $APP_ROOT = '../';

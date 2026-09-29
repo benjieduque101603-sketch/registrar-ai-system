@@ -6,9 +6,15 @@
 // ============================================================
 
 require_once __DIR__ . '/../shared/security_headers.php';
+// For app_url() only. Deliberately NOT config.php: this display must render
+// even when the database is unreachable, and config.php opens a mysqli
+// connection at include time.
+require_once __DIR__ . '/../shared/app_path.php';
 
 $APP_ROOT = '../';
 $page_title = 'Queue Monitor';
+// Where the API actually is, told to the client by the server that knows.
+$api_base = rtrim(app_url('/api'), '/') . '/';
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,7 +26,7 @@ $page_title = 'Queue Monitor';
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="<?= $APP_ROOT ?>css/queue.css" />
 </head>
-<body class="monitor-body" data-page="monitor">
+<body class="monitor-body" data-page="monitor" data-api-base="<?= htmlspecialchars($api_base, ENT_QUOTES) ?>">
 <div class="monitor-screen">
 
     <div class="monitor-top">

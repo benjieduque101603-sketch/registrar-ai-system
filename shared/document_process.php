@@ -295,9 +295,24 @@ function doc_next_step(array $row): ?array
  */
 function doc_refresh_blocker(int $requestId): bool
 {
+    // Required here rather than at the top of the file: everything above
+    // this function is pure logic that the unit checks exercise with no
+    // database at all, and schema.php pulls in the connection.
+    require_once __DIR__ . '/schema.php';   // db_optional_column()
+
     $db = Database::getInstance();
+    // sla_days and requirement are named here but they are not what this
+    // function decides - the balance is. Naming a column a migration has
+    // not added yet makes the whole re-check fail, including the manual-hold
+    // check below, which is a person's decision and must not depend on
+    // schema vintage. The write side of this function already reads
+    // SHOW COLUMNS before touching blocked_*; this is the read side
+    // catching up, so the two agree on what "the column may be absent"
+    // means.
     $row = $db->fetchOne(
-        "SELECT dr.*, c.sku, c.sla_days, c.requirement
+        "SELECT dr.*, c.sku,
+                " . db_optional_column('document_catalog', 'requirement', 'c') . ",
+                " . db_optional_column('document_catalog', 'sla_days', 'c') . "
            FROM document_requests dr
            LEFT JOIN document_catalog c ON c.id = dr.catalog_id
           WHERE dr.id = ?",

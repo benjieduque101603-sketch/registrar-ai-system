@@ -28,6 +28,7 @@ require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/document_process.php';
+require_once __DIR__ . '/../shared/schema.php';
 
 if (!isLoggedIn()) {
     echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
@@ -106,7 +107,11 @@ if ($purpose === '') {
 try {
     $db = Database::getInstance();
 
-    $catalog = $db->fetchOne('SELECT * FROM document_catalog WHERE id = ? AND is_active = 1', [$catalogId]);
+    $catalog = db_fill_optional(
+        $db->fetchOne('SELECT * FROM document_catalog WHERE id = ? AND is_active = 1', [$catalogId]),
+        'document_catalog',
+        ['sla_days', 'requirement']
+    );
     if (!$catalog) {
         echo json_encode(['success' => false, 'message' => 'Invalid or inactive document in the catalog.']);
         exit;

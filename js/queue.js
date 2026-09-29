@@ -7,13 +7,34 @@
     'use strict';
 
     var PAGE = document.body.getAttribute('data-page') || '';
-    // Root pages (dashboard.php) sit at the app root; kiosk/monitor/console
-    // pages live in /queue and /registrar subfolders, so resolve the API
-    // directory based on the current page's depth — same ../api convention
-    // the rest of the app uses.
-    var depth = (window.location.pathname.match(/\//g) || []).length - 1;
-    var API = (depth > 1 ? '../' : '') + 'api/queue-public.php';
-    var API_AUTH = (depth > 1 ? '../' : '') + 'api/queue.php';
+
+    // Where the API lives, as told by the server that rendered this page.
+    //
+    // It used to be guessed from the URL:
+    //
+    //     var depth = (window.location.pathname.match(/\//g) || []).length - 1;
+    //     var API = (depth > 1 ? '../' : '') + 'api/queue-public.php';
+    //
+    // which is right on exactly one deployment shape. The app is mounted one
+    // level deep on localhost (/registrar-ai-system/queue/monitor.php → depth
+    // 2 → '../api/…') and at the domain root on the live host
+    // (/queue/monitor.php → depth 1 → 'api/…', resolved against /queue/ →
+    // /queue/api/queue-public.php). So on production every call from the
+    // monitor and the serving console 404'd, and the kiosk's tap-in got
+    // 'Network error' because a 404 HTML page is not JSON. The pages are
+    // public and cannot ask PHP for anything, so they pass it down in
+    // data-api-base instead of letting JS re-derive it.
+    //
+    // The heuristic survives only as a fallback, so a page that forgets the
+    // attribute still works on a subdirectory install.
+    var API_BASE = document.body.getAttribute('data-api-base') || '';
+    if (!API_BASE) {
+        var depth = (window.location.pathname.match(/\//g) || []).length - 1;
+        API_BASE = (depth > 1 ? '../' : '') + 'api/';
+        console.warn('[queue] no data-api-base on <body>; fell back to guessing from the URL.');
+    }
+    var API = API_BASE + 'queue-public.php';
+    var API_AUTH = API_BASE + 'queue.php';
 
     // ── Polling helper ───────────────────────────────────────
     function startPoll(fn, ms, bindEl) {
@@ -45,8 +66,73 @@
         } };
     }
 
+    // One place where a queue request can fail, so one place that says WHY.
+    //
+    // It used to be:
+    //     return fetch(url, opts).then(function (r) { return r.json(); });
+    //
+    // which collapses three very different failures into the same rejection,
+    // and the pages then showed "Network error." to a student standing at a
+    // kiosk:
+    //
+    //   · the API is at the wrong URL  -> 404, body is HTML, .json() throws
+    //   · the API is unreachable       -> fetch rejects
+    //   · the API threw                -> 500, body is HTML or JSON
+    //
+    // The 404 case is the one that bit production: the client had guessed the
+    // API path wrong, asked for /queue/api/queue-public.php, and the reported
+    // symptom was an unhelpful one-liner while the real fault - a URL that does
+    // not exist - was invisible without a network tab and the server logs.
+    //
+    // So the status and the URL now travel with the error. Anything that shows
+    // the message to a user, or prints it to the console, names the request
+    // that failed, which is reportable by someone with no server access.
+    // Report a failed queue request once, with enough detail to act on.
+    //
+    // Five of the call sites used to end in `.catch(function () {})`, which is
+    // the reason this class of fault was so hard to pin down: the monitor
+    // simply stayed blank, and the console showed nothing. A silent catch is
+    // only acceptable when nothing could be done about the failure; here the
+    // URL and status are usually the whole answer.
+    //
+    // Deduplicated, because two of these run on a 3-second poll and an
+    // unchanged 404 would otherwise fill the console faster than anyone reads.
+    var lastReported = {};
+    function reportQueueError(err, where) {
+        var msg = (err && err.message) || String(err);
+        var key = where + '|' + msg;
+        if (lastReported[key]) return;
+        lastReported[key] = true;
+        console.error('[queue] ' + where + ': ' + msg);
+    }
+
+    // Short, readable form for something shown on a wall display or read over
+    // a student's shoulder. Keeps the status code - "error 404" is something a
+    // person can report - and drops the URL and body, which are noise there.
+    function shortReason(err) {
+        var msg = (err && err.message) || String(err || '');
+        var code = msg.match(/HTTP (\d{3})/);
+        if (code) return "Can't reach the queue service (error " + code[1] + '). Please see the registrar.';
+        return "Can't reach the queue service. Please see the registrar.";
+    }
+
     function fetchJson(url, opts) {
-        return fetch(url, opts).then(function (r) { return r.json(); });
+        return fetch(url, opts).then(function (r) {
+            return r.text().then(function (body) {
+                if (r.ok) {
+                    try {
+                        return JSON.parse(body);
+                    } catch (e) {
+                        throw new Error('Bad JSON from ' + url + ' (HTTP ' + r.status + ')');
+                    }
+                }
+                var snippet = body.replace(/\s+/g, ' ').trim().slice(0, 120);
+                throw new Error('HTTP ' + r.status + ' from ' + url
+                    + (snippet ? ' - ' + snippet : ''));
+            });
+        }, function (netErr) {
+            throw new Error('Cannot reach ' + url + ' (' + (netErr && netErr.message || 'network error') + ')');
+        });
     }
 
     function pad(n) {
@@ -102,8 +188,12 @@
             }).then(function (d) {
                 renderResult(d);
                 returnToTap(d.success || d.code === 'cooldown' ? 7000 : 4500);
-            }).catch(function () {
-                renderResult({ success: false, message: 'Network error. Please try again.', code: 'network' });
+            }).catch(function (e) {
+                // The tap reached nothing, so say why rather than "Network
+                // error" - and keep the detail in the console for whoever is
+                // standing at the machine.
+                reportQueueError(e, 'kiosk join');
+                renderResult({ success: false, message: shortReason(e), code: 'network' });
                 returnToTap(4500);
             }).finally(function () { submitting = false; });
         }
@@ -179,7 +269,7 @@
                 fetchJson(API + '?action=board').then(function (d) {
                     if (!d.success || !d.data) return;
                     renderBoard(d.data);
-                }).catch(function () {});
+                }).catch(function (e) { reportQueueError(e, 'kiosk board'); });
             }
             load();
             boardTimer = startPoll(load, 3000);
@@ -219,8 +309,9 @@
             if (!n) return;
             fetchJson(API + '?action=my_ticket&number=' + encodeURIComponent(n)).then(function (d) {
                 renderStanding(d);
-            }).catch(function () {
-                renderStanding({ success: false, message: 'Network error.' });
+            }).catch(function (e) {
+                reportQueueError(e, 'standing lookup');
+                renderStanding({ success: false, message: shortReason(e) });
             });
         }
 
@@ -365,7 +456,7 @@
         function loadBoard() {
             fetchJson(API + '?action=board').then(function (d) {
                 if (d.success && d.data) render(d.data);
-            }).catch(function () {});
+            }).catch(function (e) { reportQueueError(e, 'monitor board'); });
         }
 
         // Clock
@@ -571,7 +662,10 @@
                 post('call_next', { window: winNum }).then(function (d) {
                     if (d.success) showToast(d.message, 'success');
                     else showToast(d.message || 'Error.', 'error');
-                }).catch(function () { showToast('Network error.', 'error'); })
+                }).catch(function (e) {
+                    reportQueueError(e, 'call next');
+                    showToast(shortReason(e), 'error');
+                })
                 .finally(function () { btnCall.disabled = false; });
             });
 
@@ -582,7 +676,10 @@
                 post('complete', { ticket_id: parseInt(id, 10) }).then(function (d) {
                     if (d.success) showToast(d.message, 'success');
                     else showToast(d.message || 'Error.', 'error');
-                }).catch(function () { showToast('Network error.', 'error'); });
+                }).catch(function (e) {
+                    reportQueueError(e, 'complete ticket');
+                    showToast(shortReason(e), 'error');
+                });
             });
 
             var nsSkip = document.getElementById('nsSkip');
@@ -600,7 +697,11 @@
                     if (d.success) showToast(d.message, 'success');
                     else showToast(d.message || 'Error.', 'error');
                     closeSkip();
-                }).catch(function () { showToast('Network error.', 'error'); closeSkip(); })
+                }).catch(function (e) {
+                    reportQueueError(e, 'skip ticket');
+                    showToast(shortReason(e), 'error');
+                    closeSkip();
+                })
                 .finally(function () { skipConfirm.disabled = false; });
             });
 
@@ -622,7 +723,7 @@
             var w = ws ? (parseInt(ws.value, 10) || 1) : 1;
             fetchJson(API_AUTH + '?action=state&window=' + w).then(function (d) {
                 if (d.success && d.data) render(d.data);
-            }).catch(function () {});
+            }).catch(function (e) { reportQueueError(e, 'serving console state'); });
         }
 
         // Persist window selection
@@ -662,7 +763,7 @@
                     '<div class="lq-row"><span>Completed today</span><strong>' + (st.completed || 0) + '</strong></div>';
                 if (serving) html += '<div class="lq-row"><span style="color:#64748b;">' + esc(serving.student_name) + '</span></div>';
                 el.innerHTML = html;
-            }).catch(function () {});
+            }).catch(function (e) { reportQueueError(e, 'dashboard widget'); });
         }
         loadWidget();
         startPoll(loadWidget, 5000);
