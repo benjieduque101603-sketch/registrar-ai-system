@@ -712,7 +712,7 @@ try {
                 exit;
             }
 
-            $existing = $db->fetchOne("SELECT id, year_level FROM students WHERE id = ?", [$id]);
+            $existing = $db->fetchOne("SELECT id FROM students WHERE id = ?", [$id]);
             if (!$existing) {
                 echo json_encode(['success' => false, 'message' => 'Student not found.']);
                 exit;
@@ -727,13 +727,13 @@ try {
             $allowedFields = ['first_name', 'middle_name', 'last_name', 'gender', 'civil_status', 'birth_date', 'place_of_birth',
                               'birth_country', 'lrn', 'name_suffix', 'mother_name', 'father_name',
                               'nationality', 'religion', 'address', 'contact_number', 'email',
-                              'course', 'major', 'year_level', 'school_year', 'semester', 'section', 'adviser_id', 'status',
+                              'course', 'major', 'year_level', 'school_year', 'semester', 'adviser_id', 'status',
                               'student_number'];
 
             foreach ($allowedFields as $field) {
                 if (array_key_exists($field, $input)) {
                     $value = $input[$field];
-                    if ($value === '' && in_array($field, ['birth_date', 'middle_name', 'place_of_birth', 'birth_country', 'nationality', 'religion', 'contact_number', 'email', 'course', 'major', 'year_level', 'school_year', 'semester', 'section', 'adviser_id', 'lrn', 'name_suffix', 'mother_name', 'father_name'], true)) {
+                    if ($value === '' && in_array($field, ['birth_date', 'middle_name', 'place_of_birth', 'birth_country', 'nationality', 'religion', 'contact_number', 'email', 'course', 'major', 'year_level', 'school_year', 'semester', 'adviser_id', 'lrn', 'name_suffix', 'mother_name', 'father_name'], true)) {
                         $value = null;
                     }
                     if ($field === 'birth_date' && $value === '0000-00-00') {
@@ -746,20 +746,6 @@ try {
                     }
                     if ($field === 'adviser_id' && $value !== null) {
                         $value = (int)$value;
-                    }
-                    // A section code encodes the year level ([year][sem][###]),
-                    // so a section is meaningless without a year level. Reject
-                    // the combination rather than storing a misleading record.
-                    if ($field === 'section' && $value !== null && $value !== '') {
-                        // Fall back to the stored year level when a partial
-                        // update doesn't resend it.
-                        $effectiveYear = array_key_exists('year_level', $input)
-                            ? trim((string) ($input['year_level'] ?? ''))
-                            : trim((string) ($existing['year_level'] ?? ''));
-                        if ($effectiveYear === '' || (int) $effectiveYear < 1) {
-                            echo json_encode(['success' => false, 'message' => 'A section cannot be set without a year level. Set the year level first.']);
-                            exit;
-                        }
                     }
                     if ($field === 'lrn' && $value !== null && $value !== '') {
                         $value = strtoupper(preg_replace('/[^0-9]/', '', (string)$value));

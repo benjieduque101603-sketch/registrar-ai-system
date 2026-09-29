@@ -32,7 +32,7 @@ function studentQualityScoreValue(array $student): int
         'student_number' => 10, 'first_name' => 10, 'last_name' => 10,
         'address' => 8, 'gender' => 8, 'birth_date' => 10, 'course' => 12,
         'contact_number' => 8, 'email' => 6, 'nationality' => 4,
-        'section' => 5, 'school_year' => 5,
+        'school_year' => 5,
         'year_level' => 3, 'semester' => 3,
     ];
     $score = 100;
@@ -110,7 +110,6 @@ function buildStudentQualityReport(array $student, ?callable $courseNormalizer =
         'email' => ['contact', 'Email'],
         'course' => ['academic', 'Course'],
         'year_level' => ['academic', 'Year level'],
-        'section' => ['academic', 'Section'],
         'school_year' => ['academic', 'School year'],
         'semester' => ['academic', 'Semester'],
     ];

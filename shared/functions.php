@@ -1201,7 +1201,9 @@ function createStudentFromInput(array $input, $db): array
         'year_level' => $yearLevel,
         'school_year' => isset($input['school_year']) && trim($input['school_year']) !== '' ? trim($input['school_year']) : null,
         'semester' => $semesterRaw,
-        'section' => $input['section'] ?? null,
+        // Registrar does not assign section codes; the receiving department
+        // writes them on the Masterlist after handoff.
+        'section' => null,
         'adviser_id' => isset($input['adviser_id']) && $input['adviser_id'] !== '' ? (int) $input['adviser_id'] : null,
         'status' => $input['status'] ?? 'active',
     ];
