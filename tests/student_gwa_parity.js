@@ -52,5 +52,29 @@ check('academic-history.php still uses shared/term_grades.php',
 check('academic-history.php still uses termGwa()',
     /termGwa\s*\(/.test(ah), true);
 
+// ── Term picker ──────────────────────────────────────────────
+// Both student pages let the student pick a school year and semester.
+// The options must come from that student's own rows, and the resolution
+// must be shared so the two pages cannot disagree about what exists.
+console.log('\nstudent term picker:');
+const tg = fs.readFileSync(path.join(__dirname, '..', 'shared', 'term_grades.php'), 'utf8');
+check('helper builds the options', /function studentTermOptions\s*\(/.test(tg), true);
+check('helper resolves the choice', /function resolveStudentTerm\s*\(/.test(tg), true);
+
+for (const page of ['grades.php', 'academic-records.php']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'student', page), 'utf8');
+    check(`${page} offers a school-year select`, /name="sy"/.test(src), true);
+    check(`${page} offers a semester select`, /name="sem"/.test(src), true);
+    check(`${page} uses the shared options`, /studentTermOptions\s*\(/.test(src), true);
+    check(`${page} uses the shared resolver`, /resolveStudentTerm\s*\(/.test(src), true);
+    // A GET form, so the choice survives a refresh and works without JS.
+    check(`${page} picker is a GET form`, /<form[^>]*class="st-picker"[^>]*method="get"/.test(src), true);
+    check(`${page} picker has a submit button`,
+        /<button[^>]*type="submit"[^>]*st-picker-go/.test(src), true);
+    // Career figures must not be recomputed from the filtered set.
+    check(`${page} keeps a career figure`,
+        /careerGwa\([\s\S]{0,200}?\$allTerms/.test(src), true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

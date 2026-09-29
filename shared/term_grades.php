@@ -144,6 +144,104 @@ function termSortKey($schoolYear, $semester): string
 }
 
 /**
+ * The distinct terms a student actually has records for, newest first.
+ *
+ * Built from that student's own academic_history rows, so the picker can
+ * only ever offer a term that exists for them. A hardcoded list of years
+ * would show a student four empty years and make the empty state the
+ * commonest thing on the page.
+ *
+ * Year level is deliberately NOT part of this. academic_history records
+ * a term as school year + semester; a student's year level is a single
+ * current value on the students row, not a per-term fact, so a year
+ * level filter would have nothing truthful to filter on.
+ *
+ * @param  array $historyRows Rows carrying 'school_year' and 'semester'.
+ * @return array<int,array{sy:string,sem:string,label:string}>
+ */
+function studentTermOptions(array $historyRows): array
+{
+    $seen = [];
+    foreach ($historyRows as $r) {
+        $sy  = trim((string) ($r['school_year'] ?? ''));
+        $sem = trim((string) ($r['semester'] ?? ''));
+        if ($sy === '' && $sem === '') {
+            continue;
+        }
+        $seen[$sy . "\x1F" . $sem] = ['sy' => $sy, 'sem' => $sem];
+    }
+
+    $options = array_values($seen);
+    usort($options, static function ($a, $b) {
+        return strcmp(
+            termSortKey($b['sy'], $b['sem']),
+            termSortKey($a['sy'], $a['sem'])
+        );
+    });
+
+    foreach ($options as &$o) {
+        $o['label'] = termLabel($o['sy'], $o['sem']);
+    }
+    unset($o);
+
+    return $options;
+}
+
+/**
+ * Resolve a school-year / semester choice against the options a student
+ * really has.
+ *
+ * An unrecognised or absent choice falls back to the most recent term
+ * rather than showing an empty page: a stale bookmark should land the
+ * student on their newest results, which is what they meant.
+ *
+ * @return array{sy:string,sem:string,label:string,adjusted:bool}
+ */
+function resolveStudentTerm(array $options, ?string $sy, ?string $sem): array
+{
+    $fallback = static function () use ($options): array {
+        $o = $options[0] ?? ['sy' => '', 'sem' => ''];
+        return [
+            'sy'       => $o['sy'],
+            'sem'      => $o['sem'],
+            'label'    => $o['sy'] !== '' || $o['sem'] !== ''
+                ? termLabel($o['sy'], $o['sem'])
+                : 'No term selected',
+            'adjusted' => false,
+        ];
+    };
+
+    if (!$options) {
+        return ['sy' => '', 'sem' => '', 'label' => 'No term selected', 'adjusted' => false];
+    }
+
+    $sy  = trim((string) $sy);
+    $sem = trim((string) $sem);
+    if ($sy === '' && $sem === '') {
+        return $fallback();
+    }
+
+    // Match the semester loosely - a page may hand back "Summer" where the
+    // row says "summer" - but keep the school year exact.
+    foreach ($options as $o) {
+        $semOk = $sem === '' || strcasecmp($o['sem'], $sem) === 0;
+        $syOk  = $sy === '' || $o['sy'] === $sy;
+        if ($semOk && $syOk) {
+            return [
+                'sy'       => $o['sy'],
+                'sem'      => $o['sem'],
+                'label'    => $o['label'],
+                'adjusted' => false,
+            ];
+        }
+    }
+
+    $r = $fallback();
+    $r['adjusted'] = true;
+    return $r;
+}
+
+/**
  * Pre-flight audit of one term, run before it is closed.
  *
  * Two severities, and the split is deliberate:
