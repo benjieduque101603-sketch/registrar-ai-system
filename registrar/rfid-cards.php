@@ -1046,6 +1046,9 @@ body[data-page="rfid"] .search-bar{background:#fff;padding:13px 18px;border-bott
 body[data-page="rfid"] .search-bar .search-wrapper{max-width:none}
 body[data-page="rfid"] .search-bar input,
 body[data-page="rfid"] .search-bar select{height:38px;border:1px solid #cbd5e1!important;border-radius:9px;background:#f8faff!important;font:13px Inter,sans-serif;padding:0 12px}
+body[data-page="rfid"] .search-bar .search-wrapper input{padding:0 38px}
+body[data-page="rfid"] .search-bar .filter-select-wrapper{flex:0 0 142px;min-width:142px}
+body[data-page="rfid"] .search-bar .filter-select-wrapper select{padding:0 32px 0 36px;appearance:none;-webkit-appearance:none}
 body[data-page="rfid"] .search-bar input:focus,
 body[data-page="rfid"] .search-bar select:focus{outline:0;border-color:#2563eb!important;background:#fff!important;box-shadow:0 0 0 4px rgba(37,99,235,.1)}
 body[data-page="rfid"] .search-bar .search-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
@@ -1374,6 +1377,10 @@ body[data-page="rfid"] .rfid-table-header{
 .rc-empty i{font-size:34px;color:#cbd5e1}
 .rc-empty p{margin:0;font-size:14px;font-weight:600;color:#64748b}
 .rc-empty span{font-size:12.5px;color:#94a3b8}
+body[data-page="rfid"] td.rc-empty{display:table-cell;height:220px;min-height:0;vertical-align:middle;text-align:center}
+body[data-page="rfid"] td.rc-empty i,
+body[data-page="rfid"] td.rc-empty p,
+body[data-page="rfid"] td.rc-empty span{display:block}
 
 /* -- Responsive -- */
 @media(max-width:1200px){body[data-page="rfid"] .rfid-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
