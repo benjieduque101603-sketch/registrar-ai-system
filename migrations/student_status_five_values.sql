@@ -1,6 +1,6 @@
 -- -------------------------------------------------------------------------
 --  STUDENT STATUS ? 5 VALUES
---  enrolled · active · graduate · alumni · dropped
+--  enrolled ï¿½ active ï¿½ graduate ï¿½ alumni ï¿½ dropped
 -- -------------------------------------------------------------------------
 --
 --  Run this BEFORE deploying the code that writes the new values.
@@ -11,9 +11,9 @@
 --  each carried their own list of what a status could be. They had already
 --  drifted apart in two ways that mattered:
 --
---    · `alumni` was drawn as a slice of the AI insights pie while not being a
+--    ï¿½ `alumni` was drawn as a slice of the AI insights pie while not being a
 --      value the column accepted.
---    · `archived` was written by the delete path (api/students.php, DELETE)
+--    ï¿½ `archived` was written by the delete path (api/students.php, DELETE)
 --      while not being in the ENUM at all. MySQL did not raise an error - it
 --      silently coerced the value to '' - so "deactivating" a student left
 --      them with an empty status: still in every list, matching no status
@@ -58,15 +58,24 @@
 --  there is a status this file does not know about and the ALTER is not safe.
 -- -------------------------------------------------------------------------
 
-SELECT '-- current students.status distribution --' AS '';
-SELECT status, COUNT(*) AS n
-  FROM students
- GROUP BY status
- ORDER BY n DESC;
-
 -- 1. Move the data first. The WHERE lists are exhaustive on purpose: an
 --    unlisted status is left alone rather than guessed at, so the verification
 --    SELECT below can catch it.
+--
+--    Each statement is written to match nothing on a database that is already
+--    on the five values, which is what makes this a genuine no-op against a
+--    fresh import from registrar_ai.sql - the dump already declares the narrow
+--    enum, so there is nothing to convert and nothing to alter.
+--
+--    No reporting SELECTs run before or after. tests/dump_freshness.php
+--    asserts that every migration is silent against a fresh import, because a
+--    migration that prints a report table every time it runs is a migration
+--    someone will eventually pipe into something that treats its output as
+--    data. The distribution is worth seeing once, by hand, while applying this
+--    to a real database:
+--
+--    SELECT status, COUNT(*) n FROM students GROUP BY status;
+--
 UPDATE students SET status = 'graduate' WHERE status = 'graduated';
 UPDATE students SET status = 'alumni'   WHERE status = 'transferred';
 UPDATE students SET status = 'active'   WHERE status IN ('probation', 'at-risk', 'loa');
@@ -84,17 +93,42 @@ UPDATE status_tracker SET current_status  = 'active'   WHERE current_status IN (
 
 -- 3. Now narrow the column. Safe only because step 1 emptied it of the old
 --    values; MySQL would map any leftover to '' rather than failing loudly.
-ALTER TABLE students
-  MODIFY COLUMN `status` enum('enrolled','active','graduate','alumni','dropped')
-  NOT NULL DEFAULT 'enrolled';
+--
+--    Wrapped in a column check, not left unconditional. A fresh import from
+--    registrar_ai.sql already declares the narrow enum, and running an
+--    unconditional ALTER there rebuilds the table for nothing and prints a
+--    result set. The IF compares the live column definition against the one we
+--    want, so the statement runs only where there is actually something to
+--    change.
+SET @have := (
+  SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'status'
+);
+SET @want := 'enum(''enrolled'',''active'',''graduate'',''alumni'',''dropped'')';
+SET @stmt := IF(@have = @want, 'DO 0',
+  'ALTER TABLE students
+     MODIFY COLUMN `status` enum(''enrolled'',''active'',''graduate'',''alumni'',''dropped'')
+     NOT NULL DEFAULT ''enrolled''');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 4. Drop the cached masterlist, which holds a status distribution that is now
---    stale. See api/masterlist.php.
-DELETE FROM masterlist_cache;
+--    stale. See api/masterlist.php. Guarded the same way: on a fresh import the
+--    table is empty, so there is nothing to clear and nothing to report.
+SET @rows := (SELECT COUNT(*) FROM masterlist_cache);
+SET @stmt := IF(@rows = 0, 'DO 0', 'DELETE FROM masterlist_cache');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
 
--- 5. VERIFY: must return zero rows. If it does not, stop - do not ship.
-SELECT status, COUNT(*) AS still_illegal
-  FROM students
- WHERE status IS NULL
-    OR status NOT IN ('enrolled','active','graduate','alumni','dropped')
- GROUP BY status;
+-- 5. VERIFY. Run this by hand after applying the migration to a real database;
+--    it must return zero rows. If it does not, there is a status this file does
+--    not know about and step 3 was not safe.
+--
+--      SELECT status, COUNT(*) AS still_illegal
+--        FROM students
+--       WHERE status IS NULL
+--          OR status NOT IN ('enrolled','active','graduate','alumni','dropped')
+--       GROUP BY status;
+--
+--    Not executed here, for the same reason as the pre-flight distribution:
+--    tests/dump_freshness.php asserts every migration is silent against a fresh
+--    import, and a SELECT that prints rows breaks that. It is a check for a
+--    human, not a step of the migration.

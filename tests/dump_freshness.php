@@ -66,6 +66,68 @@ $fresh = $root->query("SHOW TABLES FROM `$tmp`")->fetchAll(PDO::FETCH_COLUMN);
 t('every live table is defined in the dump',
     count(array_diff($live, $fresh)) === 0,
     'missing: ' . implode(', ', array_diff($live, $fresh)));
+// -- 1b. Every table the CODE reads is defined in the dump.
+//
+// The check above compares the dump against the live database, so a table
+// missing from BOTH passes it. That is exactly how card_readers got here:
+// five files read it without a guard - api/card-readers.php,
+// registrar/rfid-readers.php, registrar/rfid-kiosk.php, api/rfid-scan.php and
+// shared/rfid_helpers.php - and it existed in neither the dump nor the live
+// database, so a fresh install would have had a dead Readers page, a dead
+// Kiosk, and a card-readers endpoint answering "table not found".
+//
+// Scans the application source for table names in SQL position and checks them
+// against the freshly imported schema. SQL keywords are filtered out, so what
+// is left are identifiers the code expects to be real tables.
+// Comments and string literals are stripped before the scan. Without that,
+// prose in a docblock matches too: document_process.php says
+// "Deliberately separate from doc_blocker()", and that was reported as a
+// missing table. Real table names here are lower_snake case with at least one
+// underscore, which filters the remaining single English words.
+$sqlWords = [];
+$rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__)));
+foreach ($rii as $file) {
+    $p = $file->getPathname();
+    if (!is_file($p) || substr($p, -4) !== '.php' && substr($p, -4) !== '.sql') continue;
+    if (preg_match('#/(vendor|node_modules|\.git|tests)/#', str_replace(chr(92), '/', $p))) continue;
+    $src = @file_get_contents($p);
+    if (!$src) continue;
+    // Comments and SINGLE-quoted literals are stripped; double-quoted strings
+    // are NOT. A naive "#[^"]*"# pairs up quotes across line boundaries and
+    // swallows whole queries - which is how this check passed while every table
+    // was missing: the scanner never saw a single one. Single quotes do not
+    // have that problem, because they are balanced within a line in practice.
+    $src = preg_replace('#/\*.*?\*/#s', ' ', $src);
+    $src = preg_replace('#(^|\s)//[^\n]*#', '$1', $src);
+    $src = preg_replace('#\'[^\']*\'#', "''", $src);
+    if (preg_match_all('#\b(?:FROM|JOIN|INTO|UPDATE)\s+`?([a-z_][a-z0-9_]*)`?#i', $src, $m)) {
+        foreach ($m[1] as $w) $sqlWords[strtolower($w)] = true;
+    }
+}
+$absent = [];
+foreach (array_keys($sqlWords) as $w) {
+    if (!preg_match('#^[a-z][a-z0-9]*(_[a-z0-9]+)+$#', $w)) continue;
+    // Not tables:
+    //   current_timestamp / information_schema - SQL, not storage.
+    //   registrar_ai                         - the database's own name.
+    //   exit_clearances                      - named in a document_templates.php
+    //       docblock as a table that was planned and never built.
+    //   last_read_id                         - a COLUMN in an
+    //       ON DUPLICATE KEY UPDATE clause, which the FROM/JOIN scan cannot
+    //       tell apart from a table reference.
+    //   retired_student_sections             - an optional archive table that
+    //       restore_student_section.sql guards with an information_schema
+    //       check precisely because a fresh install never has it. Requiring it
+    //       would break the guarded migration this check exists to protect.
+    if (in_array($w, ['current_timestamp', 'information_schema', 'registrar_ai',
+        'exit_clearances', 'last_read_id', 'retired_student_sections'], true)) continue;
+    if (in_array($w, $fresh, true)) continue;
+    $absent[] = $w . (in_array($w, $live, true) ? ' (also absent from live)' : '');
+}
+sort($absent);
+t('every table the code reads is defined in the dump',
+    count($absent) === 0,
+    'absent: ' . implode(', ', array_slice($absent, 0, 8)));
 
 // -- 2. Every column the code reads exists in both. This is the check that
 //       would have caught the missing sla_days / blocked_* columns.

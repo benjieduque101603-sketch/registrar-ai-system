@@ -39,6 +39,25 @@
 -- a hand-edited dump does. tests/dump_freshness.php proves it imports clean,
 -- that every migration is a no-op against it, and that nothing but staff
 -- logins is seeded. Run it after any schema change.
+--
+-- The freshness check has three parts, and the third is the one that matters
+-- most for a fresh install:
+--
+--   1. every table in the LIVE database is defined here
+--   2. every column the code reads exists in both
+--   3. every table the CODE reads is defined here
+--
+-- (3) exists because (1) cannot catch a table that is missing from both. That
+-- is how `card_readers` survived here: five files read it unguarded and it
+-- existed neither in this dump nor in the live database, so a fresh install
+-- would have shipped a dead RFID Kiosk, a dead Readers page, and a
+-- card-readers endpoint answering "table not found" - from a file whose header
+-- called the schema complete.
+--
+-- Student status: enrolled / active / graduate / alumni / dropped, defined once
+-- in studentStatuses() (shared/functions.php) and mirrored here. The dump
+-- already declares the narrow enum, so migrations/student_status_five_values.sql
+-- is a silent no-op against it - it exists for databases that ALREADY exist.
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
@@ -773,6 +792,41 @@ CREATE TABLE `queue_tickets` (
   CONSTRAINT `fk_queue_document_request` FOREIGN KEY (`document_request_id`) REFERENCES `document_requests` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_queue_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=23 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+-- RFID READER DEVICES
+--
+-- The physical readers that tap or scan a card, and the name of the place they
+-- sit. A scan records a reader_id (see rfid_scan_logs.scanner_id) so the office
+-- can tell a tap at the entrance from one at the registrar's window.
+--
+-- Added to the dump because five files read this table unguarded -
+-- api/card-readers.php, registrar/rfid-readers.php, registrar/rfid-kiosk.php,
+-- api/rfid-scan.php and shared/rfid_helpers.php - and none of them check
+-- whether it exists first. It was absent from both this dump and the live
+-- database, so the RFID Kiosk, the Readers page and the whole card-readers
+-- endpoint were all one "table not found" away from being dead on a fresh
+-- install, on a database the header calls complete.
+--
+-- reader_type is what a scan MEANS, not what the hardware is:
+--   entrance  the reader is a door, a tap records an entry
+--   exit      the reader is a door, a tap records an exit
+--   both      one reader covers both directions (a desktop reader)
+-- api/rfid-scan.php branches on exactly these three values.
+CREATE TABLE `card_readers` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(120) NOT NULL,
+  `location` varchar(160) NOT NULL,
+  `reader_type` enum('entrance','exit','both') NOT NULL DEFAULT 'both',
+  `reader_code` varchar(64) NOT NULL,
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_reader_code` (`reader_code`),
+  KEY `idx_status` (`status`),
+  KEY `idx_reader_type` (`reader_type`)
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
