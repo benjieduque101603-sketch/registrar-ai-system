@@ -8,18 +8,33 @@ Domain terminology used across the system.
 
 ## Student statuses (`students.status`)
 
+Five values, defined once in `studentStatuses()` (shared/functions.php). Every
+page, the CSS, the API allow-list, the insights pie and the schema dump read
+that one list — there is no second copy to drift.
+
 | Status | Meaning | Portal label |
 |---|---|---|
-| `enrolled` | currently enrolled *(Phase 5, default)* | **Enrolled** |
-| `active` | currently enrolled | **Active** |
-| `probation` | on academic probation | Active |
-| `at-risk` | flagged for risk (used by AI search) | Active |
-| `loa` | leave of absence | Active |
-| `graduated` | completed | **Graduated** |
-| `transferred` | moved to another school | **Transferred** |
-| `dropped` | withdrawn | **Dropped** |
+| `enrolled` | taken on, not yet confirmed as attending *(default)* | **Enrolled** |
+| `active` | attending | **Active** |
+| `graduate` | completed the programme, diploma awarded | **Graduate** |
+| `alumni` | graduate who has left / former student | **Alumni** |
+| `dropped` | withdrawn before completing | **Dropped** |
 
-The 5 **canonical** portal labels (Enrolled / Active / Graduated / Transferred / Dropped) come from `getStudentStatusLabel()` in [[functions.php]]; legacy `probation / at-risk / loa` map to **Active**.
+`graduate` and `alumni` are deliberately separate: the insights pie needs to
+tell "just finished" from "left years ago".
+
+**Retired:** `probation`, `at-risk`, `loa`, `transferred`, `graduated`,
+`archived`. The first five were advisory or event states rather than enrolment
+states — `at-risk` in particular is now a *data-quality signal*
+(shared/student_quality.php), not a column value. `archived` was never a valid
+value at all: the delete path wrote it, MySQL truncated it to `''`, and the
+student was left with an empty status. Archival needs a `deleted_at` column,
+which this schema does not have.
+
+Apply `migrations/student_status_five_values.sql` before deploying code that
+writes the new values — it converts the data first, then narrows the ENUM, then
+verifies. The order matters: narrowing an ENUM does not convert what is inside
+it, so skipping the UPDATEs would truncate every legacy row to `''`.
 
 ## Document types (`document_requests.document_type`)
 
@@ -32,6 +47,17 @@ The 5 **canonical** portal labels (Enrolled / Active / Graduated / Transferred /
 ## File doc types (`documents.doc_type`)
 
 `enrollment` · `transcript` · `health` · `photo` · `clearance` · `other`
+
+Note this is a *different* vocabulary from document_requests above — only
+`transcript` and `clearance` appear in both. Labelled by
+`storedDocTypeLabel()` in shared/stored_file.php, deliberately named apart from
+the request-side `documentTypeLabel()` so the two cannot be swapped.
+
+## Other status columns (not student statuses)
+
+- `rfid_cards.status` — `available` · `active` · `expired` · `lost` · `archived` · `inactive`
+- `document_requests.status` — `pending` · `processing` · `approved` · `denied` · `completed` · `released`
+
 
 ## Roles
 

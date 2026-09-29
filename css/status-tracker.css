@@ -392,6 +392,20 @@ body[data-page="status-tracker"] .st-avatar{
   width:30px;height:30px;border-radius:8px;flex-shrink:0;
   display:grid;place-items:center;font-size:11px;font-weight:700;
 }
+/* The <img> variant, for an avatar carrying a real photograph.
+   The box above is sized in width/height, which an <img> honours, but it also
+   sets display:grid - a layout mode that does nothing for a replaced element
+   and can leave the image sitting oddly inside its own box. object-fit is the
+   load-bearing part: without it the photograph is stretched to a square and a
+   portrait comes out squashed. The background is only visible for the moment
+   before the file decodes, so the column does not flash grey. */
+body[data-page="status-tracker"] img.st-avatar{
+  display:block;
+  object-fit:cover;
+  background:#e8edf3;
+  padding:0;
+  font-size:0;
+}
 body[data-page="status-tracker"] .st-cell-who{display:flex;flex-direction:column;min-width:0}
 body[data-page="status-tracker"] .st-cell-name{
   font-size:13px;font-weight:600;color:var(--text-strong);

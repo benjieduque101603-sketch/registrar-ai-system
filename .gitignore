@@ -27,10 +27,16 @@ uploads/document_pdfs/*
 # Student profile photos written by api/student-upload-photo.php.
 # User data, not source â€” but keep the .htaccess that blocks script execution.
 assets/uploads/students/*
+!assets/uploads/students/.htaccess
 
 # Student file uploads (digital file storage feature)
 uploads/student_files/*
-!assets/uploads/students/.htaccess
+# The negation must follow ITS OWN rule. It used to sit here, unpaired with the
+# assets rule three lines up, so it did nothing at all: `git check-ignore` reported
+# uploads/student_files/.htaccess as ignored. An .htaccess that blocks script
+# execution inside the upload directory would never have been committed, let alone
+# deployed - the guard was present on this machine and absent in every checkout.
+!uploads/student_files/.htaccess
 
 # Editor/tooling backup copies (*.php.backup etc.) â€” never commit these
 *.backup

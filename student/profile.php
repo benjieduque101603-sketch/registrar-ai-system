@@ -41,11 +41,14 @@ if (empty($firstLast)) $firstLast = $fullName;
 $initial  = strtoupper(substr(trim($firstLast), 0, 1));
 $photo    = $student['photo'] ?? '';
 $photoUrl = $photo ? $APP_ROOT . ltrim($photo, './') : '';
-$statusPillCls = $statusPillDot = 'active';
-$statusNow = strtolower($student['status'] ?? 'active');
-foreach (['enrolled','probation','at-risk','graduated','loa','transferred','dropped','inactive'] as $st) {
-    if ($statusNow === $st) { $statusPillCls = $statusPillDot = $st; break; }
-}
+// The pill and dot classes come from the shared status map (loaded by
+// _guard.php), so the portal cannot name a status the registrar's own pages do
+// not. This was a hardcoded array of eight values that no longer existed, and
+// it omitted `enrolled` and `alumni` entirely - so a student's status pill in
+// the portal and the same student's badge in the registrar's list could show
+// two different things.
+$statusMeta     = studentStatusMeta($student['status'] ?? 'enrolled');
+$statusPillCls  = $statusPillDot = $statusMeta['class'];
 ?>
 
 <main class="dashboard-main">

@@ -13,6 +13,10 @@ require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/normalize.php';
+// studentPhotoUrl() / studentPhotoSelectSql() - resolving a student's
+// photograph from Digital File Storage, and checking it is really on this
+// server before handing the client a URL for it.
+require_once __DIR__ . '/../shared/stored_file.php';
 
 // Require login
 if (!isLoggedIn()) {
@@ -164,9 +168,99 @@ try {
     }
 
     // ─── GET DOCUMENT REQUESTS ─────────────────────────────────
+    // ─── GET STUDENT DOCUMENTS ───────────────────────────────────
+    //
+    // Returns THREE things, because a student's document story needs all three
+    // and the tab used to show only one of them.
+    //
+    // It used to read document_requests and nothing else. That table is the
+    // counter's walk-in log - a request for a CTC, a good moral, a
+    // certificate. It is not a file store, and the two barely overlap:
+    // document_requests.document_type is an enum of
+    // (form137, good_moral, transcript, certificate, clearance) while the files
+    // themselves live in documents.doc_type as
+    // (enrollment, transcript, health, photo, clearance, other, form_137, psa).
+    // Only "transcript" and "clearance" appear in both. So the tab listed
+    // requests a clerk had made while the student's actual uploaded files -
+    // sitting in Digital File Storage, the same table the photo comes from -
+    // were invisible. "No document requests." was printed for students who had
+    // files on file, which reads as "this student has nothing" and is exactly
+    // backwards.
+    //
+    // The three parts:
+    //   files    - what is actually stored, each with a URL that is only
+    //              non-empty when the file is really on this server
+    //   requests - the counter walk-ins, which is real history and still shown
+    //   missing  - required types with no file, from the shared rule that
+    //              registrar/file-storage.php also uses
+    //
+    // A document row whose file is not on disk is returned with an empty url
+    // and present: false rather than being dropped, so the clerk sees that the
+    // record exists and the file needs re-uploading - the distinction the File
+    // Storage page makes, and the one that lets someone act.
     if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'documents' && isset($_GET['student_id'])) {
-        $data = $db->fetchAll("SELECT * FROM document_requests WHERE student_id = ? ORDER BY request_date DESC", [intval($_GET['student_id'])]);
-        echo json_encode(['success' => true, 'data' => $data]);
+        $sid = intval($_GET['student_id']);
+
+        $docs = $db->fetchAll(
+            "SELECT id, doc_type, filename, file_path, file_size, file_type, description, created_at
+             FROM documents
+             WHERE student_id = ?
+             ORDER BY created_at DESC, id DESC",
+            [$sid]
+        );
+
+        $files = [];
+        $typesPresent = [];
+        foreach ($docs as $doc) {
+            $url = storedFileUrl($doc['file_path'], '../');
+            $files[] = [
+                'id'         => (int) $doc['id'],
+                'doc_type'   => (string) $doc['doc_type'],
+                'label'      => storedDocTypeLabel((string) $doc['doc_type']),
+                'filename'   => (string) $doc['filename'],
+                'url'        => $url,
+                'on_disk'    => $url !== '',
+                'file_size'  => $doc['file_size'] !== null ? (int) $doc['file_size'] : null,
+                'file_type'  => (string) ($doc['file_type'] ?? ''),
+                'is_image'   => in_array(strtolower((string) ($doc['file_type'] ?? '')), ['jpg', 'jpeg', 'png', 'webp', 'gif'], true),
+                'created_at' => (string) ($doc['created_at'] ?? ''),
+            ];
+            // Only a file that is genuinely here counts toward completeness. A
+            // database row naming a file this host never received must not make
+            // a student look complete.
+            if ($url !== '') {
+                $typesPresent[] = (string) $doc['doc_type'];
+            }
+        }
+
+        $requests = $db->fetchAll(
+            "SELECT id, request_id, document_type, status, request_date
+             FROM document_requests
+             WHERE student_id = ?
+             ORDER BY request_date DESC, id DESC",
+            [$sid]
+        );
+
+        $completeness = documentCompleteness($typesPresent);
+
+        echo json_encode([
+            'success' => true,
+            'data'    => [
+                'files'       => $files,
+                'requests'    => $requests,
+                'missing'     => array_map(
+                    static fn($t) => ['doc_type' => $t, 'label' => storedDocTypeLabel($t)],
+                    $completeness['missing']
+                ),
+                'required'    => array_map(
+                    static fn($t) => ['doc_type' => $t, 'label' => storedDocTypeLabel($t)],
+                    requiredDocumentTypes()
+                ),
+                'complete'    => $completeness['complete'],
+                'file_count'  => count($files),
+                'gone_count'  => count(array_filter($files, static fn($f) => !$f['on_disk'])),
+            ],
+        ]);
         exit;
     }
 
@@ -193,11 +287,32 @@ try {
 
     // ─── GET SINGLE STUDENT ────────────────────────────────────
     if ($method === 'GET' && $id) {
+        // `photo_path` carries the photograph held in Digital File Storage, and
+        // `photo_url` is that path already resolved against this server's disk.
+        //
+        // The modal used to read students.photo and nothing else, and that
+        // column is NULL for every student whose picture went through File
+        // Storage - so the View modal showed initials for a student who had a
+        // photograph on file. The list and this endpoint were wrong in the same
+        // way, independently, which is why the resolution now lives in
+        // shared/stored_file.php rather than in either page.
+        //
+        // The URL is computed server-side because deciding between a photo and
+        // initials requires checking the disk: uploads/ is gitignored, so a
+        // database from a copied dump or a promoted staging box names files
+        // this host never received. Resolving here means the client gets '' for
+        // a photograph that is not really here, and falls back to initials -
+        // rather than requesting a URL that 404s.
         $student = $db->fetchOne(
-            "SELECT * FROM students WHERE id = ?",
+            "SELECT s.*, " . studentPhotoSelectSql() . " AS photo_path
+             FROM students s WHERE s.id = ?",
             [$id]
         );
         if ($student) {
+            $student['photo_url'] = studentPhotoUrl($student, '../');
+            // The raw column is redundant next to a resolved URL and invites
+            // the old mistake of assigning it straight to a background-image.
+            unset($student['photo']);
             echo json_encode(['success' => true, 'data' => $student]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Student not found.']);
@@ -205,29 +320,27 @@ try {
         exit;
     }
 
-    // ─── PHOTO UPLOAD ─────────────────────────────────────────
-    if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'upload-photo') {
-        $studentId = intval($_POST['student_id'] ?? 0);
-        if (!$studentId || !isset($_FILES['photo'])) {
-            echo json_encode(['success' => false, 'message' => 'No file or student ID.']);
-            exit;
-        }
-        $ext = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
-        if (!in_array($ext, ['jpg','jpeg','png','gif','webp'])) {
-            echo json_encode(['success' => false, 'message' => 'Invalid file type.']);
-            exit;
-        }
-        $filename = 'student_' . $studentId . '_' . time() . '.' . $ext;
-        $dest = __DIR__ . '/../uploads/students/' . $filename;
-        if (move_uploaded_file($_FILES['photo']['tmp_name'], $dest)) {
-            $photoUrl = '../uploads/students/' . $filename;
-            $db->update('students', ['photo' => $photoUrl], 'id = ?', [$studentId]);
-            echo json_encode(['success' => true, 'photo_url' => $photoUrl]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Upload failed.']);
-        }
-        exit;
-    }
+    // ─── PHOTO UPLOAD — REMOVED ─────────────────────────────────
+    //
+    // This endpoint was deleted, not merely unused.
+    //
+    // It was a second, parallel way to attach a photograph: it wrote the
+    // students.photo column, while Digital File Storage writes a documents row.
+    // Two paths meant a student's picture could be in either place, and every
+    // reader guessed differently - the student list and the View modal both
+    // read students.photo alone, so a student whose photo was uploaded through
+    // File Storage rendered as "RT" in both, next to a photograph sitting in the
+    // database the whole time. It also re-uploaded under a fresh timestamped
+    // filename every time, so re-uploading a face orphaned the previous file
+    // rather than replacing it.
+    //
+    // File Storage is the one way in. It records the uploader, the type and the
+    // description, and it is where the office already goes to manage student
+    // files. See registrar/file-storage.php.
+    //
+    // The students.photo column is left in place, and still read as a first
+    // choice by studentPhotoUrl(), so historical rows that predate File Storage
+    // keep showing their picture. Nothing is dropped by removing this.
 
     // ─── SAVE TERM GRADES ───────────────────────────────────────
     //
@@ -557,7 +670,22 @@ try {
         $ids    = $input['ids'] ?? [];
         $status = $input['status'] ?? '';
         if (empty($ids) || !$status) {
-            echo json_encode(['success' => false, 'message' => 'Invalid request.']);
+            echo json_encode(['success' => false, 'message' => 'Students and status required.']);
+            exit;
+        }
+        // Reject anything the column cannot store.
+        //
+        // This check was missing, and the column is an ENUM, so the write
+        // "succeeded" for any string at all. MySQL does not raise an error on an
+        // out-of-enum value here - it truncates to '' - so a typo in the client,
+        // or a stale page still offering probation, wrote an empty status onto
+        // real students. The response said "updated", the rows became invisible
+        // to every status filter, and nothing anywhere reported an error.
+        if (!isValidStudentStatus($status)) {
+            echo json_encode([
+                'success' => false,
+                'message' => '"' . $status . '" is not a valid status. Use one of: ' . implode(', ', studentStatuses()) . '.',
+            ]);
             exit;
         }
         // A reason is now required, because the journal is the only record
@@ -724,16 +852,28 @@ try {
 
         try {
             $data = [];
+            // 'section' is deliberately absent.
+            //
+            // Section is Class Scheduling's field (DEPARTMENTS.md, #297). This
+            // endpoint is the Registrar's, and it must not be able to write a
+            // scheduling decision — not by a stale client, not by a crafted
+            // request, not by anyone who still has the old modal open. Leaving
+            // the key out of the allow-list means the UPDATE cannot include
+            // the column, so the rule holds at the SQL boundary instead of
+            // depending on every caller being up to date. The value is also
+            // not read for validation, so a request carrying one is ignored
+            // rather than rejected: an old form should still save everything
+            // it legitimately owns.
             $allowedFields = ['first_name', 'middle_name', 'last_name', 'gender', 'civil_status', 'birth_date', 'place_of_birth',
                               'birth_country', 'lrn', 'name_suffix', 'mother_name', 'father_name',
                               'nationality', 'religion', 'address', 'contact_number', 'email',
-                              'course', 'major', 'year_level', 'school_year', 'semester', 'section', 'adviser_id', 'status',
+                              'course', 'major', 'year_level', 'school_year', 'semester', 'adviser_id', 'status',
                               'student_number'];
 
             foreach ($allowedFields as $field) {
                 if (array_key_exists($field, $input)) {
                     $value = $input[$field];
-                    if ($value === '' && in_array($field, ['birth_date', 'middle_name', 'place_of_birth', 'birth_country', 'nationality', 'religion', 'contact_number', 'email', 'course', 'major', 'year_level', 'school_year', 'semester', 'section', 'adviser_id', 'lrn', 'name_suffix', 'mother_name', 'father_name'], true)) {
+                    if ($value === '' && in_array($field, ['birth_date', 'middle_name', 'place_of_birth', 'birth_country', 'nationality', 'religion', 'contact_number', 'email', 'course', 'major', 'year_level', 'school_year', 'semester', 'adviser_id', 'lrn', 'name_suffix', 'mother_name', 'father_name'], true)) {
                         $value = null;
                     }
                     if ($field === 'birth_date' && $value === '0000-00-00') {
@@ -746,20 +886,6 @@ try {
                     }
                     if ($field === 'adviser_id' && $value !== null) {
                         $value = (int)$value;
-                    }
-                    // A section code encodes the year level ([year][sem][###]),
-                    // so a section is meaningless without a year level. Reject
-                    // the combination rather than storing a misleading record.
-                    if ($field === 'section' && $value !== null && $value !== '') {
-                        // Fall back to the stored year level when a partial
-                        // update doesn't resend it.
-                        $effectiveYear = array_key_exists('year_level', $input)
-                            ? trim((string) ($input['year_level'] ?? ''))
-                            : trim((string) ($existing['year_level'] ?? ''));
-                        if ($effectiveYear === '' || (int) $effectiveYear < 1) {
-                            echo json_encode(['success' => false, 'message' => 'A section cannot be set without a year level. Set the year level first.']);
-                            exit;
-                        }
                     }
                     if ($field === 'lrn' && $value !== null && $value !== '') {
                         $value = strtoupper(preg_replace('/[^0-9]/', '', (string)$value));
@@ -852,6 +978,22 @@ try {
     }
 
     // ─── SOFT DELETE STUDENT ────────────────────────────────────
+    //
+    // This used to set status = 'archived'. 'archived' was never in the ENUM,
+    // and MySQL does not raise an error on an out-of-enum value - it truncates
+    // to ''. So "deactivating" a student succeeded, reported success, wrote a
+    // status_tracker row saying they had been deactivated, and left the student
+    // with an empty status: still in the masterlist, matching no status filter,
+    // and impossible to restore to anything meaningful.
+    //
+    // Verified on this schema before the fix: INSERT with 'archived' reported
+    // success, and reading the row back gave ''.
+    //
+    // A withdrawal is what the office actually records when someone leaves, so
+    // that is what this writes. Real archival - hiding a record without
+    // asserting anything about the student - belongs in a deleted_at column,
+    // which this schema does not have; adding one is a separate decision and is
+    // deliberately not smuggled in here.
     if ($method === 'DELETE' && $id) {
         $existing = $db->fetchOne("SELECT id FROM students WHERE id = ?", [$id]);
         if (!$existing) {
@@ -859,9 +1001,9 @@ try {
             exit;
         }
 
-        $db->update('students', ['status' => 'archived'], 'id = ?', [$id]);
-        trackStatusChange($id, 'archived', 'Student deactivated');
-        echo json_encode(['success' => true, 'message' => 'Student deactivated.']);
+        $db->update('students', ['status' => 'dropped'], 'id = ?', [$id]);
+        trackStatusChange($id, 'dropped', 'Student withdrawn');
+        echo json_encode(['success' => true, 'message' => 'Student marked as dropped.']);
         exit;
     }
 

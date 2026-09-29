@@ -2,7 +2,7 @@
 tags: [table, core]
 ---
 
-# 🗄️ `students`
+# ðŸ—„ï¸ `students`
 
 Master student record. The central table every other student sub-record joins to.
 
@@ -26,31 +26,31 @@ Master student record. The central table every other student sub-record joins to
 | `major` | varchar(100) | |
 | `year_level` | int | |
 | `school_year` / `semester` | varchar | |
-| `adviser_id` | int | → users (not a FK constraint) |
+| `adviser_id` | int | â†’ users (not a FK constraint) |
 | `section` | varchar(20) | |
-| `status` | enum `active/probation/at-risk/loa/enrolled/graduated/transferred/dropped` | default `enrolled` (Phase 5 additions see below) |
+| `status` | enum `enrolled/active/graduate/alumni/dropped` | default `enrolled` |
 | `created_at` / `updated_at` | timestamp | auto |
 
 ### Phase 1 additions ([[registrar_upgrade.sql]])
 
-`lrn` varchar(12), `name_suffix` varchar(10), `mother_name` varchar(100), `father_name` varchar(100), `birth_country` varchar(60) — DepEd/Form 137 fields.
+`lrn` varchar(12), `name_suffix` varchar(10), `mother_name` varchar(100), `father_name` varchar(100), `birth_country` varchar(60) â€” DepEd/Form 137 fields.
 
-### Phase 5 addition ([[security_upgrade.sql]])
+### Five-value status model
 
-`status` enum extended with **`enrolled`** (default). The 5 **canonical** labels surfaced in the portal: **Enrolled · Active · Graduated · Transferred · Dropped**; legacy `probation / at-risk / loa` map to **Active** via `getStudentStatusLabel()` in [[functions.php]].
+Reduced to five values, defined once in `studentStatuses()` in [[functions.php]]: **Enrolled, Active, Graduate, Alumni, Dropped**. The pages, the CSS, the API allow-list, the insights pie and the schema dump all read that one list. See [[Glossary]] for the retired values and `migrations/student_status_five_values.sql` for the conversion.
 
 ## Indexes
 
 `PK(id)`, `UNIQUE(student_number)`, `idx_student_number`, `idx_status`, `idx_course`.
 
-## Children (FK → `students.id`, all `ON DELETE CASCADE`)
+## Children (FK â†’ `students.id`, all `ON DELETE CASCADE`)
 
-[[guardians]] · [[emergency_contacts]] · [[academic_history]] · [[health_records]] · [[document_requests]] · [[documents]] · [[rfid_cards]] · [[student_ids]] · [[status_tracker]] · [[health_visits]]
+[[guardians]] Â· [[emergency_contacts]] Â· [[academic_history]] Â· [[health_records]] Â· [[document_requests]] Â· [[documents]] Â· [[rfid_cards]] Â· [[student_ids]] Â· [[status_tracker]] Â· [[health_visits]]
 
 ## Seed data
 
-3 demo students (Juan Dela Cruz, Maria Santos, Ana Reyes) — see [[registrar_ai.sql]].
+3 demo students (Juan Dela Cruz, Maria Santos, Ana Reyes) â€” see [[registrar_ai.sql]].
 
 ## Related
 
-- [[Student Management]] · [[status_tracker]] · [[Database MOC]] · [[registrar_ai.sql]]
+- [[Student Management]] Â· [[status_tracker]] Â· [[Database MOC]] Â· [[registrar_ai.sql]]

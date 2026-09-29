@@ -184,9 +184,23 @@ try {
     // DISTRIBUTION ASSISTANT: PREVIEW
     if ($method === 'GET' && $action === 'distribution-preview') {
         $available = $db->fetchAll("SELECT id, card_uid, registered_at FROM rfid_cards WHERE status = 'available' AND student_id IS NULL ORDER BY registered_at ASC, card_uid ASC LIMIT 1000");
-        $studentsWithoutCards = $db->fetchAll("SELECT s.id, s.student_number, s.first_name, s.middle_name, s.last_name, s.course, s.year_level, s.status FROM students s WHERE COALESCE(s.status, '') != 'archived' AND NOT EXISTS (SELECT 1 FROM rfid_cards r WHERE r.student_id = s.id AND r.status IN ('active','enrolled','probation','at-risk','loa')) ORDER BY CASE COALESCE(s.status, 'active') WHEN 'active' THEN 1 WHEN 'enrolled' THEN 2 WHEN 'probation' THEN 3 WHEN 'at-risk' THEN 4 WHEN 'loa' THEN 5 ELSE 6 END, s.last_name, s.first_name, s.id LIMIT 1000");
-        $priority = ['active' => 1, 'enrolled' => 2, 'probation' => 3, 'at-risk' => 4, 'loa' => 5];
-        usort($studentsWithoutCards, static function (array $a, array $b) use ($priority): int { return ($priority[$a['status'] ?? 'active'] ?? 6) <=> ($priority[$b['status'] ?? 'active'] ?? 6) ?: strcasecmp((string)$a['last_name'], (string)$b['last_name']) ?: (int)$a['id'] <=> (int)$b['id']; });
+        // Which students to offer a card to, and in what order.
+        //
+        // This named 'archived' (which the column could not store, so the guard
+        // never excluded anything) and ordered by probation / at-risk / loa,
+        // which no longer exist. The CASE therefore ranked every real student
+        // as 6 and fell through to name order, and the status filter it applied
+        // to rfid_cards.status mixed student statuses into a card-status list.
+        //
+        // Now: only students who could actually attend get a card, ordered
+        // active first then enrolled, and the card-status filter is the card's
+        // own vocabulary.
+        $studentsWithoutCards = $db->fetchAll("SELECT s.id, s.student_number, s.first_name, s.middle_name, s.last_name, s.course, s.year_level, s.status FROM students s WHERE COALESCE(s.status, 'enrolled') IN ('active','enrolled') AND NOT EXISTS (SELECT 1 FROM rfid_cards r WHERE r.student_id = s.id AND r.status IN ('active','enrolled')) ORDER BY CASE COALESCE(s.status, 'enrolled') WHEN 'active' THEN 1 WHEN 'enrolled' THEN 2 ELSE 3 END, s.last_name, s.first_name, s.id LIMIT 1000");
+        // Active students get first pick; enrolled follow. A graduate, an alum
+        // and a withdrawal are not offered a card at all - they are not on
+        // campus, and the filter above now excludes them for real.
+        $priority = ['active' => 1, 'enrolled' => 2];
+        usort($studentsWithoutCards, static function (array $a, array $b) use ($priority): int { return ($priority[$a['status'] ?? 'enrolled'] ?? 3) <=> ($priority[$b['status'] ?? 'enrolled'] ?? 3) ?: strcasecmp((string)$a['last_name'], (string)$b['last_name']) ?: (int)$a['id'] <=> (int)$b['id']; });
         $assignments = [];
         foreach (array_slice($studentsWithoutCards, 0, count($available)) as $index => $student) {
             $card = $available[$index];
@@ -228,8 +242,18 @@ try {
                 if ($expectedCardUid !== '' && (!$card || $card['card_uid'] !== $expectedCardUid)) throw new RuntimeException('One selected card changed after the preview.');
                 if ($expectedStudentNumber !== '' && (!$student || (string)($student['student_number'] ?? '') !== $expectedStudentNumber)) throw new RuntimeException('One selected student changed after the preview.');
                 if (!$card || $card['status'] !== 'available' || $card['student_id'] !== null) throw new RuntimeException('One selected card is no longer available.');
-                if (!$student || ($student['status'] ?? '') === 'archived') throw new RuntimeException('One selected student is no longer eligible.');
-                $existing = $db->fetchOne("SELECT id FROM rfid_cards WHERE student_id = ? AND status IN ('active','enrolled','probation','at-risk','loa') LIMIT 1", [$studentId]);
+                // Eligibility, and the "already has a card" check.
+                //
+                // The eligibility guard compared the student to 'archived', a
+                // value students.status could not hold, so it never excluded
+                // anyone. The duplicate-card check then listed probation, at-risk
+                // and loa inside a query against rfid_cards.status - a different
+                // enum entirely - so it was checking a card status for names that
+                // belong to a student's record. Both are now stated in terms of
+                // the statuses that actually exist, and the card check uses the
+                // card's own vocabulary.
+                if (!$student || !in_array($student['status'] ?? '', ['active', 'enrolled'], true)) throw new RuntimeException('One selected student is no longer eligible.');
+                $existing = $db->fetchOne("SELECT id FROM rfid_cards WHERE student_id = ? AND status IN ('active','enrolled') LIMIT 1", [$studentId]);
                 if ($existing) throw new RuntimeException('One selected student already has an active RFID card.');
                 $db->update('rfid_cards', ['student_id' => $studentId, 'status' => 'active', 'issued_date' => $issuedDate, 'expiry_date' => $expiryDate, 'assigned_at' => date('Y-m-d H:i:s'), 'notes' => $notes], 'id = ?', [$cardId]);
                 $qrPath = generateStudentQrFile($studentId);

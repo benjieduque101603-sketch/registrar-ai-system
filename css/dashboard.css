@@ -433,6 +433,7 @@
 .status-fill.green { background: #16a34a; }
 .status-fill.yellow { background: #b45309; }
 .status-fill.purple { background: #7c3aed; }
+.status-fill.cyan   { background: #0891b2; }  /* alumni */
 .status-fill.red { background: #dc2626; }
 
 /* ── Resource Grid (2×2 tiles) ── */

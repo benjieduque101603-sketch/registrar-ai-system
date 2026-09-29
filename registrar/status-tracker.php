@@ -11,6 +11,12 @@ requireRole('registrar');
 require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/status_evidence.php';
+// The directory shows each student's face beside their name, read from Digital
+// File Storage - the same photograph the Students page, the View modal and the
+// counter desk use. The avatar here was coloured by STATUS_META and held two
+// letters built with mb_substr(), so it never had a photograph to show: s.photo
+// was selected by the query and then never used for anything.
+require_once __DIR__ . '/../shared/stored_file.php';
 
 // Who needs a decision today, found by the same contradiction rules the
 // "Check what I missed" button runs — computed here so the first screen
@@ -29,29 +35,37 @@ $queueHigh  = count($queueRows);
 
 $db = Database::getInstance();
 
-$ALL_STATUSES = ['inactive','enrolled','active','dropped','graduated','alumni','probation','at-risk','loa','transferred','archived'];
-$DB_STATUSES  = ['active','probation','at-risk','loa','enrolled','graduated','transferred','dropped'];
-$STATUS_META = [
-    'inactive'    => ['color'=>'#94a3b8','bg'=>'#f1f5f9','icon'=>'fas fa-user-slash'],
-    'enrolled'    => ['color'=>'#2563eb','bg'=>'#eff6ff','icon'=>'fas fa-user-plus'],
-    'active'      => ['color'=>'#16a34a','bg'=>'#f0fdf4','icon'=>'fas fa-user-check'],
-    'dropped'     => ['color'=>'#dc2626','bg'=>'#fef2f2','icon'=>'fas fa-user-xmark'],
-    'graduated'   => ['color'=>'#7c3aed','bg'=>'#f5f3ff','icon'=>'fas fa-graduation-cap'],
-    'alumni'      => ['color'=>'#0891b2','bg'=>'#ecfeff','icon'=>'fas fa-users'],
-    'probation'   => ['color'=>'#d97706','bg'=>'#fffbeb','icon'=>'fas fa-exclamation-triangle'],
-    'at-risk'     => ['color'=>'#ef4444','bg'=>'#fef2f2','icon'=>'fas fa-shield-halved'],
-    'loa'         => ['color'=>'#6366f1','bg'=>'#eef2ff','icon'=>'fas fa-pause-circle'],
-    'transferred' => ['color'=>'#0d9488','bg'=>'#f0fdfa','icon'=>'fas fa-right-left'],
-    'archived'    => ['color'=>'#6b7280','bg'=>'#f9fafb','icon'=>'fas fa-box-archive'],
-];
+// ── The five statuses ───────────────────────────────────────────
+//
+// This page used to declare its own list of eleven values, eight of which the
+// column could actually store, and keep its own colour map beside it. The two
+// drifted from the badge map in shared/functions.php and from the insights pie
+// in shared/analytics.php, so the same status could be one colour in the
+// tracker timeline and another in a student's row.
+//
+// The set and the presentation now both come from shared/functions.php. This
+// page cannot offer a status the database would reject, and cannot colour one
+// differently from everywhere else, because it no longer decides either.
+//
+//   enrolled · active · graduate · alumni · dropped
+$STATUSES = studentStatuses();
+
+$STATUS_META = [];
+foreach ($STATUSES as $st) {
+    $STATUS_META[$st] = studentStatusMeta($st);
+}
 
 $filterStatus = isset($_GET['status']) ? trim($_GET['status']) : '';
 $search       = isset($_GET['q']) ? trim($_GET['q']) : '';
 $pageNum      = max(1, (int) ($_GET['page'] ?? 1));
 
 $counts = [];
-foreach ($ALL_STATUSES as $s) {
-    $counts[$s] = in_array($s, $DB_STATUSES, true) ? (int) $db->fetchColumn("SELECT COUNT(*) FROM students WHERE status = ?", [$s]) : 0;
+foreach ($STATUSES as $s) {
+    // Every status here is a value the column accepts, so the count is a plain
+    // lookup. This line used to be guarded by in_array($s, $DB_STATUSES) against
+    // a second list that had drifted from the first - the two-lists setup is
+    // gone, so there is nothing left to guard against.
+    $counts[$s] = (int) $db->fetchColumn("SELECT COUNT(*) FROM students WHERE status = ?", [$s]);
 }
 
 $totalStudents    = (int) $db->fetchColumn("SELECT COUNT(*) FROM students");
@@ -60,7 +74,13 @@ $prevMonthStart   = date('Y-m-01 00:00:00', strtotime('-1 month'));
 $changesThisMonth = (int) $db->fetchColumn("SELECT COUNT(*) FROM status_tracker WHERE created_at >= ?", [$monthStart]);
 $changesPrevMonth = (int) $db->fetchColumn("SELECT COUNT(*) FROM status_tracker WHERE created_at >= ? AND created_at < ?", [$prevMonthStart, $monthStart]);
 $changesLast7d    = (int) $db->fetchColumn("SELECT COUNT(*) FROM status_tracker WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
-$attentionNeeded  = $counts['at-risk'] + $counts['probation'];
+// "Attention needed" used to be at-risk + probation - two statuses that were
+// advisory rather than enrolment states, and no longer exist. Attention is now
+// the students who are neither currently enrolled nor finished: dropped, and
+// anything the column holds that is not one of the five (which the data-quality
+// page surfaces separately). Counting from the stored values rather than from
+// named statuses means this cannot drift when the list changes.
+$attentionNeeded = $counts['dropped'];
 
 // ── Directory: server-side search, filter and paging ─────────────
 //
@@ -72,7 +92,7 @@ $attentionNeeded  = $counts['at-risk'] + $counts['probation'];
 // shareable and the back button meaningful.
 $PER_PAGE = 25;
 $where = []; $params = [];
-if ($filterStatus !== '' && in_array($filterStatus, $DB_STATUSES, true)) {
+if ($filterStatus !== '' && in_array($filterStatus, $STATUSES, true)) {
     $where[] = 's.status = ?';
     $params[] = $filterStatus;
 }
@@ -117,6 +137,7 @@ $lastTs = 'IFNULL(MAX(st.created_at), "1970-01-01 00:00:00")';
 
 $sql = "SELECT s.id, s.student_number, s.first_name, s.middle_name, s.last_name,
                s.course, s.year_level, s.status, s.photo,
+               " . studentPhotoSelectSql() . " AS photo_path,
                MAX(st.created_at) AS last_change
         FROM students s
         LEFT JOIN status_tracker st ON st.student_id = s.id"
@@ -131,7 +152,7 @@ $students = $db->fetchAll($sql, $orderParams);
 // carrying the full history, a third timeline repeated the same rows in
 // a column that pushed the directory off-screen.
 $distData = [];
-foreach ($DB_STATUSES as $s) { $distData[$s] = $totalStudents > 0 ? round(($counts[$s] / $totalStudents) * 100, 1) : 0; }
+foreach ($STATUSES as $s) { $distData[$s] = $totalStudents > 0 ? round(($counts[$s] / $totalStudents) * 100, 1) : 0; }
 
 // Flagged ids, for the marker in the table row. Set before the ORDER BY
 // above consumes them, so it is read from the queue rather than re-run.
@@ -262,7 +283,7 @@ include '../includes/sidebar.php';
     // to be added explicitly or every $r['id'] below reads undefined.
     $statusRows = [];
     $emptyRows  = [];
-    foreach ($DB_STATUSES as $s) {
+    foreach ($STATUSES as $s) {
         $row = ['id' => $s] + $STATUS_META[$s] + [
             'count' => $counts[$s],
             'pct'   => (float) ($distData[$s] ?? 0),
@@ -306,7 +327,7 @@ include '../includes/sidebar.php';
     // $STATUS_META is keyed by status and holds only colour, background
     // and glyph, so the id is added explicitly or $r['id'] is undefined.
     $statusRows = [];
-    foreach ($DB_STATUSES as $s) {
+    foreach ($STATUSES as $s) {
         $statusRows[] = ['id' => $s] + $STATUS_META[$s] + [
             'count' => $counts[$s],
             'pct'   => (float) ($distData[$s] ?? 0),
@@ -419,8 +440,19 @@ include '../includes/sidebar.php';
           <?php foreach ($students as $s):
             $meta = $STATUS_META[$s['status']] ?? $STATUS_META['inactive'];
             $flag = isset($queueRank[(int) $s['id']]);
-            $initials = strtoupper(mb_substr((string) $s['first_name'], 0, 1) . mb_substr((string) $s['last_name'], 0, 1));
-            $initials = $initials !== '' ? $initials : '?';
+            // The photograph, from Digital File Storage. This avatar was two
+            // letters built with mb_substr() and a tint taken from the status
+            // colour - and the query selected s.photo for nothing. So a student
+            // with a photograph on file looked exactly like one without, on the
+            // one screen whose whole job is telling two records apart.
+            //
+            // studentPhotoUrl() checks the disk, so a record whose photo was
+            // never deployed here falls back to initials rather than a broken
+            // image in the attention queue. The status tint is kept for the
+            // fallback, where it still carries meaning: it is the fastest read
+            // in the column.
+            $avatarUrl = studentPhotoUrl($s, '../');
+            $initials = studentInitials((string) $s['first_name'], (string) $s['last_name']);
           ?>
             <tr class="<?= $flag ? 'st-flagged' : '' ?>"
                 onclick="openStudentModal(<?= (int) $s['id'] ?>,'<?= htmlspecialchars(addslashes(trim($s['first_name'].' '.$s['last_name']))) ?>','<?= htmlspecialchars($s['student_number']) ?>')"
@@ -428,7 +460,12 @@ include '../includes/sidebar.php';
                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
               <td>
                 <div class="st-cell-id">
-                  <span class="st-avatar" style="background:<?= $meta['color'] ?>22;color:<?= $meta['color'] ?>"><?= htmlspecialchars($initials) ?></span>
+                  <?php // Both layers are always rendered and the photograph
+                        // covers the initials. If the file is deleted between
+                        // render and paint, onerror uncovers the initials rather
+                        // than leaving a broken-image glyph in the queue. ?>
+                  <?php if ($avatarUrl !== ''): ?><img class="st-avatar" src="<?= htmlspecialchars($avatarUrl) ?>" alt="" style="object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';this.onerror=null;"><?php endif; ?>
+                  <span class="st-avatar" style="background:<?= $meta['color'] ?>22;color:<?= $meta['color'] ?><?= $avatarUrl !== '' ? ';display:none;' : '' ?>"><?= htmlspecialchars($initials) ?></span>
                   <span class="st-cell-who">
                     <span class="st-cell-name"><?= htmlspecialchars(trim($s['first_name'].' '.$s['last_name'])) ?></span>
                     <span class="st-cell-num"><?= htmlspecialchars($s['student_number'] ?: 'No ID assigned') ?></span>
@@ -581,7 +618,7 @@ include '../includes/sidebar.php';
         <div class="st-field">
           <label for="chStatus">New status</label>
           <select id="chStatus" onchange="toggleWindowFields()">
-            <?php foreach ($DB_STATUSES as $s): ?>
+            <?php foreach ($STATUSES as $s): ?>
               <option value="<?= $s ?>"><?= htmlspecialchars(ucwords(str_replace('-', ' ', $s))) ?></option>
             <?php endforeach; ?>
           </select>
@@ -617,8 +654,8 @@ include '../includes/sidebar.php';
 'use strict';
 (function(){
 const STATUS_META=<?= json_encode($STATUS_META) ?>;
-const ALL_STATUSES=<?= json_encode($ALL_STATUSES) ?>;
-const DB_STATUSES=<?= json_encode($DB_STATUSES) ?>;
+const ALL_STATUSES=<?= json_encode($STATUSES) ?>;
+const DB_STATUSES=<?= json_encode($STATUSES) ?>;
 const SEARCH_DELAY=250;
 let searchTimer=null;
 
@@ -1053,8 +1090,20 @@ document.getElementById('studentModal').addEventListener('click',function(e){if(
    a null and the journal could show that someone changed and nothing
    about why. Both are fixed here: the reason is required client-side and
    rejected server-side, and the window fields are only offered for
-   statuses that are actually time-boxed. */
-const WINDOWED=['loa','probation','transferred'];
+//   statuses that are actually time-boxed. */
+
+// The effective/return date fields. This used to list loa, probation and
+// transferred - the three statuses that were time-boxed by nature, and all
+// three of which are gone. None of the five current statuses is a window:
+// enrolled, active, graduate, alumni and dropped are all indefinite states.
+//
+// The fields are therefore never offered, and toggleWindowFields() is kept as a
+// no-op rather than deleted, because the markup that calls it on change is
+// harmless and removing the call sites would be a larger change to a form
+// layout than the status list itself warrants. If a windowed status is ever
+// reintroduced, this is the list to add it to - and it must be a status in
+// studentStatuses(), or the date would be written for a state that cannot exist.
+const WINDOWED=[];
 
 function toggleWindowFields(){
 const sel=document.getElementById('chStatus');

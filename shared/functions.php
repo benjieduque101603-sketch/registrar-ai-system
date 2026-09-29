@@ -795,49 +795,106 @@ function filterAssignedMasterlistGroups(array $groups): array {
 // ─── STATUS HELPERS ────────────────────────────────────────────
 
 /**
+ * The one definition of what a student's status can be.
+ *
+ * There used to be four independent answers to that question: the DB enum
+ * (8 values), $ALL_STATUSES/$DB_STATUSES in registrar/status-tracker.php,
+ * the badge/label maps in this file, and a sixth list in
+ * shared/analytics.php. They had already drifted - `alumni` was drawn as a
+ * slice of the AI insights pie while not being a value the column would
+ * accept, and `archived` was written by the delete path while not being in the
+ * enum at all. MySQL does not reject an out-of-enum value in strict mode here,
+ * it silently coerces it to '', so deleting a student produced a row with an
+ * empty status: the record stayed in every list and vanished from every
+ * status filter, and the tracker logged a change to a status that never
+ * existed.
+ *
+ * So the set is defined once, here, and everything else - the pages, the API,
+ * the CSS, the analytics pie, the schema dump and the migration - reads it.
+ * Adding a status is one edit here plus the migration, not six.
+ *
+ * The six values, and what each one means:
+ *
+ *   enrolled   taken on, not yet confirmed as attending        (default)
+ *   active     attending
+ *   graduate   completed the programme, diploma awarded
+ *   alumni     graduate who has left the school / former student
+ *   dropped    withdrawn before completing
+ *
+ * graduate and alumni are deliberately SEPARATE rather than one "finished"
+ * value: the insights pie needs to distinguish "just finished" from "gone
+ * years ago", and collapsing them loses that.
+ *
+ * There is no `archived` status. Archiving is a soft-delete concern and is
+ * modelled by a separate column, not by inventing a status value.
+ */
+function studentStatuses(): array
+{
+    return ['enrolled', 'active', 'graduate', 'alumni', 'dropped'];
+}
+
+/** True when $status is one this system will actually store. */
+function isValidStudentStatus($status): bool
+{
+    return in_array(strtolower(trim((string) $status)), studentStatuses(), true);
+}
+
+/**
+ * The display label for a status, or '' for an unknown one.
+ *
+ * Returns '' rather than ucfirst() of the raw value: an unrecognised status is
+ * a bug, and printing the raw token next to a student's name hides it. The
+ * callers that must never show a blank fall back explicitly.
+ */
+function studentStatusLabel($status): string
+{
+    $labels = [
+        'enrolled' => 'Enrolled',
+        'active'   => 'Active',
+        'graduate' => 'Graduate',
+        'alumni'   => 'Alumni',
+        'dropped'  => 'Dropped',
+    ];
+    return $labels[strtolower(trim((string) $status))] ?? '';
+}
+
+/**
+ * Presentation for a status: colour, tint, icon, CSS class.
+ *
+ * Single definition, because the badge, the dot, the filter chip and the
+ * tracker timeline each need the same three values and had been keeping
+ * separate copies. The CSS in css/registrar.css is keyed to `class`, so a new
+ * status needs a rule there too - but the colour itself is stated once.
+ */
+function studentStatusMeta($status): array
+{
+    $meta = [
+        'enrolled' => ['label' => 'Enrolled', 'class' => 'enrolled', 'color' => '#2563eb', 'bg' => '#eff6ff', 'icon' => 'fas fa-user-plus'],
+        'active'   => ['label' => 'Active',   'class' => 'active',   'color' => '#16a34a', 'bg' => '#f0fdf4', 'icon' => 'fas fa-user-check'],
+        'graduate' => ['label' => 'Graduate', 'class' => 'graduate', 'color' => '#7c3aed', 'bg' => '#f5f3ff', 'icon' => 'fas fa-graduation-cap'],
+        'alumni'   => ['label' => 'Alumni',   'class' => 'alumni',   'color' => '#0891b2', 'bg' => '#ecfeff', 'icon' => 'fas fa-users'],
+        'dropped'  => ['label' => 'Dropped',  'class' => 'dropped',  'color' => '#dc2626', 'bg' => '#fef2f2', 'icon' => 'fas fa-user-xmark'],
+    ];
+    $key = strtolower(trim((string) $status));
+    return $meta[$key] ?? ['label' => '', 'class' => 'unknown', 'color' => '#94a3b8', 'bg' => '#f1f5f9', 'icon' => 'fas fa-circle-question'];
+}
+
+/**
  * Get status badge class
  */
 function getStatusBadgeClass($status) {
-    $classes = [
-        'active' => 'active',
-        'inactive' => 'inactive',
-        'pending' => 'pending',
-        'approved' => 'approved',
-        'denied' => 'denied',
-        'completed' => 'completed',
-        'at-risk' => 'at-risk',
-        'probation' => 'probation',
-        'graduated' => 'graduated',
-        'dropped' => 'dropped',
-        'transferred' => 'transferred',
-        'loa' => 'loa',
-        'enrolled' => 'active',
-        'cancelled' => 'denied'
-    ];
-    return $classes[$status] ?? 'default';
+    return studentStatusMeta($status)['class'];
 }
 
 /**
  * Get status label
+ *
+ * Falls back to ucfirst() for anything that is not a student status, because
+ * this helper is also used for other status columns (rfid_cards, document
+ * requests) whose vocabularies this system does not own.
  */
 function getStatusLabel($status) {
-    $labels = [
-        'active' => 'Active',
-        'inactive' => 'Inactive',
-        'pending' => 'Pending',
-        'approved' => 'Approved',
-        'denied' => 'Denied',
-        'completed' => 'Completed',
-        'at-risk' => 'At Risk',
-        'probation' => 'Probation',
-        'graduated' => 'Graduated',
-        'dropped' => 'Dropped',
-        'transferred' => 'Transferred',
-        'loa' => 'LOA',
-        'enrolled' => 'Enrolled',
-        'cancelled' => 'Cancelled'
-    ];
-    return $labels[$status] ?? ucfirst($status);
+    return studentStatusLabel($status) ?: ucfirst((string) $status);
 }
 
 /**
@@ -930,21 +987,14 @@ function courseAcronym($course) {
 
 /**
  * Canonical student-status label for the student portal.
- * Legacy values (probation / at-risk / loa) are folded into the
- * 5-value model: Enrolled, Active, Graduated, Transferred, Dropped.
+ *
+ * Now a thin alias of studentStatusLabel(). It used to carry its own 5-value
+ * model ("Enrolled / Active / Graduated / Transferred / Dropped") which folded
+ * probation, at-risk and loa into Active - a fourth independent opinion about
+ * the same column, and one whose vocabulary no longer matched the enum.
  */
 function getStudentStatusLabel($status) {
-    $map = [
-        'enrolled'    => 'Enrolled',
-        'active'      => 'Active',
-        'probation'   => 'Active',
-        'at-risk'     => 'Active',
-        'loa'         => 'Active',
-        'graduated'   => 'Graduated',
-        'transferred' => 'Transferred',
-        'dropped'     => 'Dropped',
-    ];
-    return $map[strtolower((string) $status)] ?? 'Enrolled';
+    return studentStatusLabel($status);
 }
 
 /**
@@ -1201,7 +1251,13 @@ function createStudentFromInput(array $input, $db): array
         'year_level' => $yearLevel,
         'school_year' => isset($input['school_year']) && trim($input['school_year']) !== '' ? trim($input['school_year']) : null,
         'semester' => $semesterRaw,
-        'section' => $input['section'] ?? null,
+        // Section is hard-coded to NULL, and any `section` in the payload is
+        // ignored. Section is Class Scheduling's field (#297) — see
+        // DEPARTMENTS.md — and a newly enrolled student has not been placed
+        // in a block yet. NULL, not '': the column is VARCHAR, and an empty
+        // string would travel into the Masterlist as if it were a real
+        // (blank) section code rather than as "not yet assigned".
+        'section' => null,
         'adviser_id' => isset($input['adviser_id']) && $input['adviser_id'] !== '' ? (int) $input['adviser_id'] : null,
         'status' => $input['status'] ?? 'active',
     ];

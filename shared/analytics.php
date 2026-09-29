@@ -18,6 +18,15 @@
 // ============================================================
 
 require_once __DIR__ . '/database.php';
+// This file calls studentStatuses() / studentStatusLabel() from
+// shared/functions.php (the status buckets below), and it is included directly
+// by three callers - ai/insights.php, api/ai-insights-data.php and
+// api/ai-insights-report.php - two of which do not load functions.php
+// themselves. Requiring it here rather than trusting every caller to have done
+// it is what stops the whole insights page dying with "Call to undefined
+// function studentStatuses()" the moment someone adds a fourth caller and
+// forgets.
+require_once __DIR__ . '/functions.php';
 
 if (defined('ANALYTICS_LOADED')) {
     return;
@@ -183,22 +192,31 @@ function aiInsightDocStatusGroup(?string $status): string {
 }
 
 // ─── Student status buckets (the pie) ────────────────────────
-// Mirrors getStudentStatusLabel() in shared/functions.php so this
-// pie agrees with the Students and Masterlist pages.
+// Read from studentStatuses() so the pie cannot offer a slice the column would
+// reject.
 //
-// SIGN-OFF D10: 'alumni' is not a value of students.status yet, so
-// the slice stays hidden until the column gains it (count 0 → not
-// drawn) instead of rendering a misleading empty wedge.
-// SIGN-OFF D11: probation / at-risk / loa are folded into "Active".
+// This list used to be hand-written and had already drifted twice: it folded
+// probation / at-risk / loa into "Active" (values that no longer exist), and it
+// drew an "Alumni" slice from a value the ENUM did not accept, so the wedge was
+// always empty. A pie that promises a category it can never fill is worse than
+// a pie that does not mention it.
+//
+// graduate and alumni stay separate here. "Just finished" and "left years ago"
+// are different facts about a cohort, and merging them loses the distinction
+// this chart exists to show.
 function aiInsightStatusBuckets(): array {
-    return [
-        'Active'      => ['statuses' => ['active', 'probation', 'at-risk', 'loa'], 'color' => '#16a34a'],
-        'Enrolled'    => ['statuses' => ['enrolled'],                              'color' => '#2563eb'],
-        'Graduate'    => ['statuses' => ['graduated'],                             'color' => '#7c3aed'],
-        'Alumni'      => ['statuses' => ['alumni'],                                'color' => '#0891b2'],
-        'Transferred' => ['statuses' => ['transferred'],                           'color' => '#db2777'],
-        'Dropped'     => ['statuses' => ['dropped'],                               'color' => '#64748b'],
+    $colors = [
+        'enrolled' => '#2563eb',
+        'active'   => '#16a34a',
+        'graduate' => '#7c3aed',
+        'alumni'   => '#0891b2',
+        'dropped'  => '#64748b',
     ];
+    $out = [];
+    foreach (studentStatuses() as $st) {
+        $out[studentStatusLabel($st)] = ['statuses' => [$st], 'color' => $colors[$st] ?? '#64748b'];
+    }
+    return $out;
 }
 
 /** Program distribution: top programs plus a "new in period" second series. */

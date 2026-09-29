@@ -29,11 +29,43 @@
 //  what these rules found, never to decide whether a rule fired.
 // ============================================================
 
+// This file calls isTerminalStudentStatus() / isCurrentStudentStatus() from
+// shared/functions.php. It used to have no requires at all and relied entirely
+// on its caller having loaded them - which held only by accident, for the one
+// page that includes it today. Declaring the dependency here is what stops the
+// Status Tracker's attention queue dying with "Call to undefined function
+// isTerminalStudentStatus()" if a second caller appears.
+require_once __DIR__ . '/functions.php';
+
+if (defined('STATUS_EVIDENCE_LOADED')) {
+    return;
+}
+define('STATUS_EVIDENCE_LOADED', true);
+
 /**
- * Statuses that expire on their own. A leave of absence has a return
- * date; a graduation does not. Treating them alike would have us
- * proposing that a graduate lapse back to inactive.
+ * Statuses that mean the student is no longer currently enrolled.
+ *
+ * Was a literal array written out twice in this file
+ * (['graduated','alumni','transferred','dropped']) and it had already drifted
+ * from the column: `graduated` and `transferred` are no longer values, so both
+ * copies had quietly stopped matching a real graduate. A student who had
+ * finished and still owed money was being reported as an ordinary balance
+ * against a live status, which is the opposite of the finding's purpose.
+ *
+ * Note what is and is not terminal. `alumni` IS terminal - a former student is
+ * not currently enrolled. `dropped` is terminal. `graduate` is terminal.
+ * `enrolled` and `active` are not.
  */
+function isTerminalStudentStatus(?string $status): bool
+{
+    return in_array(strtolower(trim((string) $status)), ['graduate', 'alumni', 'dropped'], true);
+}
+
+/** Statuses meaning the student is currently on the books and attending-or-likely. */
+function isCurrentStudentStatus(?string $status): bool
+{
+    return in_array(strtolower(trim((string) $status)), ['enrolled', 'active'], true);
+}
 
 /**
  * Read the whole picture of one student. Every source is optional and
@@ -231,7 +263,7 @@ function statusEvidenceFindings(array $ev): array
     // ── Money owed ────────────────────────────────────────────────
     $balance = (float) ($ev['finance']['balance'] ?? 0);
     if ($balance > 0) {
-        $terminal = in_array($status, ['graduated', 'alumni', 'transferred', 'dropped'], true);
+        $terminal = isTerminalStudentStatus($status);
         $add(
             'finance_balance',
             'Outstanding balance',
@@ -336,7 +368,7 @@ function statusEvidenceFindings(array $ev): array
         $last = $ev['history'][0]['created_at'] ?? null;
         if ($last) {
             $days = (int) floor((time() - strtotime((string) $last)) / 86400);
-            if ($days > 180 && in_array($status, ['enrolled', 'active'], true)) {
+            if ($days > 180 && isCurrentStudentStatus($status)) {
                 $add(
                     'dormant',
                     'No status activity in ' . $days . ' days',
@@ -474,7 +506,7 @@ function statusCohortFindings(array $limitTo = []): array
         }
 
         if (!empty($balByStudent[$sid])
-            && in_array($status, ['graduated', 'alumni', 'transferred', 'dropped'], true)) {
+            && isTerminalStudentStatus($status)) {
             $hits[] = [
                 'code'     => 'finance_balance',
                 'title'    => 'Balance on a closed status',

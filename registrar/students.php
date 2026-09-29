@@ -11,17 +11,37 @@ requireRole('registrar');
 require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/normalize.php';
+require_once __DIR__ . '/../shared/stored_file.php';
 
 $db = Database::getInstance();
 
-// Fetch students
-$students = $db->fetchAll("SELECT * FROM students ORDER BY id DESC");
+// Fetch students.
+//
+// `photo_path` is the student's photograph from Digital File Storage, resolved
+// per row here rather than in the browser. It could be done client-side, but
+// deciding between a photo and initials has to consult the disk either way, and
+// doing it here means one query for the whole list instead of one request per
+// student with the disk check repeated in every one of them. The JS fallback
+// stays as a safety net, never as the primary path.
+$students = $db->fetchAll(
+    "SELECT s.*, " . studentPhotoSelectSql() . " AS photo_path
+     FROM students s
+     ORDER BY s.id DESC"
+);
 
 // Stats with real MoM trends
 $totalStudents = count($students);
 $activeStudents = count(array_filter($students, fn($s) => $s['status'] === 'active'));
-$atRiskStudents = count(array_filter($students, fn($s) => $s['status'] === 'at-risk' || $s['status'] === 'probation'));
-$graduatedStudents = count(array_filter($students, fn($s) => $s['status'] === 'graduated'));
+// Counts graduate + alumni together: the card asks "how many have finished",
+// and the distinction between the two is worth a wedge in the insights pie but
+// not a second card here.
+$graduatedStudents = count(array_filter($students, fn($s) => in_array($s['status'] ?? '', ['graduate', 'alumni'], true)));
+// Withdrawals. This replaced the "At risk or probation" card, which counted two
+// statuses that no longer exist and so was permanently 0 while reporting "None
+// flagged" as though it were a measurement. The advisory itself is not gone - it
+// moved to the data-quality page and the Status Tracker queue - but it is not a
+// status, and this card can only honestly report what the column holds.
+$droppedStudents = count(array_filter($students, fn($s) => ($s['status'] ?? '') === 'dropped'));
 // Per-year-level counts for the Year 1-4 cards.
 $yearLevelCounts = [1 => 0, 2 => 0, 3 => 0, 4 => 0];
 $unassignedStudents = 0;
@@ -76,6 +96,257 @@ $body_page = 'students';   // scopes the registrar-blue layer below
 include '../includes/header.php';
 include '../includes/sidebar.php';
 ?><style>
+/* ══════════════════════════════════════════════════════════════
+   ENROL NEW STUDENT — redesigned record sheet
+   ══════════════════════════════════════════════════════════════
+   The previous modal was a flat wall of twenty unranked inputs
+   separated by thin rules and tiny grey headings. Nothing said which
+   fields mattered, which were optional, or what this office is
+   accountable for. Two changes fix that:
+
+   1. The blocks are the Registrar's SCOPE, named from
+      DEPARTMENTS.md — Identity, Contact & Address, Program & Term,
+      Guardian. Not "personal" and "academic": the grouping exists so
+      it is legible whose job each field is.
+
+   2. A completeness ledger in the footer. "Required" here means
+      exactly what studentQualityScoreValue() already counts, so
+      required, complete, and the Quality column in the list cannot
+      disagree with each other. It names the empty fields instead of
+      showing a percentage the list already shows.
+*/
+#addModal .modal-content{max-width:880px}
+.rs-block{margin:0 0 18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff;overflow:hidden}
+.rs-block:last-of-type{margin-bottom:0}
+.rs-block-head{display:flex;align-items:baseline;gap:9px;padding:11px 16px;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+.rs-block-head i{color:#2563eb;font-size:12px;align-self:center}
+.rs-block-head h3{margin:0;font-size:11.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#334155}
+.rs-block-head span{margin-left:auto;font-size:11px;color:#94a3b8}
+.rs-block-body{padding:16px}
+.rs-block-body .form-row{gap:14px 16px}
+
+/* The one out-of-scope field, shown rather than hidden.
+   DEPARTMENTS.md's print convention: "No section is hidden and no
+   'no data' message is shown, so a registrar can distinguish a
+   genuinely empty record from a rendering failure." A field that
+   simply vanished would read as data loss. */
+.rs-outscope{display:flex;align-items:center;gap:10px;margin-top:2px;padding:10px 12px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;font-size:12px;color:#64748b}
+.rs-outscope b{color:#475569;font-weight:700}
+.rs-outscope i{color:#94a3b8}
+.rs-outscope .rs-na{margin-left:auto;font-weight:800;color:#94a3b8;letter-spacing:.05em}
+
+/* Completeness ledger — the one deliberately loud element. */
+.rs-ledger{display:flex;align-items:center;gap:14px;width:100%;margin-right:auto;min-width:0}
+.rs-meter{flex:0 0 132px;height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden}
+.rs-meter i{display:block;height:100%;width:0;border-radius:999px;background:#94a3b8;transition:width .18s ease,background-color .18s ease}
+.rs-meter.is-good i{background:#22c55e}
+.rs-meter.is-warn i{background:#f59e0b}
+.rs-meter.is-bad  i{background:#ef4444}
+.rs-ledger-txt{font-size:12px;color:#64748b;line-height:1.4;min-width:0}
+.rs-ledger-txt b{color:#0f172a;font-weight:700}
+.rs-ledger.is-done .rs-ledger-txt{color:#15803d}
+#addModal .modal-footer{flex-wrap:wrap;gap:12px}
+@media (prefers-reduced-motion:reduce){.rs-meter i{transition:none}}
+
+/* ══════════════════════════════════════════════════════════════
+   VIEW STUDENT — the same scope grouping as the Enrol modal
+   ══════════════════════════════════════════════════════════════
+   The reading view was one flat two-column grid of sixteen identical
+   label/value pairs. Nothing in it said which fields this office keeps,
+   so a blank next to "Section" looked like a gap in the record rather
+   than a decision made elsewhere. Named groups fix the first; an
+   explicit N/A fixes the second.
+*/
+.vs-groups{display:flex;flex-direction:column;gap:18px;margin-top:16px}
+.vs-group h4{display:flex;align-items:center;gap:8px;margin:0 0 9px;font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
+.vs-group h4 i{color:#2563eb;font-size:11.5px}
+.vs-group .view-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px}
+.vs-group .view-item{background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:9px 12px;min-width:0}
+.vs-group .view-item .lbl{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:3px}
+.vs-group .view-item .val{font-size:13.5px;color:#0f172a;overflow-wrap:anywhere}
+
+/* ── GUARDIANS ───────────────────────────────────────────────
+   A full-width block below the Contact grid, on the same 2-column rhythm as
+   the field cards above it, so the eye travels straight down the left edge
+   from Email to Guardian without re-registering a different kind of thing.
+
+   One card per guardian rather than one blob of text. The previous version
+   concatenated name, relationship, phone and email into a single text node
+   with a <br>, which meant a second guardian could not exist, could not be
+   told apart from the first, and wrapped unpredictably on a narrow modal. */
+/* Not a grid child: this block is a sibling of .view-grid inside the section,
+   so grid-column would do nothing. It spans the full section width on its own,
+   which is the intent - one row of guardian cards under the two-column grid. */
+.vs-guardians{margin-top:12px}
+.vs-guardians-h{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px}
+.vs-guardians-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px}
+@media(max-width:640px){.vs-guardians-list{grid-template-columns:minmax(0,1fr)}}
+
+.vs-g-card{background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:9px 12px;min-width:0;display:flex;flex-direction:column;gap:3px}
+.vs-g-top{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;min-width:0}
+.vs-g-name{font-size:13.5px;font-weight:600;color:#0f172a;overflow-wrap:anywhere}
+/* The relationship is the second fact about a guardian, not a heading, so it
+   sits beside the name at the same size rather than above it at 10px. */
+.vs-g-rel{font-size:11.5px;color:#64748b;white-space:nowrap}
+.vs-g-line{font-size:12px;color:#475569;display:flex;align-items:center;gap:6px;min-width:0;overflow-wrap:anywhere}
+.vs-g-line i{color:#94a3b8;font-size:10.5px;width:12px;text-align:center;flex:0 0 12px}
+/* Primary and emergency are facts about the record that a clerk acts on, so
+   they are stated. Relying on row order to imply "this is the primary one"
+   means the flag is invisible to anyone scanning for it. */
+.vs-g-flag{font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:1px 6px;border-radius:4px;white-space:nowrap}
+.vs-g-flag.primary{background:#dbeafe;color:#1d4ed8}
+.vs-g-flag.emergency{background:#fee2e2;color:#b91c1c}
+@media(max-width:640px){.vs-g-rel{white-space:normal}}
+
+/* ── DOCUMENTS TAB ───────────────────────────────────────────
+   Three stacked bands, in the order a clerk asks: is the set complete, what is
+   missing, what can I actually open. The completeness strip is the only place
+   on this tab allowed to be loud, because it is the answer to the question that
+   brought the clerk here.
+
+   A file that is not on this server is styled as a fault, not hidden. uploads/
+   is gitignored, so a database promoted from another host names files this one
+   never received; showing those as ordinary rows would send a clerk to click
+   something that cannot open. */
+.vs-empty{color:#94a3b8;font-size:12.5px;margin:0;padding:14px 0;line-height:1.5}
+
+.vs-doc-sum{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border-radius:9px;margin-bottom:14px;font-size:12.5px;line-height:1.45}
+.vs-doc-sum i{margin-top:1px;font-size:13px;flex:0 0 13px}
+.vs-doc-sum strong{display:block;font-weight:600}
+.vs-doc-sum span{display:block;margin-top:2px;font-size:11.5px;opacity:.85}
+.vs-doc-sum.ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
+.vs-doc-sum.short{background:#fffbeb;border:1px solid #fde68a;color:#b45309}
+
+.vs-doc-h{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;display:flex;align-items:center;gap:6px}
+/* The count sits next to the heading rather than in it, so the heading stays
+   scannable and the number is available without reading the rows. */
+.vs-doc-n{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;color:#64748b;background:#f1f5f9;border-radius:4px;padding:1px 5px;letter-spacing:0}
+.vs-doc-block{margin-bottom:16px}
+
+.vs-doc-chips{display:flex;flex-wrap:wrap;gap:5px}
+.vs-chip{font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;letter-spacing:.01em}
+.vs-chip.missing{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+
+.vs-file-list,.vs-req-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.vs-file{border:1px solid #eef2f7;border-radius:8px;background:#f8fafc;overflow:hidden}
+.vs-file-open{display:flex;align-items:center;gap:8px;padding:8px 11px;text-decoration:none;color:inherit;flex-wrap:wrap;transition:background .12s ease}
+.vs-file-open:hover{background:#eef2ff}
+/* Visible focus, not just a colour change: this is a keyboard-reachable link
+   and the row highlight is otherwise the only affordance. */
+.vs-file-open:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+.vs-file-name{font-size:12.5px;font-weight:600;color:#0f172a;white-space:nowrap}
+.vs-file-filename{font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+.vs-file-meta{font-size:11px;color:#94a3b8;margin-left:auto;white-space:nowrap}
+.vs-file-go{font-size:10px;color:#94a3b8}
+.vs-file.gone{border-color:#fecaca;background:#fef2f2;display:flex;align-items:center;gap:8px;padding:8px 11px;flex-wrap:wrap}
+.vs-file.gone .vs-file-name{color:#7f1d1d}
+/* "Not on this server" is a state someone has to act on, so it is stated in
+   words and not left to a greyed-out row to imply. */
+.vs-file-gone{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#b91c1c;margin-left:auto;white-space:nowrap}
+
+.vs-req{display:flex;align-items:center;gap:9px;padding:6px 11px;border:1px solid #eef2f7;border-radius:7px;background:#fcfdff;flex-wrap:wrap}
+.vs-req-type{font-size:12px;color:#334155;text-transform:capitalize}
+.vs-req-meta{font-size:11px;color:#94a3b8;margin-left:auto;white-space:nowrap}
+.vs-req-status{font-size:9.5px;padding:1px 7px}
+/* The out-of-scope value. Quiet on purpose: it is correct, not a fault, and
+   an empty field elsewhere on this sheet is a different thing entirely. */
+.vs-group .val.vs-na{color:#94a3b8;font-weight:700;letter-spacing:.04em}
+.vs-group .val.vs-na span{display:block;font-size:10.5px;font-weight:600;letter-spacing:0;color:#cbd5e1;margin-top:2px}
+/* ══════════════════════════════════════════════════════════════
+   MODAL FRAME — the header and footer stay put, the body scrolls
+   ══════════════════════════════════════════════════════════════
+   The Enrol and Edit forms are taller than any laptop screen. The card
+   itself was scrolling, so the footer - the completeness ledger and the
+   Enroll button, or Save - travelled off the bottom with the last row of
+   fields. On a 1000px viewport the Enrol button sat at y=1468: a clerk
+   fills the last field, looks for the button that is supposed to be
+   always there, and finds nothing. That reads as a dead button, and it is
+   the same class of report as the ones that sent this whole investigation.
+
+   The fix is structural rather than cosmetic: the card becomes a flex
+   column capped at the viewport, the body takes the remaining space and
+   does the scrolling, and the footer is a fixed-height band. The ledger
+   stays visible, which is its entire purpose - it reports what is still
+   missing, so it cannot be somewhere the clerk has to go looking.
+*/
+.modal-frame{display:flex;flex-direction:column;max-height:92vh;overflow:hidden}
+.modal-frame .modal-header{flex:0 0 auto}
+/* The body is wrapped in a <form>, not a direct child of the card, so the
+   flex child is the FORM and the scroll lands on the body inside it. Sizing
+   the body directly does nothing: a non-flex-item with a fixed height inside
+   a form that has no height of its own just overflows the card. */
+.modal-frame>form{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.modal-frame .modal-body{flex:1 1 auto;min-height:0;overflow-y:auto}
+/* The footer must not be squeezed out by a long body. flex:0 0 auto, and it
+   wraps rather than clips, so two-line ledger text stays readable. */
+.modal-frame .modal-footer{flex:0 0 auto}
+
+@media(max-width:640px){.vs-group .view-grid{grid-template-columns:minmax(0,1fr)}}
+/* The record sheet is a reading surface, not a form. It gets a scroll of its
+   own so the tabs and the profile header stay put while a long record is read,
+   and the card is allowed to be tall - the previous 600px forced a two-column
+   grid into a 288px column, which wrapped "August 27, 2004" onto two lines and
+   made every value look broken. */
+.vs-card{display:flex;flex-direction:column;max-height:92vh}
+.vs-card .modal-body{overflow-y:auto;flex:1 1 auto;min-height:0}
+.vs-group .view-item .val{line-height:1.35}
+/* A date is a date, not a phrase: keep it on one line so the eye can scan a
+   column of them without re-reading. */
+.vs-group .view-item .val time,.vs-group .view-item .val .vs-date{white-space:nowrap}
+
+/* ── IDENTITY BLOCK ────────────────────────────────────────
+   The one place this sheet spends its emphasis. The portrait is square rather
+   than a circle on purpose: registrar photographs are 1:1 ID crops, and a
+   circle crops the top of the head off exactly the face a clerk is trying to
+   confirm. The square also stops it competing with the round avatars in the
+   list, so the eye reads "this is the record" rather than "this is a person
+   button". */
+.vs-id{display:flex;gap:18px;align-items:flex-start;padding:0 0 18px;border-bottom:1px solid #e8edf3}
+.vs-id-portrait{position:relative;flex:0 0 96px;width:96px;height:96px;border-radius:14px;overflow:hidden;background:#e8edf3;box-shadow:0 1px 2px rgba(15,23,42,.06)}
+/* Both layers are absolutely positioned, photo ABOVE initials.
+   The img was left in normal flow while the initials block was
+   position:absolute;inset:0, so the initials were painted ON TOP of a photo
+   that had loaded perfectly. The image was fetched, decoded, cached, and
+   invisible - which is why the View modal looked exactly as it did before,
+   initials and all, no matter what the API returned. Verified with
+   document.elementFromPoint at the centre of the portrait: the topmost node
+   was the initials div, not the img.
+   Positioning both absolutely makes the result depend on z-index rather than
+   on which element happens to be in normal flow, so the photo can be given a
+   definite claim to the top. The img is display:none until a photo exists, so
+   when there is none the initials underneath show through - no JS toggling of
+   two elements, and therefore no way for the two layers to disagree. */
+.vs-id-portrait img{position:absolute;inset:0;z-index:2;width:100%;height:100%;object-fit:cover;display:block}
+.vs-id-face{position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:30px;color:#fff;letter-spacing:.02em}
+.vs-id-face.blue{background:linear-gradient(140deg,#3b82f6,#1d4ed8)}
+.vs-id-face.green{background:linear-gradient(140deg,#22c55e,#15803d)}
+.vs-id-face.purple{background:linear-gradient(140deg,#8b5cf6,#6d28d9)}
+.vs-id-face.orange{background:linear-gradient(140deg,#f59e0b,#b45309)}
+.vs-id-face.pink{background:linear-gradient(140deg,#ec4899,#be185d)}
+/* The initials sit at the optical centre of a face, not the geometric one -
+   type is measured from the cap height, and dead-centre puts it low. */
+.vs-id-face span{transform:translateY(-2px)}
+
+.vs-id-copy{min-width:0;flex:1 1 auto;padding-top:2px}
+/* 24px, tight. This is the answer to the question the registrar opened the
+   modal to ask, so it is the largest type on the sheet by a clear margin -
+   a size that says "name" rather than one that has to compete with the
+   section headings below. */
+.vs-id-name{font-size:24px;font-weight:800;letter-spacing:-.015em;line-height:1.2;color:#0f172a;overflow-wrap:anywhere}
+/* A student number is an identifier, not prose: monospaced, so "2026-01482"
+   reads as a code a clerk can compare against a printed list character by
+   character. */
+.vs-id-meta{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:5px}
+.vs-id-num{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;font-weight:600;color:#334155;letter-spacing:.02em}
+.vs-id-rec{font-size:11.5px;color:#94a3b8}
+.vs-id-status{margin-top:10px}
+.vs-id-scan{font-size:11.5px;color:#64748b;margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+@media(max-width:520px){.vs-id{gap:14px}.vs-id-portrait{flex-basis:72px;width:72px;height:72px}.vs-id-name{font-size:19px}}
+
+/* The AI panel. It was a gradient card competing with the name for attention;
+   it is now a single quiet strip under the identity block, because it is a
+   summary of what the fields below already say - useful, never the headline. */
+.vs-ai{margin-top:14px;background:#f6f8fc;border:1px solid #e3e9f2;border-left:3px solid #93b4f0;border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.5;color:#3f5876}
 :root { --sidebar-width:260px; --sidebar-collapsed-width:72px; }
 .dashboard-main { margin-left:var(--sidebar-width); padding:24px 32px; min-height:100vh; width:calc(100% - var(--sidebar-width)); max-width:calc(100% - var(--sidebar-width)); overflow-x:hidden; transition:margin-left .3s,width .3s,max-width .3s; }
 .sidebar.collapsed~.dashboard-main,body.sidebar-collapsed .dashboard-main { margin-left:var(--sidebar-collapsed-width); width:calc(100% - var(--sidebar-collapsed-width)); max-width:calc(100% - var(--sidebar-collapsed-width)); }
@@ -326,7 +597,10 @@ body[data-page="students"] .q-dot.q-bad{background:#ef4444}
 .table-responsive tbody tr{transition:background .15s ease}
 .table-responsive tbody tr:hover{background:#f8fafc}
 .table-responsive tbody tr:last-child td{border-bottom:none}
-.table-responsive tbody tr.archived{opacity:.5;background:#f8fafc}
+/* A withdrawn row. Renamed from .archived: there is no archived status, and the
+   class was keyed to a value the column could not store - so it could never
+   have matched a real row. `dropped` is the withdrawal the office records. */
+.table-responsive tbody tr.withdrawn{opacity:.5;background:#f8fafc}
 
 /* Checkbox */
 .cb-wrap{display:flex;align-items:center;justify-content:center}
@@ -335,6 +609,16 @@ body[data-page="students"] .q-dot.q-bad{background:#ef4444}
 /* Student info */
 .student-info{display:flex;align-items:center;gap:10px}
 .student-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:11px;flex-shrink:0}
+/* The <img> variant of the avatar. Same box as the initials, but a face is
+   content, not decoration, so it is not announced: alt is empty and the name is
+   already the adjacent cell. A screen reader should not say "Roldan Tenco,
+   image" and then read the name again. */
+/* The program column. Monospaced and letter-spaced because an acronym is a
+   code, not a word: "BSIT" should line up with "BSAIS" and "BSHM" down the
+   column, and a proportional face makes those three look like different lengths
+   of different things. The full name is on hover, so nothing is lost. */
+td.course-cell{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;font-weight:600;letter-spacing:.04em;color:#334155;white-space:nowrap}
+img.student-avatar{object-fit:cover;background:#e8edf3}
 .student-avatar.blue{background:linear-gradient(135deg,#2563eb,#1d4ed8)} .student-avatar.green{background:linear-gradient(135deg,#16a34a,#15803d)}
 .student-avatar.purple{background:linear-gradient(135deg,#7c3aed,#6d28d9)} .student-avatar.orange{background:linear-gradient(135deg,#b45309,#92400e)}
 .student-avatar.pink{background:linear-gradient(135deg,#db2777,#be185d)}
@@ -348,18 +632,25 @@ body[data-page="students"] .q-dot.q-bad{background:#ef4444}
 
 /* Status badges */
 .status-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:9999px;font-size:11px;font-weight:600;white-space:nowrap;border:none;cursor:pointer;font-family:inherit}
-.status-badge.active{background:#dcfce7;color:#16a34a}
-.status-badge.probation{background:#fef3c7;color:#b45309}
-.status-badge.at-risk{background:#fee2e2;color:#dc2626}
-.status-badge.graduated{background:#dbeafe;color:#2563eb}
-.status-badge.loa{background:#f3e8ff;color:#7c3aed}
-.status-badge.transferred{background:#fce7f3;color:#db2777}
+/* Status badge and dot.
+   These eleven rules were written out by hand and had drifted from the badge
+   map in shared/functions.php and from the column itself: there was no rule for
+   `alumni`, so an alumni student rendered unstyled, and six of the classes
+   named statuses the office no longer records.
+
+   The five classes now match studentStatuses() and use the same colours that
+   function states. A new status needs a rule here or it renders unstyled, so
+   the two files have to move together - which is why the values are not
+   generated but commented as a pair. */
+.status-badge.enrolled{background:#eff6ff;color:#2563eb}
+.status-badge.active{background:#f0fdf4;color:#16a34a}
+.status-badge.graduate{background:#f5f3ff;color:#7c3aed}
+.status-badge.alumni{background:#ecfeff;color:#0891b2}
 .status-badge.dropped{background:#fef2f2;color:#dc2626}
-.status-badge.archived{background:#f1f5f9;color:#64748b}
+.status-badge.unknown{background:#f1f5f9;color:#64748b}
 .status-dot{width:6px;height:6px;border-radius:50%;display:inline-block}
-.status-dot.active{background:#16a34a} .status-dot.probation{background:#b45309} .status-dot.at-risk{background:#dc2626}
-.status-dot.graduated{background:#2563eb} .status-dot.loa{background:#7c3aed} .status-dot.transferred{background:#db2777}
-.status-dot.dropped{background:#dc2626} .status-dot.archived{background:#94a3b8}
+.status-dot.enrolled{background:#2563eb} .status-dot.active{background:#16a34a} .status-dot.graduate{background:#7c3aed}
+.status-dot.alumni{background:#0891b2} .status-dot.dropped{background:#dc2626} .status-dot.unknown{background:#94a3b8}
 
 .status-card .status-archived{background:#f1f5f9;color:#64748b}
 
@@ -432,13 +723,11 @@ body[data-page="students"] .q-dot.q-bad{background:#ef4444}
 .modal-footer .btn{min-width:100px;justify-content:center}
 
 /* View modal profile */
-.view-profile{display:flex;flex-direction:column;align-items:center;padding:12px 0}
-.view-profile .big-avatar{width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:28px;margin-bottom:10px}
-.view-profile .big-avatar.blue{background:linear-gradient(135deg,#2563eb,#1d4ed8)} .view-profile .big-avatar.green{background:linear-gradient(135deg,#16a34a,#15803d)}
-.view-profile .big-avatar.purple{background:linear-gradient(135deg,#7c3aed,#6d28d9)} .view-profile .big-avatar.orange{background:linear-gradient(135deg,#b45309,#92400e)}
-.view-profile .big-avatar.pink{background:linear-gradient(135deg,#db2777,#be185d)}
-.view-profile .vp-name{font-size:20px;font-weight:700;color:#0f172a}
-.view-profile .vp-id{font-size:13px;color:#64748b}
+/* The centred identity stack (.view-profile, .big-avatar, .vp-name, .vp-id) is
+   gone with the markup it styled. It was a single centred column, which forced
+   the eye through the same point on every line to read a name, a number, a
+   record id and a scan time. The identity block (.vs-id) now sets them as one
+   left-anchored group, which is how the eye actually reads a record. */
 
 .view-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid #f1f5f9}
 .view-item{text-align:left}
@@ -599,13 +888,20 @@ body[data-page="students"] .stu-legend-val{font-size:16px}
 </div>
 </div>
 <div class="stu-metric tone-amber">
-<p class="stu-metric-label">At risk or probation</p>
-<div class="stu-metric-value"><?= $atRiskStudents ?></div>
+<?php // This card read "At risk or probation" and counted two statuses the
+      // office no longer records, so it was permanently 0 and reported "None
+      // flagged" as a measurement. The advisory still exists - it lives in the
+      // data-quality page and the Status Tracker queue - but it is not a
+      // status, and inventing a card for it here would be worse than removing
+      // it. This now shows the one thing the page can still say honestly:
+      // how many students have been withdrawn. ?>
+<p class="stu-metric-label">Dropped</p>
+<div class="stu-metric-value"><?= $droppedStudents ?></div>
 <div class="stu-metric-foot">
-<?php if ($atRiskStudents > 0): ?>
-<span class="stu-trend down"><i class="fas fa-triangle-exclamation"></i>Needs follow-up</span>
+<?php if ($droppedStudents > 0): ?>
+<span class="stu-trend down"><i class="fas fa-triangle-exclamation"></i>Withdrawn</span>
 <?php else: ?>
-<span class="stu-trend up"><i class="fas fa-circle-check"></i>None flagged</span>
+<span class="stu-trend up"><i class="fas fa-circle-check"></i>None withdrawn</span>
 <?php endif; ?>
 </div>
 </div>
@@ -669,14 +965,19 @@ $segLabel = $sg['year'] ? 'Year ' . $sg['year'] : 'Unassigned year level';
 <!-- Bulk bar -->
 <div class="bulk-bar" id="bulkBar">
 <span class="count" id="bulkCount">0 selected</span>
-<select class="form-control" style="width:auto;display:inline-block;padding:6px 10px;font-size:12px;" id="bulkActionSelect"><option value="">Bulk action...</option><option value="active">Set Active</option><option value="at-risk">Set At Risk</option><option value="probation">Set Probation</option><option value="graduated">Set Graduated</option><option value="loa">Set LOA</option><option value="transferred">Set Transferred</option><option value="dropped">Set Dropped</option></select>
+<?php // Built from studentStatuses(). This listed seven values, five of which the
+       // column could not store - and the bulk endpoint had no validation, so
+       // picking "Set At Risk" wrote '' onto every selected student and still
+       // answered "updated". The API now rejects it, but the option should
+       // never have been offered. ?>
+<select class="form-control" style="width:auto;display:inline-block;padding:6px 10px;font-size:12px;" id="bulkActionSelect"><option value="">Bulk action...</option><?php foreach (studentStatuses() as $st): ?><option value="<?= $st ?>">Set <?= studentStatusLabel($st) ?></option><?php endforeach; ?></select>
 <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;" onclick="applyBulkAction()"><i class="fas fa-check"></i> Apply</button>
 </div>
 
 <div class="table-responsive" id="studentTableWrap">
 <table id="studentTable">
 <thead>
-<tr><th style="width:30px;"><div class="cb-wrap"><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></div></th><th class="rownum">#</th><th>Student ID</th><th>Name</th><th>Course</th><th class="num">Year</th><th class="num">Section</th><th class="num">Gender</th><th>RFID</th><th>Status</th><th class="num">Quality <span class="quality-legend" title=""><i class="fas fa-circle-info" style="cursor:help;"></i><span class="quality-legend-box">Quality score = % of required student fields filled.
+<tr><th style="width:30px;"><div class="cb-wrap"><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></div></th><th class="rownum">#</th><th>Student ID</th><th>Name</th><th>Course</th><th class="num">Year</th><th class="num">Gender</th><th>RFID</th><th>Status</th><th class="num">Quality <span class="quality-legend" title=""><i class="fas fa-circle-info" style="cursor:help;"></i><span class="quality-legend-box">Quality score = % of required student fields filled.
 <span style="color:#22c55e;">●</span> 85–100% &nbsp; Complete
 <span style="color:#f59e0b;">●</span> 60–84% &nbsp; Some fields missing
 <span style="color:#ef4444;">●</span> &lt;60% &nbsp; Many fields missing
@@ -687,8 +988,15 @@ $segLabel = $sg['year'] ? 'Year ' . $sg['year'] : 'Unassigned year level';
 <?php
 $avatarColors = ['blue','green','purple','orange','pink'];
 foreach ($students as $i => $s):
-$initials = strtoupper(substr($s['first_name'],0,1).substr($s['last_name'],0,1));
-$ac = $avatarColors[$i % count($avatarColors)];
+$initials = studentInitials((string)($s['first_name'] ?? ''), (string)($s['last_name'] ?? ''));
+// Colour keyed to the student id, not the row index. With id DESC the index
+// shifts whenever a student is added, so two rows swap colours and a colour
+// stops meaning anything; the id is stable for the life of the record.
+$ac = $avatarColors[abs(crc32((string)$s['id'])) % count($avatarColors)];
+// The photograph comes from Digital File Storage, resolved and disk-checked in
+// PHP. This row used to show initials unconditionally, so a student with a
+// photo on file was rendered as "RT" in a list a clerk reads all day.
+$photoUrl = studentPhotoUrl($s, $APP_ROOT);
 $hasRfid = isset($rfidMap[$s['id']]);
 $rfidStatus = $hasRfid && $rfidMap[$s['id']]['status'] === 'active' ? 'active' : ($hasRfid ? 'inactive' : 'none');
 // Data quality score + anomaly flags (deterministic)
@@ -696,17 +1004,34 @@ $qScore = studentQualityScore($s);
 $qAnoms = studentAnomalies($s);
 $qDotClass = $qScore >= 85 ? 'good' : ($qScore >= 60 ? 'warn' : 'bad');
 ?>
-<tr data-student='<?= htmlspecialchars(json_encode($s),ENT_QUOTES,'UTF-8') ?>' class="<?= $s['status']==='archived'?'archived':'' ?><?= !empty($qAnoms) ? ' q-flag' : '' ?>">
+<tr data-student='<?= htmlspecialchars(json_encode($s),ENT_QUOTES,'UTF-8') ?>' class="<?= ($s['status']??'')==='dropped'?'withdrawn':'' ?><?= !empty($qAnoms) ? ' q-flag' : '' ?>">
 <td><div class="cb-wrap"><input type="checkbox" class="student-cb" value="<?= (int)$s['id'] ?>" onchange="updateBulkBar()"></div></td>
 <td class="rownum"><?= (int)$s['id'] ?></td>
 <td class="student-id" style="font-weight:600;font-size:12px;"><?= htmlspecialchars($s['student_number'] ?: '—') ?></td>
-<td><div class="student-info"><div class="student-avatar <?= $ac ?>"><?= $initials ?: '?' ?></div><div><div class="student-name"><?= htmlspecialchars($s['first_name']." ".$s['last_name']) ?></div><div class="student-email"><?= htmlspecialchars($s['email'] ?? '') ?></div></div></div></td>
-<td><?= htmlspecialchars($s['course'] ?? 'N/A') ?></td>
+<td><div class="student-info"><?php // Photo and initials are both rendered; the photo simply covers
+      // the initials. If the file is deleted between render and paint, or the
+      // host is momentarily unreachable, onerror uncovers the initials rather
+      // than leaving a broken-image icon in a list a clerk reads all day. ?><?php if ($photoUrl !== ''): ?><img class="student-avatar" src="<?= htmlspecialchars($photoUrl) ?>" alt="" style="object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';this.onerror=null;"><?php endif; ?><div class="student-avatar <?= $ac ?>" style="<?= $photoUrl !== '' ? 'display:none;' : '' ?>"><?= $initials ?></div><div><div class="student-name"><?= htmlspecialchars($s['first_name']." ".$s['last_name']) ?></div><div class="student-email"><?= htmlspecialchars($s['email'] ?? '') ?></div></div></div></td>
+<?php // The program as its acronym. The full name is
+      // "BACHELOR OF SCIENCE IN INFORMATION TECHNOLOGY (BSIT)" - 51
+      // characters in a column the width of a fifth of the table, which pushed
+      // status and the quality marker off to the right where they stopped
+      // being scannable. The full name stays in the title attribute and in the
+      // View modal; the column is a compression of the record, never a
+      // replacement for it. courseAcronym() never returns empty, so a program
+      // is never silently lost. ?>
+<td class="course-cell" title="<?= htmlspecialchars($s['course'] ?? 'N/A') ?>"><?= htmlspecialchars(courseAcronym($s['course'] ?? '') ?: '—') ?></td>
 <td class="num"><?= htmlspecialchars($s['year_level'] ?? 'N/A') ?></td>
-<td class="num"><?= htmlspecialchars($s['section'] ?? '—') ?></td>
+<?php // No Section cell. Section is Class Scheduling's (#297) to assign, not the
+        // Registrar's - see DEPARTMENTS.md. A column of values this office can
+        // neither fill nor correct is noise in a list used to find a student. ?>
 <td class="num"><?= htmlspecialchars(($s['gender'] ?? '') ?: '—') ?></td>
 <td><a href="../registrar/rfid-cards.php?search=<?= urlencode($s['student_number']) ?>" class="rfid-chip <?= $rfidStatus ?>"><i class="fas fa-<?= $rfidStatus==='active'?'check-circle':'credit-card' ?>"></i> <?= $rfidStatus==='active'?($rfidMap[$s['id']]['card_uid']):($rfidStatus==='none'?'—':$rfidMap[$s['id']]['status']) ?></a></td>
-<td><div class="quick-status-wrap"><button class="status-badge <?= $s['status']??'active' ?>" onclick="toggleQuickMenu(<?= (int)$s['id'] ?>)"><span class="status-dot <?= $s['status']??'active' ?>"></span><?= ucfirst($s['status']??'Active') ?></button><div class="quick-status-menu" id="qsm_<?= (int)$s['id'] ?>"><?php $statuses=['active','probation','at-risk','graduated','loa','transferred','dropped']; if($s['status']==='archived')$statuses[]='archived'; foreach($statuses as $st): ?><button onclick="quickStatus(<?= (int)$s['id'] ?>,'<?= $st ?>')" class="<?= ($s['status']??'active')===$st?'active':'' ?>"><?= ucfirst($st) ?></button><?php endforeach; ?></div></div></td>
+<?php // The quick-status menu. Reads studentStatuses(), so a row cannot offer a
+        // status the column would reject - which is what made this list and the
+        // enum drift apart before. Archived is gone as a status: soft-delete is
+        // a separate concern and never had a column value to store it. ?>
+<td><div class="quick-status-wrap"><button class="status-badge <?= $s['status']??'enrolled' ?>" onclick="toggleQuickMenu(<?= (int)$s['id'] ?>)"><span class="status-dot <?= $s['status']??'enrolled' ?>"></span><?= studentStatusLabel($s['status'] ?? '') ?: 'Enrolled' ?></button><div class="quick-status-menu" id="qsm_<?= (int)$s['id'] ?>"><?php foreach (studentStatuses() as $st): ?><button onclick="quickStatus(<?= (int)$s['id'] ?>,'<?= $st ?>')" class="<?= ($s['status']??'enrolled')===$st?'active':'' ?>"><?= studentStatusLabel($st) ?></button><?php endforeach; ?></div></div></td>
 <td class="num">
 <?php
 $qAnomLabels = array_map(function ($k) {
@@ -724,7 +1049,12 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <span class="q-dot q-<?= $qDotClass ?>" title="<?= htmlspecialchars($qTitle) ?>"></span>
 <?php if (!empty($qAnoms)): ?><i class="fas fa-exclamation-triangle" style="color:#f59e0b;margin-left:4px;font-size:11px;" title="<?= htmlspecialchars(implode('; ', $qAnomLabels)) ?>"></i><?php endif; ?>
 </td>
-<td><div class="action-group"><button class="action-btn view" onclick="viewStudent(<?= (int)$s['id'] ?>)" title="View"><i class="fas fa-eye"></i></button><button class="action-btn edit" onclick="editStudent(<?= (int)$s['id'] ?>)" title="Edit"><i class="fas fa-pen"></i></button><?php if ($s['status']==='archived'): ?><button class="action-btn restore" onclick="restoreStudent(<?= (int)$s['id'] ?>,'<?= htmlspecialchars($s['first_name']." ".$s['last_name'],ENT_QUOTES) ?>')" title="Restore"><i class="fas fa-undo"></i></button><?php endif; ?></div></td>
+<td><div class="action-group"><button class="action-btn view" onclick="viewStudent(<?= (int)$s['id'] ?>)" title="View"><i class="fas fa-eye"></i></button><button class="action-btn edit" onclick="editStudent(<?= (int)$s['id'] ?>)" title="Edit"><i class="fas fa-pen"></i></button><?php // Shown for a withdrawn student. This keyed on 'archived', a value the
+       // column could not store, so the button never appeared for anyone -
+       // the delete wrote '' and this compared for 'archived'. The withdraw /
+       // reinstate pair now keys on the two real statuses it actually moves
+       // between. ?>
+<?php if (($s['status']??'')==='dropped'): ?><button class="action-btn restore" onclick="restoreStudent(<?= (int)$s['id'] ?>,'<?= htmlspecialchars($s['first_name']." ".$s['last_name'],ENT_QUOTES) ?>')" title="Reinstate"><i class="fas fa-undo"></i></button><?php endif; ?></div></td>
 </tr>
 <?php endforeach; endif; ?>
 </tbody>
@@ -748,10 +1078,12 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <div class="modal-header"><h2><i class="fas fa-sliders"></i> Filter Students</h2><button class="modal-close" onclick="closeFilterModal()"><i class="fas fa-times"></i></button></div>
 <div class="modal-body">
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-<div class="form-group"><label>Status</label><select id="filterStatus" class="form-control"><option value="">All Status</option><option value="enrolled">Enrolled</option><option value="active">Active</option><option value="probation">Probation</option><option value="at-risk">At Risk</option><option value="graduated">Graduated</option><option value="loa">LOA</option><option value="transferred">Transferred</option><option value="dropped">Dropped</option><option value="archived">Archived</option></select></div>
+<div class="form-group"><label>Status</label><select id="filterStatus" class="form-control"><option value="">All Status</option><?php foreach (studentStatuses() as $st): ?><option value="<?= $st ?>"><?= studentStatusLabel($st) ?></option><?php endforeach; ?></select></div>
 <div class="form-group"><label>Year Level</label><select id="filterYear" class="form-control"><option value="">All Year</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></div>
 <div class="form-group"><label>Course</label><select id="filterCourse" class="form-control"><option value="">All Courses</option><?php foreach($courses as $c): ?><option value="<?= htmlspecialchars($c['course']) ?>"><?= htmlspecialchars($c['course']) ?></option><?php endforeach; ?></select></div>
-<div class="form-group"><label>Section</label><input type="text" id="filterSection" class="form-control" placeholder="Enter section..." /></div>
+<?php // No Section filter. Class Scheduling (#297) owns section; filtering the
+        // registrar's list by a field this office does not maintain would be
+        // filtering on another department's data. See DEPARTMENTS.md. ?>
 </div>
 </div>
 <div class="modal-footer"><button class="btn btn-secondary" onclick="closeFilterModal()">Cancel</button><button class="btn btn-secondary" onclick="clearFilters()">Clear All</button><button class="btn btn-primary" onclick="applyFilters()"><i class="fas fa-check"></i> Apply</button></div>
@@ -759,7 +1091,7 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 </div>
 
 <!-- View Modal (tabbed) -->
-<div class="modal-overlay" id="viewModal"><div class="modal-content" style="max-width:600px;"><div class="modal-header"><h2><i class="fas fa-id-card"></i> Student Profile</h2><button class="modal-close" onclick="closeViewModal()"><i class="fas fa-times"></i></button></div>
+<div class="modal-overlay" id="viewModal"><div class="modal-content vs-card" style="max-width:720px;"><div class="modal-header"><h2><i class="fas fa-id-card"></i> Student Profile</h2><button class="modal-close" onclick="closeViewModal()"><i class="fas fa-times"></i></button></div>
 <div style="display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid #e2e8f0;padding-bottom:0;">
 <button class="vtab active" onclick="switchVTab(this,'profile')" style="padding:8px 14px;border:none;background:none;font-size:12px;font-weight:600;color:#2563eb;cursor:pointer;border-bottom:2px solid #2563eb;font-family:inherit;"><i class="fas fa-user"></i> Profile</button>
 <button class="vtab" onclick="switchVTab(this,'documents')" style="padding:8px 14px;border:none;background:none;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;"><i class="fas fa-file"></i> Documents</button>
@@ -769,37 +1101,120 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <div class="modal-body">
 <!-- Tab: Profile -->
 <div class="vtab-content active" id="tabProfile">
-<div class="view-profile">
-<div class="big-avatar blue" id="vAvatar" style="position:relative;"><span id="vAvatarText">JD</span></div>
-<input type="file" id="photoInput" accept="image/*" style="display:none">
-<button class="btn btn-secondary" style="margin:-4px auto 10px;padding:4px 12px;font-size:11px;" onclick="document.getElementById('photoInput').click()"><i class="fas fa-camera"></i> Change Photo</button>
-<div class="vp-name" id="vName">—</div>
-<div class="vp-id" id="vStudentId">—</div>
-<div class="vp-id" id="vDbId" style="font-size:11px;color:#94a3b8;margin-top:2px;">—</div>
-<div id="vLastScan" style="font-size:12px;color:#64748b;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;"></div>
-<div id="vAiSummary" style="display:none;margin-top:12px;background:linear-gradient(135deg,#eef4ff,#f5f3ff);border:1px solid #dbeafe;border-radius:10px;padding:12px 14px;font-size:13px;color:#1e40af;"></div>
+<!-- IDENTITY BLOCK
+
+     This replaces a centred 72px circle, a "Change Photo" button, the name, two
+     lines of ID, a scan pill and an AI panel - stacked, centred, all competing
+     for the same attention. A registrar opening a record has one question,
+     "is this the student I think it is", and the answer is the name, the photo
+     and the number together. So they are put together and anchored left, and
+     everything else on the sheet reads down from them.
+
+     The upload control is gone on purpose. Photographs arrive through Digital
+     File Storage, which writes a documents row; there was a second, parallel
+     path writing students.photo, and it is why both the list and this modal
+     showed initials for students who had a picture on file. One way in means
+     one place to look, and one place to be wrong. The photo below is read from
+     storage, not from the column.
+
+     The scan line and the AI panel are unchanged in content; they only move
+     under the identity block instead of competing with it. -->
+<div class="vs-id">
+  <div class="vs-id-portrait">
+    <img id="vAvatarImg" alt="" style="display:none;" onerror="this.style.display='none';document.getElementById('vAvatar').style.display='flex';this.onerror=null;">
+    <div class="vs-id-face" id="vAvatar"><span id="vAvatarText">—</span></div>
+  </div>
+  <div class="vs-id-copy">
+    <div class="vs-id-name" id="vName">—</div>
+    <div class="vs-id-meta">
+      <span class="vs-id-num" id="vStudentId">—</span>
+      <span class="vs-id-rec" id="vDbId">—</span>
+    </div>
+    <div class="vs-id-status" id="vStatus">—</div>
+    <div id="vLastScan" class="vs-id-scan"></div>
+  </div>
 </div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #f1f5f9">
-<div class="view-item"><div class="lbl">Status</div><div class="val" id="vStatus">—</div></div>
-<div class="view-item"><div class="lbl">LRN</div><div class="val" id="vLrn">—</div></div>
-<div class="view-item"><div class="lbl">Gender</div><div class="val" id="vGender">—</div></div>
-<div class="view-item"><div class="lbl">Civil Status</div><div class="val" id="vCivilStatus">—</div></div>
-<div class="view-item"><div class="lbl">Birth Date</div><div class="val" id="vBirthDate">—</div></div>
-<div class="view-item"><div class="lbl">Place of Birth</div><div class="val" id="vBirthPlace">—</div></div>
-<div class="view-item"><div class="lbl">Nationality</div><div class="val" id="vNationality">—</div></div>
-<div class="view-item"><div class="lbl">Religion</div><div class="val" id="vReligion">—</div></div>
-<div class="view-item"><div class="lbl">Course</div><div class="val" id="vCourse">—</div></div>
-<div class="view-item"><div class="lbl">Year / Section</div><div class="val" id="vYearSection">—</div></div>
-<div class="view-item"><div class="lbl">School Year / Sem</div><div class="val" id="vSchoolYearSem">—</div></div>
-<div class="view-item"><div class="lbl">Adviser</div><div class="val" id="vAdviser">—</div></div>
-<div class="view-item"><div class="lbl">Email</div><div class="val" id="vEmail">—</div></div>
-<div class="view-item"><div class="lbl">Contact</div><div class="val" id="vContact">—</div></div>
-<div class="view-item"><div class="lbl">Father</div><div class="val" id="vFather">—</div></div>
-<div class="view-item"><div class="lbl">Mother</div><div class="val" id="vMother">—</div></div>
-<div class="view-item" style="grid-column:span 2;"><div class="lbl">Address</div><div class="val" id="vAddress">—</div></div>
+<div id="vAiSummary" class="vs-ai" style="display:none;"></div>
+<!-- The record sheet is grouped by the Registrar's scope, matching the Enrol
+     modal. A flat two-column grid of sixteen identical label/value pairs gave
+     no clue which fields this office maintains, and no clue when a value was
+     genuinely absent rather than not collected. Each group is named, and the
+     one out-of-scope field is shown with its owning department instead of
+     being dropped.
+
+     Status and LRN used to sit in a two-column strip of their own above this
+     block. They are Identity fields, so they live in the Identity group now -
+     keeping both meant duplicate DOM ids (#vStatus twice), and the leftover
+     wrapper div left .vs-groups nested inside a grid it had no business being
+     inside. -->
+<div class="vs-groups">
+  <section class="vs-group">
+    <h4><i class="fas fa-id-card"></i> Identity</h4>
+    <div class="view-grid">
+      <!-- Status moved up into the identity block. It answers "is this the
+           student I think it is" and belongs beside the name, not buried first
+           in a grid of eight. Keeping it here too meant #vStatus twice in the
+           DOM, and getElementById resolves to the first - so the visible
+           value and the written value could disagree. -->
+      <div class="view-item"><div class="lbl">LRN</div><div class="val" id="vLrn">—</div></div>
+      <div class="view-item"><div class="lbl">Gender</div><div class="val" id="vGender">—</div></div>
+      <div class="view-item"><div class="lbl">Civil status</div><div class="val" id="vCivilStatus">—</div></div>
+      <div class="view-item"><div class="lbl">Birth date</div><div class="val" id="vBirthDate">—</div></div>
+      <div class="view-item"><div class="lbl">Place of birth</div><div class="val" id="vBirthPlace">—</div></div>
+      <div class="view-item"><div class="lbl">Nationality</div><div class="val" id="vNationality">—</div></div>
+      <div class="view-item"><div class="lbl">Religion</div><div class="val" id="vReligion">—</div></div>
+    </div>
+  </section>
+  <section class="vs-group">
+    <h4><i class="fas fa-address-book"></i> Contact &amp; address</h4>
+    <div class="view-grid">
+      <div class="view-item"><div class="lbl">Email</div><div class="val" id="vEmail">—</div></div>
+      <div class="view-item"><div class="lbl">Mobile</div><div class="val" id="vContact">—</div></div>
+      <div class="view-item"><div class="lbl">Father</div><div class="val" id="vFather">—</div></div>
+      <div class="view-item"><div class="lbl">Mother</div><div class="val" id="vMother">—</div></div>
+      <div class="view-item" style="grid-column:span 2;"><div class="lbl">Address</div><div class="val" id="vAddress">—</div></div>
+    </div>
+    <!-- GUARDIANS
+
+         This was a bare, unstyled div after the grid, so it sat outside the
+         label/value rhythm of every other field on the sheet: its own 11px
+         uppercase micro-label, no card behind it, no alignment with the Father
+         and Mother cells directly above it, and a name and phone number run
+         together in one text node with a break between them.
+
+         (Written as prose rather than as a tag on purpose: a literal tag inside
+         this comment would show up in any div-balance check on the rendered
+         page, which is exactly the check that catches a genuinely unclosed
+         modal.)
+
+         Guardians are a LIST - the table holds several, and `action=guardian`
+         (singular) was fetching only the primary one and silently discarding
+         the rest. The Edit modal saves father, mother and a named guardian, so
+         a student could legitimately have four people on file and the View
+         modal showed one. This now renders every guardian as a card in the same
+         rhythm as the rest of the sheet, with the primary and emergency flags
+         stated rather than implied by ordering. -->
+    <div class="vs-guardians" id="vGuardianSection" style="display:none;">
+      <div class="vs-guardians-h">Guardians</div>
+      <div class="vs-guardians-list" id="vGuardianInfo"></div>
+    </div>
+  </section>
+  <section class="vs-group">
+    <h4><i class="fas fa-graduation-cap"></i> Program &amp; term</h4>
+    <div class="view-grid">
+      <div class="view-item"><div class="lbl">Course</div><div class="val" id="vCourse">—</div></div>
+      <div class="view-item"><div class="lbl">Year level</div><div class="val" id="vYearLevel">—</div></div>
+      <div class="view-item"><div class="lbl">School year / Sem</div><div class="val" id="vSchoolYearSem">—</div></div>
+      <div class="view-item"><div class="lbl">Adviser</div><div class="val" id="vAdviser">—</div></div>
+      <!-- Section is Class Scheduling's (#297). Shown as N/A, never removed:
+           an absent row would read as lost data, and DEPARTMENTS.md is
+           explicit that nothing is hidden so an empty record stays
+           distinguishable from a rendering failure. -->
+      <div class="view-item"><div class="lbl">Section</div><div class="val vs-na" id="vSection">N/A <span>Class Scheduling</span></div></div>
+    </div>
+    <div id="vRfidSection" style="display:none;margin-top:12px;text-align:center;gap:8px;justify-content:center;flex-wrap:wrap;"><a id="vRfidLink" href="#" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;"><i class="fas fa-credit-card"></i> RFID Card</a> <a id="vScanLink" href="#" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;"><i class="fas fa-clock-rotate-left"></i> Scan Logs</a></div>
+  </section>
 </div>
-<div id="vGuardianSection" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:6px;">Guardian</div><div id="vGuardianInfo" style="font-size:13px;color:#475569;"></div></div>
-<div id="vRfidSection" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;text-align:center;display:flex;gap:8px;justify-content:center;"><a id="vRfidLink" href="#" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;"><i class="fas fa-credit-card"></i> RFID Card</a> <a id="vScanLink" href="#" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;"><i class="fas fa-clock-rotate-left"></i> Scan Logs</a></div>
 </div>
 <!-- Tab: Documents -->
 <div class="vtab-content" id="tabDocuments" style="display:none;"><div id="vDocuments" style="padding:8px 0;"><p style="color:#94a3b8;font-size:13px;">Loading...</p></div></div>
@@ -808,7 +1223,17 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <!-- Tab: Health -->
 <div class="vtab-content" id="tabHealth" style="display:none;"><div id="vHealth" style="padding:8px 0;"><p style="color:#94a3b8;font-size:13px;">Loading...</p></div></div>
 </div>
-<div class="modal-footer"><button class="btn btn-secondary" onclick="resendWelcomeEmail()" id="resendWelcomeBtn"><i class="fas fa-envelope"></i> Resend Welcome Email</button> <button class="btn btn-primary" onclick="closeViewModal()"><i class="fas fa-times"></i> Close</button></div></div></div>
+<div class="modal-footer"><button class="btn btn-secondary" onclick="resendWelcomeEmail()" id="resendWelcomeBtn"><i class="fas fa-envelope"></i> Resend Welcome Email</button> <button class="btn btn-primary" onclick="closeViewModal()"><i class="fas fa-times"></i> Close</button></div></div></div><!-- /#viewModal -->
+<!-- Three closing tags, and each has a job: the footer, the card, and the
+     #viewModal overlay itself. I first wrote two, then "corrected" it to four
+     - both wrong, and the four is worse because it closes the NEXT modal's
+     markup. The tell is not obvious in the source, it is catastrophic at
+     runtime, and it produces no JavaScript error: the browser adopts the
+     following overlay as a child of #viewModal, so #addModal collapses to a
+     0x0 box and both its buttons and the Edit modal's stop responding.
+
+     The count is now asserted by testEveryDivInTheModalRunIsClosed, which is
+     the check that should have existed before the first attempt. -->
 
 <!-- Data Quality Review Desk -->
 <div class="modal-overlay" id="qualityModal" role="dialog" aria-modal="true" aria-labelledby="qualityModalTitle">
@@ -843,26 +1268,107 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 </div>
 
 <!-- Add Modal (inline, with guardian) -->
-<div class="modal-overlay" id="addModal"><div class="modal-content" style="max-width:760px;"><div class="modal-header"><h2><i class="fas fa-plus-circle"></i> Enroll New Student</h2><div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="openPasteModal()"><i class="fas fa-magic"></i> Paste to Fill</button><button class="modal-close" onclick="closeAddModal()"><i class="fas fa-times"></i></button></div></div><form id="addForm"><div class="modal-body">
-<div class="form-row"><div class="form-group"><label>Academic Status</label><select id="addStatus" class="form-control"><option value="enrolled">Enrolled</option><option value="active">Active</option><option value="probation">Probation</option><option value="at-risk">At Risk</option><option value="loa">LOA</option><option value="graduated">Graduated</option><option value="transferred">Transferred</option><option value="dropped">Dropped</option></select></div></div>
-<hr style="border:none;border-top:1px solid #f1f5f9;margin:0 0 12px;">
-<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-user"></i> Personal Information</div>
-<div class="form-row"><div class="form-group"><label>First Name <span style="color:#dc2626;">*</span></label><input type="text" id="addFirstName" class="form-control" required></div><div class="form-group"><label>Middle Name</label><input type="text" id="addMiddleName" class="form-control"></div><div class="form-group"><label>Last Name <span style="color:#dc2626;">*</span></label><input type="text" id="addLastName" class="form-control" required></div></div>
-<div class="form-row"><div class="form-group"><label>Name Suffix</label><select id="addSuffix" class="form-control"><option value="">—</option><option value="Jr.">Jr.</option><option value="Sr.">Sr.</option><option value="II">II</option><option value="III">III</option><option value="IV">IV</option></select></div><div class="form-group"><label>LRN (optional)</label><input type="text" id="addLrn" class="form-control" placeholder="12-digit Learner Reference No." maxlength="12"></div><div class="form-group"><label>Gender</label><select id="addGender" class="form-control"><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select></div></div>
-<div class="form-row"><div class="form-group"><label>Civil Status</label><select id="addCivilStatus" class="form-control"><option value="">Select</option><option value="Single">Single</option><option value="Married">Married</option><option value="Widowed">Widowed</option><option value="Separated">Separated</option></select></div><div class="form-group"><label>Birth Date <span style="color:#dc2626;">*</span></label><input type="date" id="addBirthDate" class="form-control" required></div><div class="form-group"><label>Place of Birth</label><input type="text" id="addBirthPlace" class="form-control" placeholder="City, Province"></div></div>
-<div class="form-row"><div class="form-group"><label>Nationality</label><input type="text" id="addNationality" class="form-control" value="Filipino"></div><div class="form-group"><label>Religion</label><input type="text" id="addReligion" class="form-control"></div></div>
-<div class="form-row"><div class="form-group"><label>Father's Name</label><input type="text" id="addFather" class="form-control" placeholder="Full name of father"></div><div class="form-group"><label>Mother's Name</label><input type="text" id="addMother" class="form-control" placeholder="Full name of mother"></div></div>
-<div class="form-row"><div class="form-group"><label>Email <span style="color:#dc2626;">*</span></label><input type="email" id="addEmail" class="form-control" placeholder="student@school.edu.ph" required></div><div class="form-group"><label>Contact No. <span style="color:#dc2626;">*</span></label><input type="text" id="addContact" class="form-control" placeholder="09XXXXXXXXX" required pattern="09[0-9]{9}" title="11-digit mobile number (e.g. 09171234567)"></div></div>
-<div class="form-row"><div class="form-group"><label>Address <span style="color:#dc2626;">*</span></label><textarea id="addAddress" class="form-control" rows="2" required></textarea></div></div>
-<hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
-<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-book"></i> Enrollment Details</div>
-<div class="form-row"><div class="form-group" style="flex:1 1 220px;min-width:150px;"><label>Course <span style="color:#dc2626;">*</span></label><div class="course-select-wrap"><select id="addCourse" class="form-control" required><option value="">Select course</option><?php foreach ($offeredCourses as $cname => $majors): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select><div class="course-select-list" style="display:none;"></div></div></div><div class="form-group" style="flex:0 0 150px;"><label>Year Level <span style="color:#dc2626;">*</span></label><select id="addYearLevel" class="form-control" required><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div><div class="form-group" id="addMajorGroup" style="display:none;flex:1 1 200px;"><label>Major</label><select id="addMajor" class="form-control"><option value="">Select major</option></select></div></div>
-<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="addSchoolYear" class="form-control" placeholder="2026-2027" value="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="addSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div><div class="form-group"><label>Section <button type="button" style="background:none;border:none;color:#2563eb;cursor:pointer;font-size:11px;padding:0;" onclick="suggestSection()"><i class="fas fa-magic"></i> Suggest</button></label><input type="text" id="addSection" class="form-control" placeholder="Set a year level first" disabled><small style="color:#64748b;font-size:11px;">A section is derived from the year level.</small></div></div>
-<hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
-<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-users"></i> Guardian / Parent</div>
-<div class="form-row"><div class="form-group"><label>Full Name <span style="color:#dc2626;">*</span></label><input type="text" id="addGuardianName" class="form-control" required></div><div class="form-group"><label>Relationship</label><select id="addGuardianRel" class="form-control"><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option></select></div></div>
-<div class="form-row"><div class="form-group"><label>Contact No. <span style="color:#dc2626;">*</span></label><input type="text" id="addGuardianContact" class="form-control" placeholder="09XXXXXXXXX" pattern="09[0-9]{9}" title="11-digit mobile number (e.g. 09171234567)"></div><div class="form-group"><label>Email (optional)</label><input type="email" id="addGuardianEmail" class="form-control"></div></div>
-</div><div class="modal-footer"><button type="button" class="btn btn-light" onclick="closeAddModal()">Cancel</button><button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enroll</button></div></form></div></div>
+<div class="modal-overlay" id="addModal"><div class="modal-content modal-frame" style="max-width:860px;">><div class="modal-header"><h2><i class="fas fa-user-plus"></i> Enroll New Student</h2><div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="openPasteModal()"><i class="fas fa-magic"></i> Paste to Fill</button><button class="modal-close" onclick="closeAddModal()"><i class="fas fa-times"></i></button></div></div><form id="addForm"><div class="modal-body">
+
+<!-- ── IDENTITY ─────────────────────────────────────────────── -->
+<div class="rs-block">
+  <div class="rs-block-head"><i class="fas fa-id-card"></i><h3>Identity</h3><span>Registrar #292</span></div>
+  <div class="rs-block-body">
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addFirstName">First name <span class="required">*</span></label><input type="text" id="addFirstName" class="form-control" autocomplete="given-name" required></div>
+      <div class="form-group"><label for="addMiddleName">Middle name</label><input type="text" id="addMiddleName" class="form-control" autocomplete="additional-name"><div class="form-hint">Optional. As it appears on official records.</div></div>
+      <div class="form-group"><label for="addLastName">Last name <span class="required">*</span></label><input type="text" id="addLastName" class="form-control" autocomplete="family-name" required></div>
+    </div>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addSuffix">Suffix</label><select id="addSuffix" class="form-control"><option value="">—</option><option value="Jr.">Jr.</option><option value="Sr.">Sr.</option><option value="II">II</option><option value="III">III</option><option value="IV">IV</option></select></div>
+      <div class="form-group"><label for="addGender">Gender <span class="required">*</span></label><select id="addGender" class="form-control" required><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select></div>
+      <div class="form-group"><label for="addBirthDate">Birth date <span class="required">*</span></label><input type="date" id="addBirthDate" class="form-control" required><div class="form-hint">Used for duplicate detection.</div></div>
+    </div>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addNationality">Nationality <span class="required">*</span></label><input type="text" id="addNationality" class="form-control" value="Filipino" required></div>
+      <div class="form-group"><label for="addBirthPlace">Place of birth</label><input type="text" id="addBirthPlace" class="form-control" placeholder="City, Province"></div>
+      <div class="form-group"><label for="addCivilStatus">Civil status</label><select id="addCivilStatus" class="form-control"><option value="">Select</option><option value="Single">Single</option><option value="Married">Married</option><option value="Widowed">Widowed</option><option value="Separated">Separated</option></select></div>
+    </div>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addReligion">Religion</label><input type="text" id="addReligion" class="form-control"></div>
+      <div class="form-group"><label for="addFather">Father's name</label><input type="text" id="addFather" class="form-control" placeholder="Full name of father"></div>
+      <div class="form-group"><label for="addMother">Mother's name</label><input type="text" id="addMother" class="form-control" placeholder="Full name of mother"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label for="addLrn">Learner Reference Number (LRN)</label><input type="text" id="addLrn" class="form-control" placeholder="12-digit LRN" maxlength="12" inputmode="numeric"><div class="form-hint">Optional. Only students who came from a DepEd basic-education school have one.</div></div>
+    </div>
+  </div>
+</div>
+<!-- ── CONTACT & ADDRESS ───────────────────────────────────── -->
+<div class="rs-block">
+  <div class="rs-block-head"><i class="fas fa-address-book"></i><h3>Contact &amp; address</h3><span>Registrar #292</span></div>
+  <div class="rs-block-body">
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addEmail">Email <span class="required">*</span></label><input type="email" id="addEmail" class="form-control" placeholder="student@bestlink.edu.ph" autocomplete="email" required><div class="form-hint">Also the student's portal login.</div></div>
+      <div class="form-group"><label for="addContact">Mobile number <span class="required">*</span></label><input type="text" id="addContact" class="form-control" placeholder="0917 123 4567" inputmode="tel" required pattern="09[0-9]{9}" title="11-digit mobile number starting 09"></div>
+      <div class="form-group"><label for="addStatus">Academic status</label><select id="addStatus" class="form-control"><?php foreach (studentStatuses() as $st): ?><option value="<?= $st ?>"><?= studentStatusLabel($st) ?></option><?php endforeach; ?></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label for="addAddress">Address <span class="required">*</span></label><textarea id="addAddress" class="form-control" rows="2" autocomplete="street-address" required></textarea></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── PROGRAM & TERM ─────────────────────────────────────── -->
+<div class="rs-block">
+  <div class="rs-block-head"><i class="fas fa-graduation-cap"></i><h3>Program &amp; term</h3><span>Registrar #292</span></div>
+  <div class="rs-block-body">
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addCourse">Course <span class="required">*</span></label><div class="course-select-wrap"><select id="addCourse" class="form-control" required><option value="">Select course</option><?php foreach ($offeredCourses as $cname => $majors): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select><div class="course-select-list" style="display:none;"></div></div></div>
+      <div class="form-group"><label for="addYearLevel">Year level <span class="required">*</span></label><select id="addYearLevel" class="form-control" required><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div>
+      <div class="form-group" id="addMajorGroup" style="display:none;"><label for="addMajor">Major</label><select id="addMajor" class="form-control"><option value="">Select major</option></select></div>
+    </div>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addSchoolYear">School year <span class="required">*</span></label><input type="text" id="addSchoolYear" class="form-control" placeholder="2026-2027" value="2026-2027" required pattern="\d{4}-\d{4}" title="Format: 2026-2027"></div>
+      <div class="form-group"><label for="addSemester">Semester <span class="required">*</span></label><select id="addSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
+    </div>
+
+    <!-- Section, deliberately present and deliberately not editable.
+         Class Scheduling (#297) assigns it. It is shown rather than removed so
+         that its absence reads as a decision rather than as lost data, which is
+         the same reason DEPARTMENTS.md forbids hiding a section on a printed
+         document. -->
+    <div class="rs-outscope">
+      <i class="fas fa-building-columns"></i>
+      <span><b>Section</b> &mdash; assigned by Class Scheduling, not the Registrar.</span>
+      <span class="rs-na">N/A</span>
+    </div>
+  </div>
+</div>
+<!-- ── GUARDIAN ────────────────────────────────────────────── -->
+<div class="rs-block">
+  <div class="rs-block-head"><i class="fas fa-user-shield"></i><h3>Guardian or parent</h3><span>Registrar #292</span></div>
+  <div class="rs-block-body">
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addGuardianName">Full name <span class="required">*</span></label><input type="text" id="addGuardianName" class="form-control" required></div>
+      <div class="form-group"><label for="addGuardianRel">Relationship</label><select id="addGuardianRel" class="form-control"><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option></select></div>
+      <div class="form-group"><label for="addGuardianContact">Mobile number <span class="required">*</span></label><input type="text" id="addGuardianContact" class="form-control" placeholder="0917 123 4567" inputmode="tel" required pattern="09[0-9]{9}" title="11-digit mobile number starting 09"></div>
+    </div>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label for="addGuardianEmail">Email</label><input type="email" id="addGuardianEmail" class="form-control"><div class="form-hint">Optional. Used for record notices only.</div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Completeness ledger. Names the fields still empty, so "required" is a
+     statement about THIS record rather than a row of red asterisks the
+     clerk has to cross-check by hand. It gates Enroll: a record that will
+     score badly on the Quality column cannot be created silently. -->
+<div class="modal-footer">
+  <div class="rs-ledger" id="addLedger" aria-live="polite">
+    <span class="rs-meter" id="addMeter"><i></i></span>
+    <span class="rs-ledger-txt" id="addLedgerTxt"></span>
+  </div>
+  <button type="button" class="btn btn-light" onclick="closeAddModal()">Cancel</button>
+  <button type="submit" class="btn btn-primary" id="addSubmit"><i class="fas fa-user-plus"></i> Enroll student</button>
+</div></form></div></div>
+
 
 <!-- Auto-created Student Portal Account Modal -->
 <div class="modal-overlay" id="acctModal"><div class="modal-content" style="max-width:520px;"><div class="modal-header"><h2><i class="fas fa-user-graduate"></i> Student Portal Account Created</h2><button class="modal-close" onclick="closeAcctModal()"><i class="fas fa-times"></i></button></div><div class="modal-body" style="padding:20px;">
@@ -891,8 +1397,8 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 </div><div class="modal-footer"><button type="button" class="btn btn-light" onclick="closePasteModal()">Cancel</button><button id="pasteExtractBtn" type="button" class="btn btn-primary" onclick="extractPaste()"><i class="fas fa-magic"></i> Extract</button><button id="pasteApplyBtn" type="button" class="btn btn-primary" style="display:none;" onclick="applyPaste()"><i class="fas fa-check"></i> Apply to Form</button></div></div></div>
 
 <!-- Edit Modal (same structure) -->
-<div class="modal-overlay" id="editModal"><div class="modal-content" style="max-width:760px;"><div class="modal-header"><h2><i class="fas fa-pen"></i> Edit Student</h2><button class="modal-close" onclick="closeEditModal()"><i class="fas fa-times"></i></button></div><form id="editForm"><input type="hidden" id="editId" value=""><div class="modal-body">
-<div class="form-row"><div class="form-group" style="flex:0 0 160px;"><label>Student ID (Enrollment Dept)</label><input type="text" id="editStudentNumber" class="form-control" placeholder="Assigned by enrollment" style="font-size:12px;"></div><div class="form-group"><label>Academic Status</label><select id="editStatus" class="form-control"><option value="enrolled">Enrolled</option><option value="active">Active</option><option value="probation">Probation</option><option value="at-risk">At Risk</option><option value="graduated">Graduated</option><option value="loa">LOA</option><option value="transferred">Transferred</option><option value="dropped">Dropped</option><option value="archived">Archived</option></select></div></div>
+<div class="modal-overlay" id="editModal"><div class="modal-content modal-frame" style="max-width:860px;"><div class="modal-header"><h2><i class="fas fa-pen"></i> Edit Student</h2><button class="modal-close" onclick="closeEditModal()"><i class="fas fa-times"></i></button></div><form id="editForm"><input type="hidden" id="editId" value=""><div class="modal-body">
+<div class="form-row"><div class="form-group" style="flex:0 0 160px;"><label>Student ID (Enrollment Dept)</label><input type="text" id="editStudentNumber" class="form-control" placeholder="Assigned by enrollment" style="font-size:12px;"></div><div class="form-group"><label>Academic Status</label><select id="editStatus" class="form-control"><?php foreach (studentStatuses() as $st): ?><option value="<?= $st ?>"><?= studentStatusLabel($st) ?></option><?php endforeach; ?></select></div></div>
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:0 0 12px;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-user"></i> Personal Information</div>
 <div class="form-row"><div class="form-group"><label>First Name <span style="color:#dc2626;">*</span></label><input type="text" id="editFirstName" class="form-control" required></div><div class="form-group"><label>Middle Name</label><input type="text" id="editMiddleName" class="form-control"></div><div class="form-group"><label>Last Name <span style="color:#dc2626;">*</span></label><input type="text" id="editLastName" class="form-control" required></div></div>
@@ -905,7 +1411,7 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-book"></i> Enrollment Details</div>
 <div class="form-row"><div class="form-group" style="flex:1 1 220px;min-width:150px;"><label>Course</label><div class="course-select-wrap"><select id="editCourse" class="form-control"><option value="">Select course</option><?php foreach ($offeredCourses as $cname => $majors): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select><div class="course-select-list" style="display:none;"></div></div></div><div class="form-group" style="flex:0 0 150px;"><label>Year Level <span style="color:#dc2626;">*</span></label><select id="editYearLevel" class="form-control" required><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div><div class="form-group" id="editMajorGroup" style="display:none;flex:1 1 200px;"><label>Major</label><select id="editMajor" class="form-control"><option value="">Select major</option></select></div></div>
-<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="editSchoolYear" class="form-control" placeholder="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="editSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div></div>
+<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="editSchoolYear" class="form-control" placeholder="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="editSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div><div class="form-group" style="flex:1 1 180px;"><label>Section</label><div class="form-control vs-na-input" style="display:flex;align-items:center;gap:6px;background:#f8fafc;cursor:not-allowed;" title="Assigned by Class Scheduling"><strong style="color:#94a3b8;letter-spacing:.04em;">N/A</strong><span style="font-size:11px;color:#cbd5e1;">Class Scheduling</span></div></div></div>
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-users"></i> Guardian</div>
 <div class="form-row"><div class="form-group"><label>Full Name</label><input type="text" id="editGuardianName" class="form-control"></div><div class="form-group"><label>Relationship</label><select id="editGuardianRel" class="form-control"><option value="">Select</option><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option></select></div></div>
@@ -970,13 +1476,11 @@ function performSearch() {
     const status = document.getElementById('filterStatus')?.value || '';
     const year = document.getElementById('filterYear')?.value || '';
     const course = document.getElementById('filterCourse')?.value || '';
-    const section = document.getElementById('filterSection')?.value?.toLowerCase() || '';
     let filtered = allStudents;
     if (query) filtered = filtered.filter(s => (s.first_name||'').toLowerCase().includes(query)||(s.last_name||'').toLowerCase().includes(query)||(s.student_number||'').toLowerCase().includes(query)||(s.course||'').toLowerCase().includes(query));
     if (status) filtered = filtered.filter(s => s.status === status);
     if (year) filtered = filtered.filter(s => String(s.year_level) === year);
     if (course) filtered = filtered.filter(s => s.course === course);
-    if (section) filtered = filtered.filter(s => (s.section||'').toLowerCase().includes(section));
     updateTable(filtered);
     searchClear.classList.toggle('visible', query.length > 0);
 }
@@ -987,7 +1491,7 @@ searchClear.addEventListener('click', () => { searchInput.value = ''; performSea
 document.getElementById('filterToggle').addEventListener('click', () => { document.getElementById('filterModal').classList.add('active'); document.body.style.overflow = 'hidden'; });
 function closeFilterModal() { document.getElementById('filterModal').classList.remove('active'); document.body.style.overflow = ''; }
 function applyFilters() { performSearch(); closeFilterModal(); }
-function clearFilters() { document.getElementById('filterStatus').value = ''; document.getElementById('filterYear').value = ''; document.getElementById('filterCourse').value = ''; document.getElementById('filterSection').value = ''; performSearch(); }
+function clearFilters() { document.getElementById('filterStatus').value = ''; document.getElementById('filterYear').value = ''; document.getElementById('filterCourse').value = ''; performSearch(); }
 document.getElementById('filterModal').addEventListener('click', function(e) { if (e.target === this) closeFilterModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeFilterModal(); closeViewModal(); closeEditModal(); }});
 
@@ -1036,14 +1540,29 @@ function viewStudent(id) {
         if (!d.success || !d.data) return;
         const s = d.data;
         const name = s.first_name + ' ' + s.last_name;
-        const initials = (s.first_name||'')[0] + (s.last_name||'')[0];
+        const initials = studentInitialsJs(s.first_name, s.last_name);
         const colors = ['blue','green','purple','orange','pink'];
         const c = colors[Math.abs((s.first_name||'a').charCodeAt(0)) % colors.length];
+        // The portrait: a real <img> from Digital File Storage, or initials.
+        //
+        // This used to set style.backgroundImage on the initials circle. That
+        // is why the photo vanished after viewing a second student - nothing
+        // ever cleared the inline background, so the first student's face
+        // stayed painted over the second student's initials, and a student who
+        // had no photo inherited whoever was viewed before them. An <img> that
+        // is removed from the DOM cannot leak into the next render.
+        //
+        // Only the image is toggled now. The initials block is never hidden:
+        // CSS stacks the image above it (z-index 2 over z-index 1), so the
+        // image covering the initials is a painting decision, and toggling both
+        // from JS is how the two layers came to disagree in the first place.
+        const portrait = document.getElementById('vAvatarImg');
         const avatarEl = document.getElementById('vAvatar');
         const avatarText = document.getElementById('vAvatarText');
-        avatarEl.className = 'big-avatar ' + c;
-        if (s.photo) { avatarEl.style.background = 'transparent'; avatarEl.style.backgroundImage = 'url('+s.photo+')'; avatarEl.style.backgroundSize = 'cover'; avatarText.style.display = 'none'; }
-        else { avatarEl.style.backgroundImage = ''; avatarText.style.display = ''; avatarText.textContent = initials.toUpperCase(); }
+        avatarEl.className = 'vs-id-face ' + c;
+        avatarText.textContent = initials;
+        if (s.photo_url) { portrait.src = s.photo_url; portrait.style.display = 'block'; }
+        else { portrait.removeAttribute('src'); portrait.style.display = 'none'; }
         document.getElementById('vName').textContent = name;
         document.getElementById('vStudentId').textContent = s.student_number || 'ID not yet assigned';
         document.getElementById('vDbId').textContent = 'Record #' + s.id;
@@ -1055,8 +1574,15 @@ function viewStudent(id) {
         document.getElementById('vBirthPlace').textContent = s.place_of_birth||'—';
         document.getElementById('vNationality').textContent = s.nationality||'—';
         document.getElementById('vReligion').textContent = s.religion||'—';
-        document.getElementById('vCourse').textContent = s.course||'—';
-        document.getElementById('vYearSection').textContent = (s.year_level?s.year_level+' Year':'')+(s.section?' — '+s.section:'');
+        document.getElementById('vCourse').innerHTML = s.course
+            ? esc(s.course)
+            : '—';
+        // Year level and Section are separate fields now. Section is not rendered at
+// all: #vSection holds a fixed "N/A · Class Scheduling" in the markup, because
+// a section value can change under Class Scheduling's hand at any time and
+// this view would then assert a stale one. Writing a section here would also
+// have required the office to display a field it does not maintain.
+document.getElementById('vYearLevel').textContent = s.year_level ? s.year_level + ' Year' : '—';
         document.getElementById('vSchoolYearSem').textContent = (s.school_year?s.school_year:'—')+(s.semester?' — '+s.semester:'');
         document.getElementById('vAdviser').textContent = (s.adviser_id && ADVISER_MAP[s.adviser_id]) ? ADVISER_MAP[s.adviser_id] : '—';
         document.getElementById('vEmail').textContent = s.email||'—';
@@ -1064,11 +1590,43 @@ function viewStudent(id) {
         document.getElementById('vFather').textContent = s.father_name || '—';
         document.getElementById('vMother').textContent = s.mother_name || '—';
         document.getElementById('vAddress').textContent = s.address||'—';
-        // Guardian
-        fetch('../api/students.php?action=guardian&student_id='+s.id).then(r=>r.json()).then(gd=>{
+        // Guardians.
+        //
+        // This called action=guardian (singular), which does
+        // "ORDER BY is_primary DESC LIMIT 1" - so it showed the primary
+        // guardian and silently threw away every other one. The guardians table
+        // holds several per student (the Edit modal saves father, mother and a
+        // named guardian), so a second guardian or a co-parent that a clerk
+        // would need before making a call was simply not on screen.
+        // action=guardians returns them all, and the primary/emergency flags
+        // are stated on the card rather than implied by row order.
+        //
+        // Every value goes through esc(). The old version concatenated the name
+        // and relationship straight into innerHTML, so a guardian recorded as
+        // "Ana <b>Santos" would have injected markup into the record view.
+        fetch('../api/students.php?action=guardians&student_id='+s.id).then(r=>r.json()).then(gd=>{
             const gs=document.getElementById('vGuardianSection'),gi=document.getElementById('vGuardianInfo');
-            if(gd.success&&gd.data){gs.style.display='block';gi.innerHTML=(gd.data.full_name||'')+(gd.data.relationship?' <span style=\"color:#94a3b8\">('+gd.data.relationship+')</span>':'')+'<br>'+(gd.data.contact_number?'<i class=\"fas fa-phone\" style=\"color:#94a3b8\"></i> '+gd.data.contact_number:'')+(gd.data.email?' <i class=\"fas fa-envelope\" style=\"color:#94a3b8\"></i> '+gd.data.email:'');}
-        }).catch(()=>{});
+            const list = Array.isArray(gd.data) ? gd.data : [];
+            if(!gd.success || !list.length){gs.style.display='none';gi.innerHTML='';return;}
+            gi.innerHTML = list.map(function(g){
+                const flags=[];
+                if(g.is_primary) flags.push('<span class="vs-g-flag primary">Primary</span>');
+                if(g.is_emergency) flags.push('<span class="vs-g-flag emergency">Emergency</span>');
+                const phone = g.contact_number ? '<div class="vs-g-line"><i class="fas fa-phone"></i>'+esc(g.contact_number)+'</div>' : '';
+                const mail  = g.email ? '<div class="vs-g-line"><i class="fas fa-envelope"></i>'+esc(g.email)+'</div>' : '';
+                return '<div class="vs-g-card">'
+                    + '<div class="vs-g-top"><span class="vs-g-name">'+esc(g.full_name||'—')+'</span>'
+                    + (g.relationship?'<span class="vs-g-rel">'+esc(g.relationship)+'</span>':'')
+                    + flags.join('') + '</div>' + phone + mail + '</div>';
+            }).join('');
+            gs.style.display='block';
+        }).catch(function(){
+            // A failed fetch is not "this student has no guardians". Saying so
+            // stops an empty block being read as a fact about the student.
+            var gs=document.getElementById('vGuardianSection'),gi=document.getElementById('vGuardianInfo');
+            gi.innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0;">Could not load guardians.</p>';
+            gs.style.display='block';
+        });
         // Last scan
         fetch('../api/students.php?action=lastscan&student_id='+s.id).then(r=>r.json()).then(sd=>{
             const el=document.getElementById('vLastScan');
@@ -1129,12 +1687,100 @@ function switchVTab(btn, tab) {
     document.getElementById('tab'+tab.charAt(0).toUpperCase()+tab.slice(1)).style.display='';
 }
 
+// The Documents tab.
+//
+// It used to render document_requests only, under the heading "No document
+// requests." for a student who had files sitting in Digital File Storage. The
+// stored files were never queried at all, so the tab described the counter's
+// walk-in history while the office's actual document store went unmentioned -
+// and a student with a photo, a Form 137 and a transcript looked empty.
+//
+// Now it answers the two questions a clerk opens this tab with, in order:
+//   1. what does this student have on file, and can I open it?
+//   2. what are they still missing?
+// with the request history kept below, because it is real record-keeping and
+// has its own audience.
+//
+// Completeness comes from the API using the same rule as registrar/file-storage.php,
+// so the two pages cannot disagree about what a complete set is.
 function loadDocuments(sid) {
     fetch('../api/students.php?action=documents&student_id='+sid).then(r=>r.json()).then(d=>{
         const el=document.getElementById('vDocuments');
-        if(!d.success||!d.data||!d.data.length){el.innerHTML='<p style="color:#94a3b8;font-size:13px;">No document requests.</p>';return;}
-        el.innerHTML='<table style="width:100%;font-size:12px;"><tr style="color:#64748b;font-weight:600;"><td>Type</td><td>Status</td><td>Date</td></tr>'+d.data.map(dr=>'<tr style="border-bottom:1px solid #f1f5f9;"><td>'+ucfirst(dr.document_type.replace('_',' '))+'</td><td><span class="status-badge '+(dr.status||'')+'" style="font-size:10px;">'+ucfirst(dr.status||'')+'</span></td><td>'+(dr.request_date?new Date(dr.request_date).toLocaleDateString():'')+'</td></tr>').join('')+'</table>';
-    }).catch(()=>{});
+        if(!d.success||!d.data){el.innerHTML='<p class="vs-empty">Could not load documents.</p>';return;}
+        const files=d.data.files||[], reqs=d.data.requests||[], missing=d.data.missing||[];
+
+        // An empty state has to distinguish "nothing requested" from "nothing
+        // stored", and neither from "could not load". Collapsing all three into
+        // one grey line is what made this tab misleading in the first place.
+        if(!files.length && !reqs.length){
+            el.innerHTML = missing.length
+                ? '<p class="vs-empty">No files uploaded yet. '+missing.length+' required document'+(missing.length===1?'':'s')+' still missing.</p>'
+                : '<p class="vs-empty">No documents on file.</p>';
+            return;
+        }
+
+        let html='';
+
+        // Completeness strip. Green when complete, amber with the count when
+        // not - and it names which ones, because "3 documents missing" without
+        // a list leaves the clerk to go and look.
+        html += '<div class="vs-doc-sum '+(d.data.complete?'ok':'short')+'">'
+            + '<i class="fas '+(d.data.complete?'fa-circle-check':'fa-triangle-exclamation')+'"></i>'
+            + '<div><strong>'+(d.data.complete?'File set complete':'Missing '+missing.length+' of '+(d.data.required||[]).length+' required documents')+'</strong>'
+            + (d.data.gone_count ? '<span>'+d.data.gone_count+' stored file'+(d.data.gone_count===1?'':'s')+' not on this server</span>' : '')
+            + '</div></div>';
+
+        // What is missing, named. This is the actionable half of the tab.
+        if(missing.length){
+            html += '<div class="vs-doc-missing"><div class="vs-doc-h">Still missing</div><div class="vs-doc-chips">'
+                + missing.map(m=>'<span class="vs-chip missing">'+esc(m.label)+'</span>').join('')
+                + '</div></div>';
+        }
+
+        // The files themselves. Each row is openable when the file is really on
+        // this server, and explicitly not openable when it is not - a greyed
+        // row with the reason, rather than a link that 404s.
+        html += '<div class="vs-doc-block"><div class="vs-doc-h">On file <span class="vs-doc-n">'+files.length+'</span></div>';
+        html += files.length ? '<ul class="vs-file-list">' + files.map(f=>{
+            const when = f.created_at ? new Date(f.created_at).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}) : '';
+            const meta = [when, f.file_size ? fmtBytes(f.file_size) : ''].filter(Boolean).join(' · ');
+            const body = '<span class="vs-file-name">'+esc(f.label)+'</span>'
+                + '<span class="vs-file-filename">'+esc(f.filename)+'</span>'
+                + (meta?'<span class="vs-file-meta">'+esc(meta)+'</span>':'');
+            return f.on_disk
+                ? '<li class="vs-file"><a class="vs-file-open" href="'+esc(f.url)+'" target="_blank" rel="noopener">'+body
+                  +'<i class="fas fa-arrow-up-right-from-square vs-file-go"></i></a></li>'
+                : '<li class="vs-file gone">'+body
+                  +'<span class="vs-file-gone">File not on this server</span></li>';
+        }).join('') + '</ul>'
+        : '<p class="vs-empty">No files uploaded yet.</p>';
+        html += '</div>';
+
+        // Request history. Kept, and clearly subordinate: it is the counter's
+        // log, not the file store, and conflating the two is what this tab used
+        // to do.
+        if(reqs.length){
+            html += '<div class="vs-doc-block"><div class="vs-doc-h">Counter requests <span class="vs-doc-n">'+reqs.length+'</span></div>'
+                + '<ul class="vs-req-list">' + reqs.map(r=>{
+                    const d2 = r.request_date ? new Date(r.request_date).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}) : '';
+                    return '<li class="vs-req"><span class="vs-req-type">'+esc(String(r.document_type||'').replace(/_/g,' '))+'</span>'
+                        + '<span class="vs-req-meta">'+esc(d2)+'</span>'
+                        + '<span class="status-badge '+(r.status||'')+' vs-req-status">'+esc(ucfirst(r.status||''))+'</span></li>';
+                }).join('') + '</ul></div>';
+        }
+
+        el.innerHTML = html;
+    }).catch(()=>{
+        const el=document.getElementById('vDocuments');
+        if(el) el.innerHTML='<p class="vs-empty">Could not load documents. Check the connection and try again.</p>';
+    });
+}
+function fmtBytes(b) {
+    b = Number(b)||0;
+    if (b >= 1073741824) return (b/1073741824).toFixed(1)+' GB';
+    if (b >= 1048576) return Math.round(b/1048576)+' MB';
+    if (b >= 1024) return Math.round(b/1024)+' KB';
+    return b+' B';
 }
 function loadAcademic(sid) {
     fetch('../api/students.php?action=academic&student_id='+sid).then(r=>r.json()).then(d=>{
@@ -1151,16 +1797,11 @@ function loadHealth(sid) {
         el.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><div class="view-item"><div class="lbl">Blood Type</div><div class="val">'+(h.blood_type||'—')+'</div></div><div class="view-item"><div class="lbl">Height / Weight</div><div class="val">'+(h.height?h.height+'cm':'—')+' / '+(h.weight?h.weight+'kg':'—')+'</div></div><div class="view-item" style="grid-column:span 2;"><div class="lbl">Allergies</div><div class="val">'+(h.allergies||'None')+'</div></div><div class="view-item" style="grid-column:span 2;"><div class="lbl">Pre-existing Conditions</div><div class="val">'+(h.pre_existing_conditions||'None')+'</div></div></div>';
     }).catch(()=>{});
 }
-function uploadPhoto() {
-    const input = document.getElementById('photoInput');
-    if (!input.files[0] || !currentViewId) return;
-    const fd = new FormData();
-    fd.append('photo', input.files[0]);
-    fd.append('student_id', currentViewId);
-    fetch('../api/students.php?action=upload-photo', { method:'POST', body:fd })
-    .then(r=>r.json()).then(d=>{ if(d.success) window.location.reload(); else showToast(d.message || 'Upload failed.', 'error'); })
-    .catch(()=>showToast('Upload failed.', 'error'));
-}
+// The in-page "Change Photo" flow was removed with the upload control it backed.
+// Photographs are uploaded through Digital File Storage (registrar/file-storage.php),
+// which writes a documents row; this wrote students.photo. Two locations for one
+// face is what left the list and this modal both showing initials. See the note
+// where the photo is resolved.
 async function resendWelcomeEmail() {
     if (!currentViewId) return;
     const btn = document.getElementById('resendWelcomeBtn');
@@ -1369,11 +2010,96 @@ function refreshMajorOptions(prefix) {
 // ("Auto-assign sections"), so it is not a manual form field.
 
 // ─── ADD MODAL ───────────────────────────────────────────────
+// ─── COMPLETENESS LEDGER ───────────────────────────────────
+//
+// "Required" is not a judgement call made in this file. It is exactly
+// what shared/student_quality.php already counts in
+// studentQualityScoreValue(), plus the two guardian fields the form has
+// always required - minus `section`, which Class Scheduling (#297) owns.
+//
+// That shared definition is the whole point. Before, "required" here and
+// "complete" there were two lists written by two people, and they had
+// already drifted: gender was optional in this form and worth 8 points in
+// the score, so a student could be enrolled here and immediately flagged
+// there as incomplete. One list, read by both, cannot drift.
+//
+// A percentage is deliberately NOT shown. The list already has a Quality
+// column for that, and a second number in a modal that opens on the same
+// page is noise. What the clerk cannot get anywhere else is WHICH fields
+// are empty, so that is what this says.
+const ADD_REQUIRED = [
+    ['addFirstName',      'first name'],
+    ['addLastName',       'last name'],
+    ['addGender',         'gender'],
+    ['addBirthDate',      'birth date'],
+    ['addNationality',    'nationality'],
+    ['addEmail',          'email'],
+    ['addContact',        'mobile number'],
+    ['addAddress',        'address'],
+    ['addCourse',         'course'],
+    ['addYearLevel',      'year level'],
+    ['addSchoolYear',     'school year'],
+    ['addSemester',       'semester'],
+    ['addGuardianName',   'guardian name'],
+    ['addGuardianContact','guardian mobile'],
+];
+
+function updateAddLedger() {
+    const meter = document.getElementById('addMeter');
+    const txt   = document.getElementById('addLedgerTxt');
+    const wrap  = document.getElementById('addLedger');
+    const btn   = document.getElementById('addSubmit');
+    if (!meter || !txt || !wrap || !btn) return;
+
+    // A field with a pattern also has to SATISFY it: an 8-digit mobile
+    // number in a required field is still a missing mobile number, and the
+    // browser's own validation message will say so on submit. Counting it as
+    // filled would let the ledger disagree with the form it sits in.
+    const missing = ADD_REQUIRED.filter(([id]) => {
+        const el = document.getElementById(id);
+        if (!el) return true;
+        const v = (el.value || '').trim();
+        if (!v) return true;
+        if (el.pattern && el.type !== 'date') {
+            try { return !new RegExp('^(?:' + el.pattern + ')$').test(v.replace(/\s+/g, '')); }
+            catch (e) { return false; }
+        }
+        return false;
+    });
+
+    const total = ADD_REQUIRED.length;
+    const done  = total - missing.length;
+    const pct   = Math.round((done / total) * 100);
+
+    meter.querySelector('i').style.width = pct + '%';
+    meter.classList.remove('is-good', 'is-warn', 'is-bad');
+    meter.classList.add(pct >= 85 ? 'is-good' : pct >= 60 ? 'is-warn' : 'is-bad');
+
+    if (!missing.length) {
+        wrap.classList.add('is-done');
+        txt.innerHTML = '<b>All required fields filled.</b> The student number is assigned on save.';
+        btn.disabled = false;
+    } else {
+        wrap.classList.remove('is-done');
+        const names = missing.map(([, label]) => label);
+        const shown = names.slice(0, 3).join(', ');
+        const rest  = names.length > 3 ? ' <span style="color:#94a3b8">and ' + (names.length - 3) + ' more</span>' : '';
+        txt.innerHTML = '<b>' + done + ' of ' + total + '</b> filled &middot; needs ' + escText(shown) + rest + '.';
+        btn.disabled = false;   // never lock the clerk out; see note below
+    }
+}
+
+// Why the button is never disabled: a disabled submit with no explanation is
+// the most common way a form becomes unusable, and the ledger already says
+// exactly what is missing and why the record is not finished. The gate is the
+// submit handler, which refuses with a specific sentence naming the fields.
+
 function openAddModal() {
     document.getElementById('addModal').classList.add('active');
     document.body.style.overflow = 'hidden';
     document.getElementById('addForm').reset();
     refreshMajorOptions('add');
+    updateAddLedger();
 }
 function closeAddModal() { document.getElementById('addModal').classList.remove('active'); document.body.style.overflow = ''; }
 document.getElementById('addModal').addEventListener('click', function(e) { if (e.target === this) closeAddModal(); });
@@ -1387,6 +2113,36 @@ function ph11(v) {
 
 document.getElementById('addForm').addEventListener('submit', async function(e) {
     e.preventDefault();
+
+    // The gate. One sentence, naming the fields, pointing at the first one.
+    // The browser's own validation would also stop the submit, but it reports
+    // one field at a time in DOM order, so a clerk filling the form bottom-up
+    // is walked back through six errors to fix them one at a time.
+    updateAddLedger();
+    const stillMissing = ADD_REQUIRED.filter(([id]) => {
+        const el = document.getElementById(id);
+        if (!el) return true;
+        const v = (el.value || '').trim();
+        if (!v) return true;
+        if (el.pattern && el.type !== 'date') {
+            try { return !new RegExp('^(?:' + el.pattern + ')$').test(v.replace(/\s+/g, '')); }
+            catch (err) { return false; }
+        }
+        return false;
+    });
+    if (stillMissing.length) {
+        const names = stillMissing.map(([, label]) => label);
+        showToast(
+            'Fill in ' + names.slice(0, 3).join(', ')
+            + (names.length > 3 ? ' and ' + (names.length - 3) + ' more' : '')
+            + ' before enrolling this student.',
+            'warning'
+        );
+        const first = document.getElementById(stillMissing[0][0]);
+        if (first) { first.focus(); first.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+        return;
+    }
+
     const ac = document.getElementById('addContact').value;
     if (!ph11(ac)) { showToast('Student contact number is required and must be an 11-digit mobile number (e.g. 09171234567).', 'warning'); return; }
     const agn = document.getElementById('addGuardianName').value.trim();
@@ -1421,7 +2177,11 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
                 year_level: document.getElementById('addYearLevel').value,
                 school_year: document.getElementById('addSchoolYear').value,
                 semester: document.getElementById('addSemester').value,
-                section: document.getElementById('addSection').value,
+                // No `section`. Class Scheduling (#297) assigns it - see
+                // DEPARTMENTS.md. Sending '' would also be wrong: the API
+                // treats an empty string as "clear this field", so a record
+                // whose section was set elsewhere would be wiped by enrolling
+                // an unrelated student through this form.
                 email: document.getElementById('addEmail').value,
                 contact_number: document.getElementById('addContact').value,
                 address: document.getElementById('addAddress').value,
@@ -1575,8 +2335,13 @@ function applyPaste() {
         }
     }
     refreshMajorOptions('add');
-    // The year level may have been prefilled, which unlocks the section field.
-    syncSectionAvailability();
+    // Paste-to-Fill sets values directly, which fires no input or change
+    // event, so the completeness ledger would still read as if the form were
+    // empty - the clerk would see "0 of 9" over a form they just filled in and
+    // the submit gate would reject it. This is the whole reason the listener
+    // is delegated rather than per-field: one call covers every path that
+    // writes to a field programmatically, including ones added later.
+    updateAddLedger();
     closePasteModal();
     showToast('Form pre-filled from extracted data.', 'success');
 }
@@ -1637,38 +2402,21 @@ document.getElementById('addCourse').addEventListener('blur', standardizeCourse)
 
 // Data Quality review behavior is defined in js/student-data-quality.js.
 
-// ─── SECTION SUGGESTION ─────────────────────────────────────
-// A section code encodes the year level, so the field stays locked until a
-// year level is chosen. Clearing the year level clears the section too, so a
-// stale code can't be submitted against a blank year.
-function syncSectionAvailability() {
-    const year = document.getElementById('addYearLevel').value;
-    const section = document.getElementById('addSection');
-    section.disabled = !year;
-    if (!year) section.value = '';
-    section.placeholder = year ? 'e.g. ' + year + '1001' : 'Set a year level first';
-}
-document.getElementById('addYearLevel').addEventListener('change', syncSectionAvailability);
-document.getElementById('addForm').addEventListener('reset', syncSectionAvailability);
-syncSectionAvailability();
-
-function suggestSection() {
-    const course = document.getElementById('addCourse').value;
-    const year = document.getElementById('addYearLevel').value;
-    const sem = document.getElementById('addSemester').value;
-    if (!course || !year) { showToast('Choose a course and year level first.', 'warning'); return; }
-    const btn = event.target.closest('button');
-    if (btn) btn.disabled = true;
-    aiPost('suggest_section', { course, year_level: year, semester: sem }).then(d => {
-        if (d.success && d.data && d.data.suggestion) {
-            document.getElementById('addSection').value = d.data.suggestion;
-            showToast('Section ' + d.data.suggestion, 'success');
-        } else {
-            showToast(d.message || 'Could not suggest a section.', 'error');
-        }
-    }).catch(() => showToast('Error suggesting section.', 'error'))
-      .finally(() => { if (btn) btn.disabled = false; });
-}
+// ─── LEDGER WIRING ─────────────────────────────────────────
+//
+// The Section helpers that lived here - the year-level lock and the AI
+// suggestion - are gone with the field. They guarded a code derived
+// from year level and semester, and offered an AI suggestion for it -
+// all of it Class Scheduling's decision to make. `aiPost('suggest_section')`
+// in api/ai-tools.php is left in place: it is deterministic and harmless,
+// and a future Class Scheduling module is the likely caller.
+//
+// One delegated listener rather than fourteen. Required fields can be
+// added to ADD_REQUIRED without anyone remembering to subscribe them, which
+// is the failure mode that let 'required' and 'complete' drift apart.
+document.getElementById('addForm').addEventListener('input', updateAddLedger);
+document.getElementById('addForm').addEventListener('change', updateAddLedger);
+document.getElementById('addForm').addEventListener('reset', updateAddLedger);
 
 // ─── GUARDIAN AUTO-FILL ─────────────────────────────────────
 function guardianAutoFill() {
@@ -1725,6 +2473,15 @@ function exportStudents(list) {
 }
 
 function ucfirst(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+// Mirrors studentInitials() in shared/stored_file.php, for the one place the
+// initials are needed before a row has been painted from PHP: the View modal,
+// which fetches one student at a time. First and last only - a middle initial
+// is noise in a small square - and '?' for a record with neither, so the
+// portrait is never an empty box that looks like a loading failure.
+function studentInitialsJs(first, last) {
+    const a = (first || '').trim(), b = (last || '').trim();
+    return (a ? a[0] : '') + (b ? b[0] : '') || '?';
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function fmtDate(v) {
     if (!v) return '—';

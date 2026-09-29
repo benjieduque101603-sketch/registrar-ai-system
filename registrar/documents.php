@@ -17,29 +17,89 @@ requireRole('registrar');
 require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/functions.php';
 require_once __DIR__ . '/../shared/document_process.php';
+require_once __DIR__ . '/../shared/schema.php';
+// The request table shows each student's face beside their name, read from
+// Digital File Storage - the same photograph the Students page and the View
+// modal use. It was rendering a hardcoded coloured circle with the first
+// letter of the concatenated name, so "Roldan Tiu" was always "R" and always
+// blue. On a counter where several people are waiting and the clerk is
+// matching a face to a name, that is the one column that could carry the photo
+// for free.
+require_once __DIR__ . '/../shared/stored_file.php';
 
 $db = Database::getInstance();
 
-// ── Requests ────────────────────────────────────────────────────
-$requests = $db->fetchAll(
-    "SELECT dr.*, c.name AS catalog_name, c.sku, c.fee_type, c.base_fee,
-            c.requirement, c.sla_days,
-            CONCAT(s.first_name, ' ', s.last_name) AS student_name,
-            s.student_number
-       FROM document_requests dr
-       LEFT JOIN document_catalog c ON c.id = dr.catalog_id
-       LEFT JOIN students s ON dr.student_id = s.id
-      ORDER BY dr.id DESC"
-);
+// -- Requests ----------------------------------------------------
+//
+// Everything this page reads lives behind four queries that name
+// columns and tables added by the walk-in migration. On a server
+// where migrations/document_walkin_only.sql has not been run they
+// do not exist, PDO throws (ERRMODE_EXCEPTION), and the page
+// answers a blank 500 - the one failure mode a registrar cannot
+// report usefully, because they can only say "it's broken".
+//
+// So the reads are written to degrade rather than die, and the
+// whole load is wrapped: if something still throws, the page says
+// what and where, in the browser and in logs/php_errors.log,
+// instead of showing nothing at all.
+//
+// The proper fix remains running the migration. This keeps the
+// desk usable in the meantime, which is the difference between a
+// missing turnaround target on a clock and no page at all.
+$deskLoadError = null;
 
-// Balances, fetched in one pass rather than per row: the desk loads
-// this on every refresh, and a query per request turns a seven-row
-// table into twenty-one round trips.
-$balanceByStudent = [];
-foreach ($db->fetchAll('SELECT student_id, balance FROM finance') as $f) {
-    $balanceByStudent[(int) $f['student_id']] = (float) $f['balance'];
+try {
+    // sla_days is the newest of these and the only one named here
+    // that no other page reads, which is why this page - and only
+    // this page - is the one that dies on an un-migrated server.
+    // requirement is treated the same way for the same reason.
+    $requests = $db->fetchAll(
+        "SELECT dr.*, c.name AS catalog_name, c.sku, c.fee_type, c.base_fee,
+                " . db_optional_column('document_catalog', 'requirement', 'c') . ",
+                " . db_optional_column('document_catalog', 'sla_days', 'c') . ",
+                CONCAT(s.first_name, ' ', s.last_name) AS student_name,
+                s.first_name, s.last_name, s.student_number, s.photo,
+                " . studentPhotoSelectSql() . " AS photo_path
+           FROM document_requests dr
+           LEFT JOIN document_catalog c ON c.id = dr.catalog_id
+           LEFT JOIN students s ON dr.student_id = s.id
+          ORDER BY dr.id DESC"
+    );
+
+    // Balances, fetched in one pass rather than per row: the desk loads
+    // this on every refresh, and a query per request turns a seven-row
+    // table into twenty-one round trips.
+    //
+    // finance is not a document table at all, so a server can be
+    // missing it while every document query still works. Absent means
+    // "nobody owes anything", which is the safe direction: the desk
+    // under-reports holds rather than inventing them.
+    $balanceByStudent = [];
+    if (db_table_exists('finance')) {
+        foreach ($db->fetchAll('SELECT student_id, balance FROM finance') as $f) {
+            $balanceByStudent[(int) $f['student_id']] = (float) $f['balance'];
+        }
+    }
+
+    // Status events grouped by request.
+    $eventsByRequest = [];
+    if ($requests && db_table_exists('document_request_events')) {
+        $ids = array_map('intval', array_column($requests, 'id'));
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        $events = $db->fetchAll(
+            "SELECT * FROM document_request_events WHERE request_id IN ($ph) ORDER BY id ASC",
+            $ids
+        );
+        foreach ($events as $ev) {
+            $eventsByRequest[(int) $ev['request_id']][] = $ev;
+        }
+    }
+} catch (Throwable $e) {
+    $deskLoadError = $e->getMessage();
+    error_log('[documents] desk load failed: ' . $deskLoadError);
 }
 
+if ($deskLoadError === null) {
 // Attach the derived facts the desk renders from. Both are computed by
 // the shared helpers so intake, the API and this page cannot disagree
 // about what is holding a request up.
@@ -50,21 +110,7 @@ foreach ($requests as &$r) {
 }
 unset($r);
 
-// Status events grouped by request.
-$eventsByRequest = [];
-if ($requests) {
-    $ids = array_map('intval', array_column($requests, 'id'));
-    $ph = implode(',', array_fill(0, count($ids), '?'));
-    $events = $db->fetchAll(
-        "SELECT * FROM document_request_events WHERE request_id IN ($ph) ORDER BY id ASC",
-        $ids
-    );
-    foreach ($events as $ev) {
-        $eventsByRequest[(int) $ev['request_id']][] = $ev;
-    }
-}
-
-// ── Read retired event wording in the current language ─────────
+// -- Read retired event wording in the current language ---------
 //
 // Event notes are an append-only record: they are written once, at the
 // moment something happened, and must not be rewritten afterwards.
@@ -73,7 +119,7 @@ if ($requests) {
 //
 // This matters because the status realignment retired a vocabulary
 // that intake still used. A request filed before it carries
-// "Request submitted (DOC-…) — awaiting payment" as its opening line,
+// "Request submitted (DOC-?) ? awaiting payment" as its opening line,
 // which describes a payment gate the walk-in flow no longer has. Left
 // alone, the log contradicts the rail directly above it: the row says
 // Preparing, the log below says the request is still waiting to pay.
@@ -88,7 +134,7 @@ function doc_readable_event_note(array $ev): string
     // wording wins over the general one.
     $map = [
         'Request submitted (' => 'Request filed (',
-        '— awaiting payment'  => '— fee due at filing',
+        '? awaiting payment'  => '? fee due at filing',
         'awaiting payment'    => 'awaiting payment',
         'Awaiting_Payment'    => 'Filed',
     ];
@@ -103,7 +149,7 @@ function doc_readable_event_note(array $ev): string
     return $out;
 }
 
-// ── Metrics ─────────────────────────────────────────────────────
+// -- Metrics -----------------------------------------------------
 //
 // Four numbers the desk acts on, chosen because each one changes what
 // the clerk does next. "Regular vs Express requests" told them
@@ -160,13 +206,13 @@ $revenueRows = $db->fetchAll(
 );
 $revenueTotal = array_sum(array_map(fn($r) => (float) $r['revenue'], $revenueRows));
 
-// Daily volume, last 7 days — what came in against what is still open.
+// Daily volume, last 7 days ? what came in against what is still open.
 //
 // This was "Express vs Regular". That split cannot draw anything now:
 // Express was removed from the product and priority survives only as a
 // hidden Regular value the API requires, so every row is Regular and the
 // Express series is permanently zero. A legend promising two series with
-// one always empty is worse than no legend — it reads as a rendering
+// one always empty is worse than no legend ? it reads as a rendering
 // fault, and it spends the panel on a distinction the clerk cannot act on.
 //
 // So it now answers the question a counter desk asks every morning: did
@@ -197,7 +243,16 @@ for ($i = 6; $i >= 0; $i--) {
     $outstandingSeries[] = $volByDay[$d]['outstanding'] ?? 0;
 }
 
-$catalog   = $db->fetchAll("SELECT * FROM document_catalog WHERE is_active = 1 ORDER BY id");
+// SELECT * cannot name a column, so it cannot be made tolerant the way the
+// query above is: on a server missing sla_days / requirement the keys are
+// simply absent from every row, and the New Request modal reads them
+// directly. Filled back in as null, which is what an empty requirement
+// already means to that form.
+$catalog   = db_fill_optional(
+    $db->fetchAll("SELECT * FROM document_catalog WHERE is_active = 1 ORDER BY id"),
+    'document_catalog',
+    ['sla_days', 'requirement']
+);
 // The student picker must mirror the Student Management module, which lists
 // every student row regardless of status. Filtering on `status = 'active'`
 // hid anyone whose status is the column default ('enrolled'), plus
@@ -250,21 +305,79 @@ $use_chart = true;
 // loaded (so $use_chart did its job and nothing 404'd), the page had
 // two correctly-populated <canvas> elements sitting in correctly-sized
 // 230px wrappers, and the only symptom was two blank boxes. Chart.js is
-// only a library — without this line nothing ever calls it, and the
+// only a library ? without this line nothing ever calls it, and the
 // canvas keeps its default 300x150 backing store.
 $page_scripts = ['documents.js'];
+} // end: the desk only renders when its data loaded
+
+// -- The one thing the desk must never do -----------------------
+//
+// Fail with a sentence, not with a blank window.
+//
+// This branch exists because a blank 500 is not a bug report. The
+// registrar sees white, cannot tell what broke, and the only copy
+// of the reason is a line in a log file on a server they do not
+// have access to. A named cause and the command that fixes it is
+// something they can act on or forward.
+//
+// Still a 500 - the desk genuinely cannot do its job without these
+// rows - but an honest one.
+if ($deskLoadError !== null) {
+    http_response_code(500);
+    $page_title       = 'Document Requests';
+    $page_description = 'Document requests, workflow actions, and performance metrics';
+    $body_page        = 'documents';
+    $APP_ROOT         = '../';
+    $ACTIVE_NAV       = 'documents';
+    $extra_css        = ['documents.css'];
+    $deskErrorDetail  = $deskLoadError;
+    unset($use_chart, $page_scripts);
+    include '../includes/header.php';
+    include '../includes/sidebar.php';
+    ?>
+    <main class="dashboard-main">
+      <div class="dashboard-container">
+        <div class="panel" style="border:1px solid #fecaca;background:#fff;border-radius:16px;padding:26px 28px;box-shadow:0 8px 24px rgba(15,23,42,.045);max-width:760px">
+          <div style="display:flex;gap:14px;align-items:flex-start">
+            <i class="fa-solid fa-triangle-exclamation" style="font-size:26px;color:#dc2626;margin-top:2px"></i>
+            <div>
+              <h1 style="margin:0 0 8px;font-size:20px;font-weight:800;color:#7f1d1d">The desk could not load its requests</h1>
+              <p style="margin:0 0 14px;font-size:13px;line-height:1.6;color:#475569">
+                This is a database problem on the server, not something done wrong at this
+                terminal. The details are below and have also been written to
+                <code>logs/php_errors.log</code>.
+              </p>
+              <?php // The raw driver message, verbatim. It is the only thing
+                    // that identifies which column or table is missing, and
+                    // paraphrasing it is what turns a two-minute fix into an
+                    // afternoon. It carries no user data - only schema. ?>
+              <pre style="margin:0 0 16px;padding:12px 14px;background:#0f172a;color:#e2e8f0;border-radius:10px;font-size:12px;line-height:1.5;overflow-x:auto;white-space:pre-wrap"><?= htmlspecialchars($deskErrorDetail) ?></pre>
+              <p style="margin:0;font-size:13px;line-height:1.6;color:#475569">
+                Most likely this server is missing a database migration. Applying the ones
+                in <code>migrations/</code> fixes it at the source:
+              </p>
+              <pre style="margin:10px 0 0;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:12px;line-height:1.5;overflow-x:auto">mysql -u USER -p DB_NAME &lt; migrations/document_walkin_only.sql</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <?php
+    include '../includes/footer.php';
+    exit;
+}
 ?>
 
 
 <?php include '../includes/header.php'; ?>
 <?php include '../includes/sidebar.php'; ?>
 <style>
-/* Document requests — registrar-blue system, shared with the other
+/* Document requests ? registrar-blue system, shared with the other
    registrar modules (Students, Queue, Status Tracker). */
 body[data-page="documents"]{background:#f5f7fb;color:#0f172a}
 body[data-page="documents"] .dashboard-main{padding:24px clamp(18px,2.5vw,38px) 48px;background:linear-gradient(180deg,#eef4ff 0,#f8faff 300px,#f8faff 100%);min-height:auto}
 
-/* ── Header ───────────────────────────────────────────── */
+/* -- Header --------------------------------------------- */
 .dq-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin:0 0 16px;padding:25px 27px;border:1px solid #c7d7fe;border-radius:19px;background:linear-gradient(120deg,#eff6ff,#fff 68%);box-shadow:0 10px 30px rgba(37,99,235,.08)}
 .dq-kicker{display:flex;align-items:center;gap:7px;margin-bottom:7px;color:#1d4ed8;font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
 .dq-head h1{margin:0 0 5px;font-size:28px;line-height:1.1;letter-spacing:-.03em;color:#172554}
@@ -272,7 +385,7 @@ body[data-page="documents"] .dashboard-main{padding:24px clamp(18px,2.5vw,38px) 
 .dq-head .header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .dq-head .btn{min-height:36px;font-size:12px}
 
-/* ── Metric strip ─────────────────────────────────────── */
+/* -- Metric strip --------------------------------------- */
 .dq-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0 0 16px;background:#fff;border:1px solid #dbeafe;border-radius:16px;box-shadow:0 6px 22px rgba(15,23,42,.04);overflow:hidden}
 .dq-metric{position:relative;padding:18px 20px;border-right:1px solid #e2e8f0}
 .dq-metric:last-child{border-right:0}
@@ -286,7 +399,7 @@ body[data-page="documents"] .dashboard-main{padding:24px clamp(18px,2.5vw,38px) 
 .dq-metric .dq-value .dq-unit{font-size:15px;font-weight:700;color:#64748b}
 .dq-metric.is-rev .dq-value{color:#15803d}
 
-/* ── Panels ───────────────────────────────────────────── */
+/* -- Panels --------------------------------------------- */
 .dq-split{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:0 0 16px}
 .dq-split>.panel{margin-bottom:0}
 body[data-page="documents"] .panel{border:1px solid #dbeafe;border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(15,23,42,.045);margin-bottom:16px;overflow:hidden}
@@ -306,32 +419,32 @@ body[data-page="documents"] .dq-empty i{font-size:34px;color:#cbd5e1}
 body[data-page="documents"] .dq-empty p{margin:0;font-size:14px;font-weight:600;color:#64748b}
 body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 
-/* ── Row actions ────────────────────────────────────────────────
+/* -- Row actions ------------------------------------------------
    A row has exactly ONE forward step and it is the thing the clerk
    came to do, so it is rendered at full strength, always. Nothing
-   here is dimmed to signal "secondary" — that made the primary
+   here is dimmed to signal "secondary" ? that made the primary
    action on every row look disabled, and it only came back on
    :focus-visible, so a mouse user never saw it clearly at all.
 
    Hierarchy is carried by weight and fill instead:
-     primary   filled blue, full opacity   — the next step
-     danger    outline, muted red          — available, not inviting
+     primary   filled blue, full opacity   ? the next step
+     danger    outline, muted red          ? available, not inviting
    De-emphasis, where it is wanted, is applied to the SECONDARY
    control only (.btn-danger), never to the action itself. */
 /* Three controls in this cell, and letting them wrap pushed View onto a
    second line where it read as a footnote to the row rather than a
    control. The column is sized explicitly instead: the forward step
    gets the width it needs, Reject takes what is left, and View spans
-   the pair underneath — where a three-button row would have been too
+   the pair underneath ? where a three-button row would have been too
    cramped to read. */
-/* ── The process rail ────────────────────────────────────────────
+/* -- The process rail --------------------------------------------
    Where the request is standing in the walk-in run, drawn as a
    lollipop: a dot on each stage, a line running to the next.
 
    Three earlier revisions were wrong and it is worth recording how,
    because each time I treated this as something to STYLE rather than
    something to REDUCE. Square stamp pads (a costume, not a
-   reference); circles on a rule (which is what this is again — but
+   reference); circles on a rule (which is what this is again ? but
    then carrying four words per row); a typographic strip; and a
    tally. The tally was closest to right and still wrong, because a
    count says how many and not which. A lollipop says both: the dot
@@ -368,7 +481,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .dq-station{display:flex;align-items:center;flex:0 0 auto;position:relative;padding-right:20px}
 .dq-station:last-child{padding-right:0}
 
-/* ── The line ──────────────────────────────────────────────────
+/* -- The line --------------------------------------------------
    Sits behind the dots (z-index below), and stops short of the next
    dot so the two never touch. Dashed while the work is still ahead
    of it: an unfilled rule is what a not-yet-walked line looks like. */
@@ -392,7 +505,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 
 @keyframes railInk{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 
-/* ── The lollipop ─────────────────────────────────────────────
+/* -- The lollipop ---------------------------------------------
    A dot with a stem, so it reads as a lollipop on a wire rather
    than a plain circle: the stem is the short rise above the line
    the dot sits on. */
@@ -446,7 +559,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
    every other row for no extra information. */
 .dq-rail-fb-state{white-space:nowrap}
 .dq-rail-fb-note{font-weight:600;font-size:10.5px;color:#64748b;white-space:nowrap}
-.dq-rail-fb-note::before{content:"· ";color:#cbd5e1}
+.dq-rail-fb-note::before{content:"? ";color:#cbd5e1}
 .dq-rail-fallback.is-held{color:#dc2626}
 .dq-rail-fallback.is-stopped{color:#dc2626}
 .dq-rail-fallback.is-stopped .dq-rail-fb-state{text-decoration:line-through;text-decoration-thickness:1px}
@@ -465,7 +578,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 /* Reject is a real option but not the one the clerk came for. It
    reads as an outline rather than a filled red block, so the eye goes
    to the forward step first. Still fully legible and keyboard
-   reachable — de-emphasised, not disabled. */
+   reachable ? de-emphasised, not disabled. */
 .row-actions .btn-danger{
   background:transparent;color:#b91c1c;border-color:#fecaca;
   font-weight:600;opacity:1;
@@ -476,7 +589,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 
 /* View opens the request's detail. It is a peer of the forward step,
    not a leftover, so it gets the same quiet weight as Reject rather
-   than the ghosted grey text it replaced — a control you cannot read
+   than the ghosted grey text it replaced ? a control you cannot read
    is a control that does not look clickable. */
 .row-actions .dq-view{
   background:transparent;color:#475569;border-color:#cbd5e1;
@@ -486,7 +599,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .row-actions .dq-view:focus-visible{outline:2px solid #475569;outline-offset:1px}
 .row-actions .dq-view[aria-expanded="true"]{background:#f1f5f9;color:#0f172a;border-color:#94a3b8}
 
-/* ── Filter toolbar ───────────────────────────────────── */
+/* -- Filter toolbar ------------------------------------- */
 .dq-filters{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 18px;border-bottom:1px solid #e5e7eb;background:#fff}
 .dq-search{position:relative;flex:1 1 280px;min-width:200px}
 .dq-search i{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#64748b;font-size:13px;pointer-events:none}
@@ -497,14 +610,14 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .dq-count{font-size:12px;color:#64748b;white-space:nowrap}
 .dq-count strong{color:#0f172a}
 
-/* ── Revenue range picker ─────────────────────────────── */
+/* -- Revenue range picker ------------------------------- */
 .dq-range{display:flex;align-items:center;gap:7px}
 .dq-range input[type="date"]{height:34px;width:150px;padding:0 9px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#1e293b;font:13px Inter,sans-serif;cursor:pointer}
 .dq-range input[type="date"]:focus{outline:0;border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.1)}
 .dq-range .dq-sep{color:#94a3b8;font-size:12px}
 .dq-range .btn{min-height:34px;width:34px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 
-/* ── Expanded detail row ──────────────────────────────── */
+/* -- Expanded detail row -------------------------------- */
 .doc-detail{background:#f8faff}
 .doc-detail .dq-fields{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:12.5px;color:#475569}
 .doc-detail .dq-fields strong{color:#0f172a;font-weight:700}
@@ -513,7 +626,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .doc-detail .dq-log-row{display:flex;gap:10px;margin-bottom:5px;font-size:12px}
 .doc-detail .dq-log-row time{color:#94a3b8;white-space:nowrap;font-variant-numeric:tabular-nums}
 
-/* ── New Request modal ───────────────────────────────── */
+/* -- New Request modal --------------------------------- */
 /* registrar.css makes .modal-content the scroll box (max-height:90vh,
    overflow-y:auto). Here the dialog becomes a fixed-height flex column
    instead: header and footer pinned, only the body scrolls. */
@@ -582,7 +695,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 #newRequestModal .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 #newRequestModal .req-hint{margin-top:8px}
 
-/* The fee ticket — the one loud element. */
+/* The fee ticket ? the one loud element. */
 .nq-fee{position:relative;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 2px;padding:15px 18px 14px;border:1px solid #bfdbfe;border-radius:14px;background:linear-gradient(140deg,#eff6ff,#fff 72%)}
 .nq-fee::before{content:"";position:absolute;left:18px;right:18px;top:11px;height:2px;background:repeating-linear-gradient(90deg,#c7d7fe 0 7px,transparent 7px 14px)}
 .nq-fee-cap{font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#1d4ed8}
@@ -593,7 +706,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 #newRequestModal .modal-footer .btn{min-height:40px;padding:0 20px;font-size:13px}
 #newRequestModal .modal-footer .btn-primary{display:inline-flex;align-items:center;gap:7px}
 
-/* ── Document preview ─────────────────────────────────────────────
+/* -- Document preview ---------------------------------------------
    The preview is a full document, so the shell is sized like a sheet
    of paper and scrolls internally instead of the page scrolling. */
 #docPreviewShell{max-width:960px;height:min(88vh,1180px);padding:0;border-radius:18px;border:1px solid #dbeafe;box-shadow:0 24px 60px rgba(15,23,42,.22);overflow:hidden;display:flex;flex-direction:column}
@@ -617,13 +730,13 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .dq-metric-note{font-size:10.5px;color:#94a3b8;margin-top:5px;line-height:1.3}
 .dq-metric.is-warn .dq-metric-note{color:#b45309}
 
-/* ── Waiting & lateness ─────────────────────────────────────────
+/* -- Waiting & lateness -----------------------------------------
    The one thing this page could not previously show: why a request
    is not moving. Two distinct ideas, kept visually distinct so a
    clerk never mistakes "someone else owes us" for "we are behind".
 
-   .dq-wait   a blockage — amber rule down the row's left edge
-   .dq-late   past the SKU's target — red, and red is reserved for
+   .dq-wait   a blockage ? amber rule down the row's left edge
+   .dq-late   past the SKU's target ? red, and red is reserved for
               lateness so the colour keeps its meaning
    Both carry an age, because "blocked" without "since when" is not
    actionable: a clearance pending four days is a chase, one pending
@@ -670,7 +783,7 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .dq-wait-line i{color:#d97706;margin-top:2px;flex:0 0 auto}
 .dq-wait-since{font-size:10.5px;color:#b45309;padding-left:17px;font-variant-numeric:tabular-nums}
 /* Lift a hold the registrar set. Deliberately the same weight as
-   .dq-recheck so the two controls do not compete — but it is a real
+   .dq-recheck so the two controls do not compete ? but it is a real
    action, so it gets the interactive affordances Re-check has. */
 .dq-lift{border:0;background:transparent;color:#94a3b8;cursor:pointer;font-size:11px;padding:2px 4px;border-radius:4px;display:inline-flex;align-items:center;gap:4px}
 .dq-lift:hover{color:#b45309;background:#fffbeb}
@@ -678,12 +791,12 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .dq-lift:disabled{opacity:.6;cursor:default}
 tr.is-blocked>td:first-child{box-shadow:inset 3px 0 0 #f59e0b}
 
-/* Clear — the only positive state in the process, and shown on most
+/* Clear ? the only positive state in the process, and shown on most
    rows, so it is deliberately low-contrast rather than a green stamp
    per line. */
 .dq-clear{font-size:11.5px;color:#94a3b8;display:flex;align-items:center;gap:5px}
 /* The advisory ask. Visually a footnote to the status line, not a
-   banner: same weight as "Nothing — start it", because that is exactly
+   banner: same weight as "Nothing ? start it", because that is exactly
    what it is. Amber and dashed would read as a warning, and a hold is
    what the desk already uses those for. */
 .dq-bring{margin-top:6px;font-size:11px;color:#64748b;display:flex;align-items:flex-start;gap:5px;line-height:1.45}
@@ -692,7 +805,7 @@ tr.is-blocked>td:first-child{box-shadow:inset 3px 0 0 #f59e0b}
 
 /* Blocked rows recede slightly: the work still matters, but it is
    not the next thing to do. Contrast is never reduced below legible
-   — these are the rows most likely to be scrolled past. */
+   ? these are the rows most likely to be scrolled past. */
 tr.is-blocked{background:#fffdf7}
 tr.is-blocked:hover{background:#fffbeb}
 
@@ -708,7 +821,7 @@ tr.is-blocked:hover{background:#fffbeb}
 
 @media(prefers-reduced-motion:reduce){.dq-recheck{transition:none}}
 
-/* ── Responsive ───────────────────────────────────────── */
+/* -- Responsive ----------------------------------------- */
 @media(max-width:1000px){.dq-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.dq-metric:nth-child(2){border-right:0}.dq-metric:nth-child(-n+2){border-bottom:1px solid #e2e8f0}.dq-metric::after{display:none}.dq-split{grid-template-columns:1fr}}
 @media(max-width:900px){.dq-head{flex-direction:column;align-items:flex-start}.dq-head .header-actions{width:100%;justify-content:flex-start}}
 @media(max-width:600px){.dq-head{padding:21px 18px}.dq-head h1{font-size:25px}.dq-head .header-actions{flex-direction:column;align-items:stretch}.dq-head .btn{justify-content:center}.dq-strip{grid-template-columns:1fr}.dq-metric{border-right:0;border-bottom:1px solid #e2e8f0}.dq-metric:last-child{border-bottom:0}.dq-search,.dq-filters select{width:100%}.dq-range{width:100%}.dq-range input[type="date"]{flex:1 1 0;width:auto}}
@@ -728,11 +841,11 @@ tr.is-blocked:hover{background:#fffbeb}
     </div>
 </header>
 
-<!-- ── The four numbers that change what you do next ─────────── -->
+<!-- -- The four numbers that change what you do next ----------- -->
 <!-- Each tile answers a question a clerk asks on arrival, and each
      one has a different consequence:
        Needs action   work the desk owns right now
-       Waiting        held by someone else — chase, do not start
+       Waiting        held by someone else ? chase, do not start
        Overdue        past the target set on that document
        Longest open   how stale the oldest request has gone -->
 <div class="dq-strip">
@@ -772,7 +885,7 @@ tr.is-blocked:hover{background:#fffbeb}
     </div>
 </div>
 
-<!-- ── Charts ───────────────────────────────────────────────── -->
+<!-- -- Charts ------------------------------------------------- -->
 <div class="dq-split">
     <div class="panel">
         <div class="panel-toolbar">
@@ -808,13 +921,13 @@ tr.is-blocked:hover{background:#fffbeb}
                   // cap already carries it and "Needs Action" one tile up
                   // counts the same rows, so a second copy of the number
                   // would just be the same figure twice within one screen.
-                  // What this panel adds is the shape over the week — which
+                  // What this panel adds is the shape over the week ? which
                   // days the work arrived and whether the cap is growing. ?>
         </div>
     </div>
 </div>
 
-<!-- ── Request Table ─────────────────────────────────────────── -->
+<!-- -- Request Table ------------------------------------------- -->
 <div class="panel">
     <div class="panel-toolbar">
         <div class="panel-title"><i class="fa-solid fa-list"></i> Document Requests</div>
@@ -874,7 +987,7 @@ tr.is-blocked:hover{background:#fffbeb}
                 $age      = $r['_age'];
                 $next     = doc_next_step($r);
                 // Blocked days = how long the CURRENT hold has stood, which
-                // is the number worth chasing — not total age, which also
+                // is the number worth chasing ? not total age, which also
                 // counts days the desk spent actually working.
                 $heldDays = null;
                 if ($blocker && !empty($blocker['since'])) {
@@ -889,7 +1002,7 @@ tr.is-blocked:hover{background:#fffbeb}
                 }
                 $settled = in_array($st, ['Claimed', 'Rejected'], true);
 
-                // ── The process rail ────────────────────────────────
+                // -- The process rail --------------------------------
                 // Position and the drawn track come from one function, so
                 // the rail cannot show a station the API would disagree
                 // with. `railStory` is the same information in words: four
@@ -925,7 +1038,30 @@ tr.is-blocked:hover{background:#fffbeb}
                     data-label="<?= htmlspecialchars($r['catalog_name'] ?? ucwords(str_replace('_', ' ', $r['document_type'])), ENT_QUOTES) ?>"
                     class="<?= $blocker ? 'is-blocked' : '' ?>"
                     onclick="toggleDetail(<?= (int) $r['id'] ?>)">
-                    <td><div class="student-info"><div class="student-avatar blue"><?= htmlspecialchars(strtoupper(substr((string) $r['student_name'], 0, 1))) ?></div><div><div class="student-name"><?= htmlspecialchars((string) $r['student_name']) ?></div><div class="student-sub"><?= htmlspecialchars((string) $r['student_number']) ?></div></div></div></td>
+                    <?php // The student's photograph, from Digital File Storage.
+                          // The avatar used to be a hardcoded "blue" circle holding
+                          // strtoupper(substr($student_name, 0, 1)) - the first
+                          // letter of the CONCATENATED name, so every student with
+                          // a given first letter was the same single letter in the
+                          // same colour. Roldan Tiu, Rosa Tiu and Rey Tiu all
+                          // rendered as an identical blue "R".
+                          //
+                          // studentPhotoUrl() checks the disk, so a request whose
+                          // photo was never deployed to this host falls back to
+                          // initials rather than a broken image on the counter's
+                          // busiest screen. studentInitials() gives first+last,
+                          // matching the Students page, so the same person looks
+                          // the same in both places. ?>
+                    <?php
+                    $avatarUrl = studentPhotoUrl($r, '../');
+                    $avatarIni = studentInitials((string) ($r['first_name'] ?? ''), (string) ($r['last_name'] ?? ''));
+                    // Colour keyed to the student id, not the row index: the desk
+                    // sorts by request id DESC, so an index-based colour changes
+                    // every time a new request lands and means nothing.
+                    $avatarPalette = ['blue', 'green', 'purple', 'orange', 'pink'];
+                    $avatarCls = $avatarPalette[abs(crc32((string) ($r['student_id'] ?? $r['id']))) % count($avatarPalette)];
+                    ?>
+                    <td><div class="student-info"><?php if ($avatarUrl !== ''): ?><img class="student-avatar" src="<?= htmlspecialchars($avatarUrl) ?>" alt="" style="object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';this.onerror=null;"><?php endif; ?><div class="student-avatar <?= $avatarCls ?>" style="<?= $avatarUrl !== '' ? 'display:none;' : '' ?>"><?= htmlspecialchars($avatarIni) ?></div><div><div class="student-name"><?= htmlspecialchars((string) $r['student_name']) ?></div><div class="student-sub"><?= htmlspecialchars((string) $r['student_number']) ?></div></div></div></td>
                     <?php // Status and fee folded in here. Both are facts ABOUT
                           // the request, and giving each its own column spent
                           // horizontal space on numbers a clerk reads once,
@@ -1051,9 +1187,9 @@ tr.is-blocked:hover{background:#fffbeb}
                                 <?php endif; ?>
                             </div>
                             <?php // Re-check re-derives the BALANCE. On a hold a
-                                  // registrar set it cannot change the answer —
+                                  // registrar set it cannot change the answer ?
                                   // the office holding the affidavit is not
-                                  // something a query can resolve — so offering
+                                  // something a query can resolve ? so offering
                                   // the button there is a control that provably
                                   // does nothing. Replaced by a plain note
                                   // saying the hold is theirs to lift. ?>
@@ -1075,7 +1211,7 @@ tr.is-blocked:hover{background:#fffbeb}
                         <?php elseif (in_array($st, ['Claimed', 'Rejected'], true)): ?>
                             <div class="dq-clear"><i class="fa-solid fa-check"></i> Settled</div>
                         <?php else: ?>
-                            <div class="dq-clear"><i class="fa-solid fa-circle-check"></i> Nothing — start it</div>
+                            <div class="dq-clear"><i class="fa-solid fa-circle-check"></i> Nothing ? start it</div>
                         <?php endif; ?>
                         <?php // A named requirement is an ask, not a hold. It
                               // used to render above with an hourglass and a
@@ -1128,8 +1264,8 @@ tr.is-blocked:hover{background:#fffbeb}
                         <?php endif; ?>
                         <?php // View is available on EVERY row, not only the
                               // settled ones. It used to render only when there
-                              // was no next step, so on a working desk — where
-                              // nothing is collected yet — it never appeared at
+                              // was no next step, so on a working desk ? where
+                              // nothing is collected yet ? it never appeared at
                               // all, and the only way to see a request's detail
                               // was to guess that the row itself was clickable.
                               // A real <button>, so it is keyboard reachable
@@ -1177,7 +1313,7 @@ tr.is-blocked:hover{background:#fffbeb}
                                 </div>
                             <?php endif; ?>
                             <div class="dq-fields">
-                                <div><strong>Purpose:</strong> <?= htmlspecialchars($r['purpose'] ?: '—') ?></div>
+                                <div><strong>Purpose:</strong> <?= htmlspecialchars($r['purpose'] ?: '?') ?></div>
                                 <?php // Recipient is gone from the desk's vocabulary:
                                       // a walk-in document is always collected by
                                       // the student it was filed for, so the field
@@ -1187,7 +1323,7 @@ tr.is-blocked:hover{background:#fffbeb}
                                       // or asks for it. ?>
                                 <div><strong>Qty:</strong> <?= (int) ($r['quantity'] ?? 1) ?></div>
                                 <div><strong>Payment:</strong> Paid at the counter</div>
-                                <div><strong>Target:</strong> <?= $age['target'] !== null ? (int) $age['target'] . ' day' . ($age['target'] === 1 ? '' : 's') : '—' ?></div>
+                                <div><strong>Target:</strong> <?= $age['target'] !== null ? (int) $age['target'] . ' day' . ($age['target'] === 1 ? '' : 's') : '?' ?></div>
                                 <div><strong>Requested:</strong> <?= date('M d, Y h:i A', strtotime($r['request_date'])) ?></div>
                                 <?php // What to ask the student for. An ask, not a
                                       // hold: the registrar decides whether this
@@ -1205,14 +1341,14 @@ tr.is-blocked:hover{background:#fffbeb}
                                   // linked to the rendered document, so a clerk
                                   // had no way to check what they were about
                                   // to sign off on. api/document-preview.php
-                                  // already renders the real thing — it was
+                                  // already renders the real thing ? it was
                                   // simply unreachable from the page. Rejected
                                   // rows are excluded: there is nothing to sign.
                                   //
                                   // One button, not two. Print used to sit
                                   // beside Preview and opened a separate
                                   // window, so the clerk approved one render
-                                  // and printed a second — a different code
+                                  // and printed a second ? a different code
                                   // path, which is how the two drifted apart.
                                   // Printing from inside the preview prints the
                                   // sheet the clerk has already read.
@@ -1254,7 +1390,7 @@ tr.is-blocked:hover{background:#fffbeb}
 </div>
 </main>
 
-<!-- ═══ NEW REQUEST MODAL ═══════════════════════════════════════ -->
+<!-- --- NEW REQUEST MODAL --------------------------------------- -->
 <div class="modal-overlay" id="newRequestModal">
     <div class="modal-content">
         <div class="modal-header">
@@ -1340,8 +1476,8 @@ tr.is-blocked:hover{background:#fffbeb}
                                 <div class="nq-field">
                                     <?php // Recipient used to sit here. A walk-in
                                           // document is always collected by the
-                                          // student it was filed for — the office
-                                          // runs no courier — so the field asked a
+                                          // student it was filed for ? the office
+                                          // runs no courier ? so the field asked a
                                           // question with exactly one possible
                                           // answer, and its presence implied a
                                           // delivery option that does not exist.
@@ -1411,7 +1547,7 @@ tr.is-blocked:hover{background:#fffbeb}
     </div>
 </div>
 
-<!-- ═══ SIGN & MARK READY MODAL ═════════════════════════════════ -->
+<!-- --- SIGN & MARK READY MODAL --------------------------------- -->
 <div class="modal-overlay" id="approveReleaseModal">
     <div class="modal-content" style="max-width:420px;">
         <div class="modal-header">
@@ -1435,7 +1571,7 @@ tr.is-blocked:hover{background:#fffbeb}
     </div>
 </div>
 
-<!-- ═══ REJECT MODAL ═════════════════════════════════════════════ -->
+<!-- --- REJECT MODAL --------------------------------------------- -->
 <div class="modal-overlay" id="rejectModal">
     <div class="modal-content" style="max-width:420px;">
         <div class="modal-header">
@@ -1447,7 +1583,7 @@ tr.is-blocked:hover{background:#fffbeb}
             <p style="font-size:13px;color:#475569;margin-bottom:12px;">Rejecting: <strong id="rejectLabel"></strong></p>
             <div class="form-group">
                 <label>Rejection Reason <span style="color:#dc2626;">*</span></label>
-                <textarea id="rejectReason" class="form-control" rows="3" placeholder="Enter reason for rejection…"></textarea>
+                <textarea id="rejectReason" class="form-control" rows="3" placeholder="Enter reason for rejection?"></textarea>
             </div>
         </div>
         <div class="modal-footer" style="border-top:1px solid #e2e8f0;">
@@ -1457,9 +1593,9 @@ tr.is-blocked:hover{background:#fffbeb}
     </div>
 </div>
 
-<!-- ═══ DOCUMENT PREVIEW ═════════════════════════════════════════ -->
+<!-- --- DOCUMENT PREVIEW ----------------------------------------- -->
 <!-- The document as the student will receive it, rendered by
-     api/document-preview.php from shared/document_templates.php — the
+     api/document-preview.php from shared/document_templates.php ? the
      same source the print window uses, so what is approved on screen is
      what comes off the printer. -->
 <div class="modal-overlay" id="docPreviewModal">
@@ -1469,7 +1605,7 @@ tr.is-blocked:hover{background:#fffbeb}
             <button class="modal-close" onclick="closeModal('docPreviewModal')" aria-label="Close preview"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="modal-body" id="docPreviewBody">
-            <div class="dq-preview-loading"><i class="fa-solid fa-spinner fa-spin"></i> Rendering the document…</div>
+            <div class="dq-preview-loading"><i class="fa-solid fa-spinner fa-spin"></i> Rendering the document?</div>
         </div>
         <div class="modal-footer" style="border-top:1px solid #e2e8f0;">
             <button class="btn btn-secondary" onclick="closeModal('docPreviewModal')">Close</button>
@@ -1480,12 +1616,12 @@ tr.is-blocked:hover{background:#fffbeb}
 
 <script>
 // The API base, resolved by the server. The desk lives at /registrar/,
-// so a bare relative "api/..." resolves to /registrar/api/... and 404s —
+// so a bare relative "api/..." resolves to /registrar/api/... and 404s ?
 // the same reason every other call here writes '../api/...'. Emitted by
 // the server rather than hardcoded so the page keeps working wherever
 // the app is deployed.
 const DOC_API = <?= json_encode(app_url('/api')) ?>;
-// ── Helpers ────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------
 
 // The request currently open in the preview, so the footer's Print
 // button knows what to print without re-reading the DOM.
@@ -1515,7 +1651,7 @@ async function putDoc(id, action, extra) {
     return res.json();
 }
 
-// ── New Request Modal ──────────────────────────────────────────
+// -- New Request Modal ------------------------------------------
 // The three steps, in the order they are filled. Completion drives the
 // numerals, so the clerk can see at a glance whether the request is
 // finished or whether the tail of the form is still empty.
@@ -1635,23 +1771,23 @@ async function submitNewRequest(e) {
     }
 }
 
-// ── Process ────────────────────────────────────────────────────
+// -- Process ----------------------------------------------------
 //
 // The first step of every request, so it is the one that must never
 // misfire. Two things were wrong with it before:
 //
 //  1. It called native confirm(). A browser dialog cannot be styled,
-//     blocks the page, and reads as an error state — the clerk's
+//     blocks the page, and reads as an error state ? the clerk's
 //     first instinct is that the button is broken. The other two
 //     actions use proper modals, so this one was inconsistent too.
 //  2. Nothing stopped a double click. The request is fetched, the
-//     status moves, the row is stale until reload — and a second
+//     status moves, the row is stale until reload ? and a second
 //     click in that window sends a second transition, which the API
 //     rejects with a message the clerk never sees because the page
 //     reloads underneath them.
 //
 // So: the button disables itself and says what it is doing, and a
-// failure puts the row back exactly as it was. No dialog at all —
+// failure puts the row back exactly as it was. No dialog at all ?
 // starting to prepare a document is reversible, unlike signing it
 // or handing it over, and those two still ask.
 async function processDoc(id, btn) {
@@ -1659,7 +1795,7 @@ async function processDoc(id, btn) {
     const label = btn ? btn.innerHTML : '';
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting…';
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting?';
     }
     try {
         const d = await putDoc(id, 'process');
@@ -1672,12 +1808,12 @@ async function processDoc(id, btn) {
     } catch (e) {
         showToast('Network error. Nothing was changed.', 'error');
     }
-    // Only reached on failure — on success the page is reloading, so
+    // Only reached on failure ? on success the page is reloading, so
     // restoring the button would only be seen for a frame.
     if (btn) { btn.disabled = false; btn.innerHTML = label; }
 }
 
-// ── Approve & Release ─────────────────────────────────────────
+// -- Approve & Release -----------------------------------------
 function approveRelease(id) {
     document.getElementById('arId').value = id;
     document.getElementById('arReleaseDate').value = '';
@@ -1708,7 +1844,7 @@ async function submitApproveRelease() {
     }
 }
 
-// ── Claim ────────────────────────────────────────────────────
+// -- Claim ----------------------------------------------------
 // This one must ask. Unlike "start preparing", handing a document
 // over takes payment and cannot be undone from the desk, so the clerk
 // needs a deliberate yes.
@@ -1735,7 +1871,7 @@ async function claimDoc(id, btn) {
     // in that window would send a second transition.
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Claiming…';
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Claiming?';
     }
     putDoc(id, 'claim').then(d => {
         if (d.success) { showToast('Document claimed.', 'success'); location.reload(); return; }
@@ -1750,7 +1886,7 @@ async function claimDoc(id, btn) {
 /* Re-derive whether this request is still held.
 
    The clearance and balance gates used to be decided once, when the
-   request was filed, and never looked at again — so a student who
+   request was filed, and never looked at again ? so a student who
    paid the next morning stayed blocked forever with nothing on screen
    to say so. This asks the question again on demand. */
 async function recheckDoc(id) {
@@ -1797,13 +1933,13 @@ async function recheckDoc(id) {
         }
     }
 
-// ── Document preview ────────────────────────────────────────────
+// -- Document preview --------------------------------------------
 // The endpoint returns a full HTML document, so it is loaded into an
 // iframe rather than injected. Injecting it would run the preview's own
 // markup inside the desk, and the desk's CSP forbids framing anyway
 // (frame-ancestors 'none'), so an iframe is the only shape that works
 // under our own headers. Same-origin, and the endpoint checks the
-// session itself — an iframe cannot be tricked into showing a document
+// session itself ? an iframe cannot be tricked into showing a document
 // the clerk could not already fetch.
 function openPreview(id) {
     docPreviewId = id;
@@ -1814,7 +1950,7 @@ function openPreview(id) {
     if (title && label) title.textContent = label;
     openModal('docPreviewModal');
     if (shell) shell.classList.add('dq-preview-shell');
-    if (body) body.innerHTML = '<div class="dq-preview-loading"><i class="fa-solid fa-spinner fa-spin"></i> Rendering the document…</div>';
+    if (body) body.innerHTML = '<div class="dq-preview-loading"><i class="fa-solid fa-spinner fa-spin"></i> Rendering the document?</div>';
 
     // Rebuild rather than reuse, so re-opening the same request always
     // re-fetches instead of flashing a cached render.
@@ -1827,7 +1963,7 @@ function openPreview(id) {
         if (!d) return;
         // Centre the sheet on a mat. The template already caps the page
         // width for screen (@media screen .dt-doc), so nothing here may
-        // restyle the document itself — the first version of this forced
+        // restyle the document itself ? the first version of this forced
         // width/background onto the sheet and fought the template, which
         // is what made the preview look disorganised. Only the body
         // around the sheet is touched.
@@ -1867,15 +2003,15 @@ function openPreview(id) {
 
 // Print the document already loaded in the preview iframe.
 //
-// This used to call window.open(…'&print=1'), which opened a NEW TAB on
+// This used to call window.open(?'&print=1'), which opened a NEW TAB on
 // every print. The document is already on screen, so that was pure
 // friction: the clerk read it in one tab and then had to find and close
 // another. Calling print() on the iframe's own window prints exactly
 // the same document, in place.
 //
 // The iframe is same-origin (the endpoint checks the session itself), so
-// reaching into its contentWindow is permitted. If it is ever not — a
-// cross-origin response, a browser quirk — fall back to the standalone
+// reaching into its contentWindow is permitted. If it is ever not ? a
+// cross-origin response, a browser quirk ? fall back to the standalone
 // view rather than failing silently.
 function printDoc(id) {
     const frame = document.querySelector('.dq-preview-frame');
@@ -1900,7 +2036,7 @@ function printDoc(id) {
     });
 }
 
-// ── Reject ─────────────────────────────────────────────────────
+// -- Reject -----------------------------------------------------
 function rejectDoc(id) {
     document.getElementById('rejectId').value = id;
     document.getElementById('rejectLabel').textContent = rowLabel(id);
@@ -1927,7 +2063,7 @@ async function submitReject() {
     }
 }
 
-// ── Detail Row Toggle ──────────────────────────────────────────
+// -- Detail Row Toggle ------------------------------------------
 // `open` here means "the row is currently open", so that aria-expanded
 // and the chevron can report the pre-toggle state. It was previously
 // the other way round: the detail row ships with display:none, so the
@@ -1939,7 +2075,7 @@ async function submitReject() {
 // same function, so a click on View that also bubbles up fires the
 // handler twice: the row opens and closes within the same tick and
 // ends exactly where it started. A stopPropagation on a wrapper
-// element is no defence — a wrapper is a DESCENDANT of the row, so it
+// element is no defence ? a wrapper is a DESCENDANT of the row, so it
 // runs first and the row's handler still runs. Only stopping it at the
 // button prevents the second call. tests/process_check.php clicks the
 // live page and counts invocations, so this cannot come back quietly.
@@ -1957,7 +2093,7 @@ function toggleDetail(id) {
     });
 }
 
-// ── Search + Filters ───────────────────────────────────────────
+// -- Search + Filters -------------------------------------------
 function applyFilters() {
     const q = (document.getElementById('docSearch').value || '').trim().toLowerCase();
     const st = document.getElementById('statusFilter').value;
@@ -1990,7 +2126,7 @@ function applyFilters() {
 document.getElementById('docSearch').addEventListener('input', applyFilters);
 applyFilters();
 
-// ── Revenue Date Filter ────────────────────────────────────────
+// -- Revenue Date Filter ----------------------------------------
 function applyRevFilter() {
     const from = document.getElementById('revFrom').value;
     const to = document.getElementById('revTo').value;

@@ -235,19 +235,22 @@ switch ($action) {
             $sid = (int) $s['id'];
             $st  = strtolower(trim((string) ($s['status'] ?? '')));
             $nm  = trim(($s['first_name'] ?? '') . ' ' . ($s['last_name'] ?? ''));
-            $h   = $db->fetchAll("SELECT current_status,created_at FROM status_tracker WHERE student_id=? ORDER BY created_at DESC LIMIT 10", [$sid]);
             $ds  = $s['last_change'] ? (int) floor((time() - strtotime($s['last_change'])) / 86400) : 999;
-            $cP  = 0;
-            foreach ($h as $x) { if (strtolower((string)($x['current_status'] ?? '')) === 'probation') $cP++; else break; }
             $ad = (int) ($db->fetchColumn("SELECT COUNT(*) FROM document_requests WHERE student_id=? AND status NOT IN ('completed','claimed')", [$sid]) ?? 0);
             $sc = (int) ($db->fetchColumn("SELECT COUNT(*) FROM rfid_scan_logs l JOIN rfid_cards c ON l.card_uid=c.card_uid WHERE c.student_id=? AND l.scan_time>=DATE_SUB(NOW(),INTERVAL 30 DAY)", [$sid]) ?? 0);
             $r = null;
-            if ($st === 'probation' && $cP >= 2)           $r = ['recommended_status'=>'at-risk','severity'=>'high',"reason"=>"$nm probation $cP consecutive periods."];
-            elseif ($st === 'at-risk' && $ds > 180)        $r = ['recommended_status'=>'inactive','severity'=>'high',"reason"=>"$nm at-risk over 6 months."];
-            elseif ($st === 'graduated' && $ad === 0 && (int)($s['year_level'] ?? 0) >= 4)
-                                                           $r = ['recommended_status'=>'alumni','severity'=>'medium',"reason"=>"$nm graduated, no pending docs."];
-            elseif (in_array($st, ['enrolled','active']) && $ds > 90 && $sc === 0)
-                                                           $r = ['recommended_status'=>'inactive','severity'=>'medium',"reason"=>"$nm no activity for {$ds} days."];
+            // These rules used to recommend probation, at-risk and inactive -
+            // none of which is a status the column can hold any more, so every
+            // recommendation they produced would have been rejected on apply, or
+            // (before validation existed) written as ''. They now recommend only
+            // real statuses, and the advisory signal that used to trigger a
+            // change is a condition for a REVIEW instead: a machine should not
+            // move a student's enrolment state because a card has not been
+            // scanned.
+            if ($st === 'graduate' && $ad === 0 && (int)($s['year_level'] ?? 0) >= 4)
+                                                             $r = ['recommended_status'=>'alumni','severity'=>'medium',"reason"=>"$nm has graduated with no pending documents."];
+            elseif (isCurrentStudentStatus($st) && $ds > 90 && $sc === 0)
+                                                             $r = ['recommended_status'=>null,'severity'=>'low',"reason"=>"$nm has had no card activity for {$ds} days. Confirm they are still attending."];
             if ($r) { $r['student_id']=$sid; $r['student_name']=$nm; $r['student_number']=(string)($s['student_number']??''); $r['current_status']=$st; $r['action_type']=$r['recommended_status']?'change_status':'review'; $recs[]=$r; }
         }
         $src = 'rule';

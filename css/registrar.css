@@ -197,15 +197,27 @@ table.table,
 .pill.status-dot { width: 7px; height: 7px; border-radius: 50%; padding: 0; }
 
 /* Student / document / request statuses */
-.pill.active     { background: #dcfce7; color: #16a34a; }
-.pill.inactive   { background: #f1f5f9; color: #64748b; }
-.pill.probation  { background: #fef3c7; color: #b45309; }
-.pill.at-risk    { background: #fee2e2; color: #dc2626; }
-.pill.graduated  { background: #dbeafe; color: #2563eb; }
-.pill.loa        { background: #f3e8ff; color: #7c3aed; }
-.pill.transferred{ background: #fce7f3; color: #db2777; }
+/* Student status pills and dots.
+   These used to carry eleven classes for statuses the office no longer uses
+   (inactive, probation, at-risk, loa, transferred, archived) and had no class
+   at all for `alumni` - so an alumni student rendered with the default grey,
+   indistinguishable from an unrecognised value.
+
+   The five classes below are exactly studentStatuses() in
+   shared/functions.php, which is also what the markup emits. The colours are
+   the same values that file states, so a badge and a dot cannot disagree about
+   what "Graduate" looks like. Keep the two in step: a new status needs a rule
+   here or it renders unstyled. */
+.pill.enrolled   { background: #eff6ff; color: #2563eb; }
+.pill.active     { background: #f0fdf4; color: #16a34a; }
+.pill.graduate   { background: #f5f3ff; color: #7c3aed; }
+.pill.alumni     { background: #ecfeff; color: #0891b2; }
 .pill.dropped    { background: #fef2f2; color: #dc2626; }
-.pill.archived   { background: #f1f5f9; color: #64748b; }
+.pill.unknown    { background: #f1f5f9; color: #64748b; }
+/* Non-student status vocabularies this system does not own. Left in place:
+   rfid_cards and document_requests have their own lifecycles, and a
+   registrar still has to read them. */
+.pill.inactive   { background: #f1f5f9; color: #64748b; }
 .pill.pending    { background: #fef3c7; color: #b45309; }
 .pill.processing { background: #dbeafe; color: #2563eb; }
 .pill.approved   { background: #dcfce7; color: #16a34a; }
@@ -214,15 +226,14 @@ table.table,
 .pill.denied     { background: #fee2e2; color: #dc2626; }
 
 .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.status-dot.enrolled   { background: #2563eb; }
 .status-dot.active     { background: #16a34a; }
-.status-dot.inactive   { background: #94a3b8; }
-.status-dot.probation  { background: #b45309; }
-.status-dot.at-risk    { background: #dc2626; }
-.status-dot.graduated  { background: #2563eb; }
-.status-dot.loa        { background: #7c3aed; }
-.status-dot.transferred{ background: #db2777; }
+.status-dot.graduate   { background: #7c3aed; }
+.status-dot.alumni     { background: #0891b2; }
 .status-dot.dropped    { background: #dc2626; }
-.status-dot.archived   { background: #94a3b8; }
+.status-dot.unknown    { background: #94a3b8; }
+/* Non-student status vocabularies. See the note above .pill. */
+.status-dot.inactive   { background: #94a3b8; }
 .status-dot.pending    { background: #b45309; }
 .status-dot.processing { background: #2563eb; }
 .status-dot.approved   { background: #16a34a; }
@@ -270,6 +281,18 @@ table.table,
     width: 34px; height: 34px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     color: #fff; font-weight: 700; font-size: 12px; flex-shrink: 0;
+}
+/* The <img> variant, for an avatar that carries a real photograph.
+   The box above is sized in width/height, which an <img> honours, but it also
+   sets display:flex and a text colour that mean nothing to an image - so the
+   img needs its own rule to crop the face into the circle and to hold a
+   neutral background for the moment before the file decodes. Without the
+   object-fit the photograph is stretched to a square and a portrait comes out
+   squashed. */
+img.student-avatar {
+    object-fit: cover;
+    background: #e8edf3;
+    padding: 0;
 }
 .student-info .student-name { font-weight: 600; color: var(--c-ink); font-size: 13px; }
 .student-info .student-sub  { font-size: 11px; color: #94a3b8; }

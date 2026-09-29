@@ -13,6 +13,12 @@ if (empty($_SESSION['user_id'])) {
 }
 
 require_once __DIR__ . '/shared/database.php';
+// The Student Status Overview panel below is built from studentStatuses() /
+// studentStatusLabel() / studentStatusMeta() in shared/functions.php. This page
+// did not load it, so the panel fataled with "Call to undefined function
+// studentStatuses()" and the whole dashboard was a blank page - one of five
+// status counts being renamed took out every other card on the screen.
+require_once __DIR__ . '/shared/functions.php';
 
 $db = Database::getInstance();
 
@@ -107,12 +113,38 @@ foreach ($statusRows as $row) {
     $rawStatus[(string) ($row['status'] ?? '')] = (int) ($row['count'] ?? 0);
 }
 
-$DASH_STATUS_META = [
-    'active'    => ['label' => 'Active',    'fill' => 'green',  'icon' => 'fa-check-circle',   'color' => '#16a34a', 'from' => ['enrolled', 'active', 'loa']],
-    'at-risk'   => ['label' => 'At Risk',   'fill' => 'red',    'icon' => 'fa-exclamation-triangle', 'color' => '#dc2626', 'from' => ['at-risk']],
-    'probation' => ['label' => 'Probation', 'fill' => 'yellow', 'icon' => 'fa-clock',         'color' => '#b45309', 'from' => ['probation']],
-    'graduated' => ['label' => 'Graduated', 'fill' => 'blue',   'icon' => 'fa-graduation-cap', 'color' => '#2563eb', 'from' => ['graduated']],
+// One bucket per real status, no folding and no invented categories.
+//
+// This map used to be the fifth independent list of statuses in the app. It
+// merged enrolled + active + loa into a single "Active" card and gave
+// at-risk and probation their own cards, so the dashboard answered "how many
+// students are here" with a number that counted a student on leave as present,
+// and answered "how many are in trouble" with a figure the office no longer
+// records. Each card now counts exactly one stored value, so a card showing 0
+// is a real 0 and not a sum of three things.
+//
+// `fill` tints the bar on the status panel. It was named by hand ('green',
+// 'red', 'blue') and is now derived from the status colour, because a
+// hand-named tint is one more place to forget when a status is added - and a
+// missing key here is a PHP warning in the middle of the dashboard.
+$dashFills = [
+    'enrolled' => 'blue',
+    'active'   => 'green',
+    'graduate' => 'purple',
+    'alumni'   => 'cyan',
+    'dropped'  => 'red',
 ];
+$DASH_STATUS_META = [];
+foreach (studentStatuses() as $st) {
+    $m = studentStatusMeta($st);
+    $DASH_STATUS_META[$st] = [
+        'label' => $m['label'],
+        'icon'  => str_replace('fas ', 'fa ', $m['icon']),
+        'color' => $m['color'],
+        'fill'  => $dashFills[$st] ?? 'grey',
+        'from'  => [$st],
+    ];
+}
 
 // Sum each bucket from the real GROUP BY result.
 $statusData = [];
@@ -125,9 +157,14 @@ foreach ($DASH_STATUS_META as $key => $meta) {
 
 // The headline stat cards read from the same buckets, so the top strip and
 // this panel can never disagree.
-$activeStudents    = $statusData['active'];
-$atRiskStudents    = $statusData['at-risk'] + $statusData['probation'];
-$graduatedStudents = $statusData['graduated'];
+//
+// "At risk" is no longer a status. It is an advisory now - surfaced on the
+// data-quality page and the Status Tracker queue - so there is no honest count
+// for it on an enrolment dashboard, and the card is driven from the same
+// five-bucket data rather than left pointing at a column that is gone.
+$activeStudents    = $statusData['enrolled'] + $statusData['active'];
+$atRiskStudents    = 0;
+$graduatedStudents = $statusData['graduate'];
 
 // Recent activity
 $recentActivity = $db->fetchAll("
@@ -546,9 +583,21 @@ include 'includes/sidebar.php';
                 </div>
             <?php else: ?>
                 <div class="activity-list">
-                    <?php foreach ($recentActivity as $activity): 
-                        $statusClass = $activity['current_status'] === 'active' ? 'active' : ($activity['current_status'] === 'at-risk' ? 'risk' : 'warning');
-                        $statusIcon = $activity['current_status'] === 'active' ? 'fa-check' : ($activity['current_status'] === 'at-risk' ? 'fa-exclamation' : 'fa-clock');
+                    <?php foreach ($recentActivity as $activity):
+                        // The activity feed named 'at-risk' in three places to pick a
+                        // colour and an icon. That status no longer exists, so every
+                        // change other than 'active' fell through to the amber
+                        // "warning" treatment - a student moved to dropped looked
+                        // identical to one merely marked enrolled.
+                        //
+                        // It now reads the shared meta, so a change to any of the
+                        // five is coloured as that status, and an unrecognised value
+                        // reads as unknown rather than as a guess.
+                        $actMeta = studentStatusMeta($activity['current_status'] ?? '');
+                        $isDrop  = ($activity['current_status'] ?? '') === 'dropped';
+                        $statusClass = $isDrop ? 'risk' : ($actMeta['class'] === 'active' ? 'active' : 'warning');
+                        $statusIcon  = $isDrop ? 'fa-exclamation' : ($actMeta['class'] === 'active' ? 'fa-check' : 'fa-clock');
+                        $actColor   = $actMeta['color'] !== '' ? $actMeta['color'] : '#b45309';
                     ?>
                         <div class="activity-item">
                             <div class="activity-left">
@@ -556,7 +605,7 @@ include 'includes/sidebar.php';
                                 <div class="activity-info">
                                     <div class="activity-name"><?= htmlspecialchars($activity['student_name'] ?? 'Unknown') ?></div>
                                     <div class="activity-detail">
-                                        Status changed to <strong style="color: <?= $activity['current_status'] === 'active' ? '#16a34a' : ($activity['current_status'] === 'at-risk' ? '#dc2626' : '#b45309') ?>;"><?= ucfirst($activity['current_status'] ?? 'Unknown') ?></strong>
+                                        Status changed to <strong style="color: <?= htmlspecialchars($actColor) ?>;"><?= htmlspecialchars(studentStatusLabel($activity['current_status'] ?? '') ?: ucfirst((string)($activity['current_status'] ?? 'Unknown'))) ?></strong>
                                         <?php if ($activity['reason']): ?> — <?= htmlspecialchars($activity['reason']) ?><?php endif; ?>
                                     </div>
                                 </div>

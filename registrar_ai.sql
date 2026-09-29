@@ -14,11 +14,31 @@
 -- They are guarded and idempotent, so running one against a database
 -- created from this file is harmless but unnecessary.
 --
--- Generated from the live schema, so it cannot drift from the code the way
--- a hand-edited dump does. See tests/dump_freshness.php.
+-- Safe to import into an EMPTY database only.
 --
--- Safe to import into an empty database only. It creates tables; it does
--- not drop existing ones.
+--   CREATE DATABASE registrar_ai CHARACTER SET utf8mb4;
+--   mysql -u USER -p registrar_ai < registrar_ai.sql
+--
+-- It creates tables and inserts staff logins. It never drops, truncates or
+-- deletes anything, so it cannot destroy data - but it is NOT the tool for
+-- an existing database. Against one that already has data it stops at the
+-- first "table already exists" and leaves you with a partial import and an
+-- error, and the real problem is still there.
+--
+-- For a database that ALREADY exists, import the migrations instead. They
+-- are guarded and idempotent, so they can be run in any order, repeatedly,
+-- and against a database already up to date:
+--
+--   mysql -u USER -p registrar_ai < migrations/document_walkin_only.sql
+--
+-- That is the command that fixes the documents desk reporting a 500 on a
+-- host whose database predates the walk-in work. Running this file there
+-- instead will not help, and will not help quietly either.
+--
+-- Generated from the live schema, so it cannot drift from the code the way
+-- a hand-edited dump does. tests/dump_freshness.php proves it imports clean,
+-- that every migration is a no-op against it, and that nothing but staff
+-- logins is seeded. Run it after any schema change.
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
@@ -891,7 +911,7 @@ CREATE TABLE `students` (
   `semester` varchar(20) DEFAULT NULL,
   `adviser_id` int(11) DEFAULT NULL,
   `section` varchar(20) DEFAULT NULL,
-  `status` enum('active','probation','at-risk','loa','enrolled','graduated','transferred','dropped') DEFAULT 'enrolled',
+  `status` enum('enrolled','active','graduate','alumni','dropped') NOT NULL DEFAULT 'enrolled',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   `lrn` varchar(12) DEFAULT NULL COMMENT 'LRN - Learner Reference Number',
@@ -965,6 +985,14 @@ INSERT INTO `users` (`id`, `email`, `password_hash`, `full_name`, `role`, `rfid_
 (2,'registrar@gmail.com','$2y$10$zj33OjRB93RcPZWd2/f4VudcEqzDCfZdLAajEcZQ7LABuuEKeqFyu','Registrar Staff','registrar',NULL,1,'2026-07-07 06:42:45','2026-09-23 12:57:10',NULL,'RGS-001',0,NULL),
 (3,'roldantiu89@gmail.com','$2y$10$f9PmndF92hBFI/jeJAWxC.Pua3Osob3.zkWHn9GRSTQXSyPX8x0dK','Roldan Tiu','admin',NULL,1,'2026-08-11 07:40:30','2026-08-24 00:47:37',NULL,'ADM-002',0,NULL),
 (7,'norse@gmail.com','$2y$10$mg/TmAFfYjwZNW34o6IGHedMnnZ04hUmYgm5iGy7OvGAxtDEoGWee','norse','nurse',NULL,1,'2026-09-02 18:16:15','2026-09-02 18:17:05',NULL,NULL,0,NULL);
+
+-- Explicit COMMIT. Every statement above commits on its own under the
+-- default autocommit, so this changes nothing in the normal case - but an
+-- import is run by people who do not know that, and someone with
+-- autocommit off (a hosting panel's import tool, a phpMyAdmin box with
+-- the setting changed) would otherwise be left with a half-built schema
+-- that vanishes on disconnect.
+COMMIT;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
