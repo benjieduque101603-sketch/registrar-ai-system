@@ -210,20 +210,30 @@
 
 
     // ── Password Toggle ──
-    document.querySelectorAll('.password-toggle').forEach(function(btn) {
+    // Matches both spellings on purpose. login.php marks its button
+    // .password-toggle-btn, so querying only .password-toggle matched
+    // nothing there; had a page ever carried both this handler and an
+    // inline one, two listeners on the same button would each flip the
+    // field, and the reveal would look broken.
+    document.querySelectorAll('.password-toggle, .password-toggle-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
             const input = this.parentElement.querySelector('input');
             const icon = this.querySelector('i');
-            
-            if (input.type === 'password') {
-                input.type = 'text';
-                icon.classList.remove('fa-eye');
-                icon.classList.add('fa-eye-slash');
+            if (!input || !icon) return;
+
+            // A field that masks via CSS (data-masked) has no type to
+            // flip, so toggle the attribute instead. Otherwise fall back
+            // to switching type on a real password input.
+            if (input.hasAttribute('data-masked')) {
+                if (input.dataset.masked === '1') input.removeAttribute('data-masked');
+                else input.dataset.masked = '1';
             } else {
-                input.type = 'password';
-                icon.classList.remove('fa-eye-slash');
-                icon.classList.add('fa-eye');
+                input.type = input.type === 'password' ? 'text' : 'password';
             }
+
+            const revealed = icon.classList.contains('fa-eye');
+            icon.classList.toggle('fa-eye', !revealed);
+            icon.classList.toggle('fa-eye-slash', revealed);
         });
     });
 
