@@ -458,12 +458,9 @@ select.form-control{cursor:pointer;appearance:auto;-webkit-appearance:auto;}
    scrollable list, but the select itself stays functional (keeps value,
    required, and form submission working). */
 .course-select-wrap select.form-control{
-  appearance:none;-webkit-appearance:none;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
-  background-position:right 12px center;
-  background-repeat:no-repeat;
-  background-size:14px;
-  padding-right:32px;
+    appearance:auto !important;-webkit-appearance:auto !important;-moz-appearance:auto !important;
+    background-image:none !important;
+    padding-right:8px !important;
   cursor:pointer;
 }
 /* Scrollable list: max 5 options (~5*34px) tall, then scrolls */
