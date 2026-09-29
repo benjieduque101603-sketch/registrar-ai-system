@@ -66,29 +66,59 @@ foreach ($students as &$row) {
 }
 unset($row);
 
-// ─── BLOCKS: course + year level, never section ──────────────
-// A block is what the registrar can actually vouch for: the program and the
-// year level. Section codes are the receiving department's to write, so they
-// are not part of the key - a block is a group to be sectioned, not a section.
-// The acronym (courseAcronym) leads the heading because the long program name
-// is a whole line of its own at heading size; the full name rides along in the
-// title attribute.
+// ─── BLOCKS: course + year level + semester, never section ───
+// A block is what the registrar can actually vouch for: the program,
+// the year level, and the term they belong to. Section codes are the
+// receiving department's to write, so they are not part of the key - a
+// block is a group to be sectioned, not a section.
+//
+// Semester IS part of the key. Keying on course + year alone put a 1st
+// sem and a 2nd sem cohort of the same program and year into one table,
+// which is not a list anyone can hand off: a section is assigned within
+// one term, and a printed sheet holding both terms at once cannot be
+// signed off as either. The academic year is included for the same
+// reason - a retained 2025-2026 row is a different cohort from a
+// 2026-2027 one, and merging them silently mixes two intakes.
+//
+// The acronym (courseAcronym) leads the heading because the long program
+// name is a whole line of its own at heading size; the full name rides
+// along in the title attribute.
 $blocks = [];
 foreach ($students as $student) {
-    $course = trim((string) ($student['course'] ?? ''));
-    $year   = trim((string) ($student['year_level'] ?? ''));
-    $key    = $course . "\x1F" . $year;
+    $course   = trim((string) ($student['course'] ?? ''));
+    $year     = trim((string) ($student['year_level'] ?? ''));
+    $semester = trim((string) ($student['semester'] ?? ''));
+    $schoolYear = trim((string) ($student['school_year'] ?? ''));
+    $key      = $course . "\x1F" . $year . "\x1F" . $schoolYear . "\x1F" . $semester;
 
     if (!isset($blocks[$key])) {
         $blocks[$key] = [
-            'course'     => $course,
-            'year_level' => $year,
-            'acronym'    => courseAcronym($course),
-            'students'   => [],
+            'course'      => $course,
+            'year_level'  => $year,
+            'semester'    => $semester,
+            'school_year' => $schoolYear,
+            'acronym'     => courseAcronym($course),
+            'students'    => [],
         ];
     }
     $blocks[$key]['students'][] = $student;
 }
+
+// Order the blocks the way a registrar reads them: by program, then year,
+// then academic year, then term. Semester sorts by the order of the school
+// year rather than alphabetically, or "2nd" would come before "1st".
+$semesterOrder = ['1st' => 1, '2nd' => 2, 'summer' => 3];
+uksort($blocks, function ($a, $b) use ($semesterOrder) {
+    $A = explode("\x1F", $a);
+    $B = explode("\x1F", $b);
+    $cmp = strcasecmp($A[0], $B[0]);
+    if ($cmp !== 0) return $cmp;
+    $cmp = (int) $A[1] <=> (int) $B[1];
+    if ($cmp !== 0) return $cmp;
+    $cmp = strcmp($A[2], $B[2]);
+    if ($cmp !== 0) return $cmp;
+    return ($semesterOrder[strtolower($A[3])] ?? 9) <=> ($semesterOrder[strtolower($B[3])] ?? 9);
+});
 
 // ─── TABLES: one per MAX_STUDENTS_PER_SECTION students ───────
 // 50 is not a cap this page enforces, it is the size of one list the
@@ -298,15 +328,28 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         <?php else: ?>
             <?php foreach ($blocks as $block): ?>
                 <div class="card masterlist-section-block" style="margin-bottom: 16px;">
-                    <!-- Generic heading on purpose: "BSIT - Year 1", no section.
-                         No section exists yet - the receiving department splits
-                         the block when it writes the codes. -->
+                    <!-- Names the program, the year, the term and the academic
+                         year - everything the key groups by. It must show them
+                         all: the blocks are separate tables now, and two
+                         headings that read identically would leave the
+                         registrar unable to tell which cohort a sheet is for.
+                         It names no section, because none exists yet - the
+                         receiving department writes those. -->
                     <div class="ml-block-head">
-                        <h2 title="<?= htmlspecialchars($block['course'] !== '' ? $block['course'] : 'No program recorded') ?>">
+                        <h2 title="<?= htmlspecialchars(($block['course'] !== '' ? $block['course'] : 'No program recorded')
+                                    . ($block['year_level'] !== '' ? ' — Year ' . $block['year_level'] : '')
+                                    . ($block['semester'] !== '' ? ' — ' . $block['semester'] . ' Semester' : '')
+                                    . ($block['school_year'] !== '' ? ' (' . $block['school_year'] . ')' : '')) ?>">
                             <i class="fas fa-users"></i>
                             <span class="ml-block-acronym"><?= htmlspecialchars($block['acronym'] !== '' ? $block['acronym'] : 'N/A') ?></span>
                             <?= htmlspecialchars('Year ' . ($block['year_level'] !== '' ? $block['year_level'] : '—')) ?>
+                            <?php if ($block['semester'] !== ''): ?>
+                                <span class="ml-block-term"><?= htmlspecialchars($block['semester']) ?> Sem</span>
+                            <?php endif; ?>
                         </h2>
+                        <?php if ($block['school_year'] !== ''): ?>
+                            <span class="ml-block-sy"><?= htmlspecialchars($block['school_year']) ?></span>
+                        <?php endif; ?>
                         <span class="badge <?= count($block['students']) > (int) $sectionCap ? 'badge-warning' : 'badge-success' ?>" style="font-size: 12px;"><?= count($block['students']) ?> students</span>
                         <span style="font-size: 12px; color: #475569;"><i class="fas fa-circle-info" style="color: #2563eb; margin-right: 6px;"></i>Section codes are left blank for the receiving department to fill in</span>
                     </div>
