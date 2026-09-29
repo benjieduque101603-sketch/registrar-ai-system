@@ -54,6 +54,44 @@ function readCursor($db, int $userId): int {
     }
 }
 
+/**
+ * Make sure the cursor table exists, creating it if the migration has not
+ * been run against this database.
+ *
+ * The read side already degrades when the table is missing - it falls back
+ * to "everything is unread" - but the write side used to hard-fail with
+ * "Could not save your read state" on every single attempt, forever, on a
+ * database where the migration had not been applied. The bell then looked
+ * healthy while Mark All as Read was permanently broken, with no way for
+ * the user to tell why. Creating the table on first use is idempotent and
+ * costs one query on the rare path, so the two halves of the feature
+ * finally fail the same way.
+ *
+ * @return bool True when the table is present and writable.
+ */
+function ensureReadTable($db): bool {
+    static $ok = null;
+    if ($ok !== null) {
+        return $ok;
+    }
+    try {
+        $db->query(
+            "CREATE TABLE IF NOT EXISTS `staff_notification_reads` (
+                `user_id`      int(11) NOT NULL,
+                `last_read_id` int(11) NOT NULL DEFAULT 0,
+                `updated_at`   timestamp NOT NULL DEFAULT current_timestamp()
+                                ON UPDATE current_timestamp(),
+                PRIMARY KEY (`user_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+        );
+        $ok = true;
+    } catch (Throwable $e) {
+        error_log('[notifications] could not create read cursor table: ' . $e->getMessage());
+        $ok = false;
+    }
+    return $ok;
+}
+
 try {
     $method = $_SERVER['REQUEST_METHOD'];
 
@@ -67,9 +105,27 @@ try {
         // The cursor table is keyed by the session's user id but is not
         // foreign-keyed to users: a session can outlive its user row after
         // a re-seed or a restored backup, and that must not turn this into
-        // a 500. A failure to store the cursor is logged but still answers
-        // the badge truthfully by reporting the rows as unread.
+        // a 500. An older copy of this table may still carry that FK, and
+        // it is the single most common cause of this write failing, so it
+        // is dropped here before the insert.
         try {
+            ensureReadTable($db);
+
+            // Drop the FK only if it is actually there. An unconditional
+            // ALTER raises "Can't drop ... check that it exists" on a table
+            // that is already correct, and that error would be caught below
+            // and reported as a failed save - turning the fix into the very
+            // bug it is meant to remove.
+            $hasFk = (int) $db->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+                 WHERE CONSTRAINT_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'staff_notification_reads'
+                   AND CONSTRAINT_NAME = 'fk_snr_user'"
+            );
+            if ($hasFk > 0) {
+                $db->query("ALTER TABLE `staff_notification_reads` DROP FOREIGN KEY `fk_snr_user`");
+            }
+
             $maxId = (int) $db->fetchColumn("SELECT COALESCE(MAX(id), 0) FROM audit_logs");
             $db->query(
                 "INSERT INTO staff_notification_reads (user_id, last_read_id)
@@ -105,8 +161,17 @@ try {
         "SELECT id, action, table_name, created_at FROM audit_logs ORDER BY id DESC LIMIT 20"
     );
 
+    // Unread is counted over the whole table, not inside the 20-row window
+    // above. Counting the window capped the badge at 20, while ?unread=1 -
+    // which the bell polls - counted every row past the cursor, so the two
+    // disagreed as soon as a user had more than 20 unseen entries. The
+    // student feed already counts this way; this one had not caught up.
+    $unread = (int) $db->fetchColumn(
+        "SELECT COUNT(*) FROM audit_logs WHERE id > ?",
+        [$cursor]
+    );
+
     $notifications = [];
-    $unread = 0;
 
     foreach ($logs as $log) {
         $icon = 'fa-circle-info';
@@ -144,7 +209,6 @@ try {
         }
 
         $isUnread = (int) $log['id'] > $cursor;
-        if ($isUnread) $unread++;
 
         $notifications[] = [
             'id'      => (int) $log['id'],

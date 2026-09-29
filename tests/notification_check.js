@@ -84,6 +84,17 @@ const sql = fs.readFileSync(path.join(__dirname, '..', 'registrar_ai.sql'), 'utf
 check('install file creates the cursor table', sql.includes('CREATE TABLE `staff_notification_reads`'), true);
 
 // Student unread count must span the whole table, not the 50-row window.
+// The staff feed has the same window-vs-total hazard the student feed had.
+// The feed returns 20 rows but must report unread across the whole table,
+// otherwise the badge caps at 20 and disagrees with the ?unread=1 poll.
+console.log('\nstaff feed unread count:');
+check('counts unread with its own query',
+    notifApi.includes('SELECT COUNT(*) FROM audit_logs WHERE id > ?'), true);
+check('no longer counts unread inside the feed window',
+    /if \(\$isUnread\) \$unread\+\+;/.test(notifApi), false);
+check('both unread paths use the same predicate',
+    (notifApi.match(/SELECT COUNT\(\*\) FROM audit_logs WHERE id > \?/g) || []).length >= 2, true);
+
 console.log('\nstudent feed:');
 const stuApi = fs.readFileSync(path.join(__dirname, '..', 'api', 'student-notifications.php'), 'utf8');
 check('counts unread with its own query', stuApi.includes('SELECT COUNT(*) FROM student_notifications WHERE student_id = ? AND is_read = 0'), true);
