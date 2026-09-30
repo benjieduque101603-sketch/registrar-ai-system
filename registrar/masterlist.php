@@ -16,6 +16,14 @@ requireRole('registrar');
 
 require_once __DIR__ . '/../shared/database.php';
 require_once __DIR__ . '/../shared/functions.php';
+// studentQualityScore() and studentAnomalies() from normalize.php, the same two
+// the Students roster uses, so a student does not score one way on one page and
+// another way on the other. normalize.php is already pulled in by functions.php,
+// but it is required by name so this page's dependency on it is visible.
+require_once __DIR__ . '/../shared/normalize.php';
+// studentQualityNormalizePhone(), which formats 09XXXXXXXXX as 09XX-XXX-XXXX for
+// the Contact column. Without it the raw stored digits ship in the export.
+require_once __DIR__ . '/../shared/student_quality.php';
 
 $db = Database::getInstance();
 
@@ -55,16 +63,14 @@ $sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, last_name ASC,
 
 $students = $db->fetchAll($sql, $params);
 
-// Adviser name lookup (users.id → full_name)
+// Adviser names are NOT joined here any more. The Adviser column reads N/A
+// because naming an adviser is Faculty Management's (#296) to do, not the
+// Registrar's - see DEPARTMENTS.md. The lookup survives only for the View
+// Student modal below, which reads the profile the registrar maintains and is
+// not part of the handed-off masterlist.
 $advisers = $db->fetchAll("SELECT id, full_name FROM users WHERE role = 'staff' ORDER BY full_name");
 $adviserNames = [];
 foreach ($advisers as $ad) { $adviserNames[(int)$ad['id']] = $ad['full_name']; }
-
-// Attach adviser names to student rows for display
-foreach ($students as &$row) {
-    $row['adviser_name'] = !empty($row['adviser_id']) ? ($adviserNames[(int)$row['adviser_id']] ?? null) : null;
-}
-unset($row);
 
 // ─── BLOCKS: course + year level + semester, never section ───
 // A block is what the registrar can actually vouch for: the program,
@@ -166,11 +172,27 @@ $schoolYears = $db->fetchAll(
 );
 $statusOptions = ['enrolled', 'active', 'probation', 'at-risk', 'loa', 'graduated', 'transferred', 'dropped'];
 
-// RFID lookup for profile modal (student_id → card info)
+// RFID lookup for the list column and the profile modal (student_id → card).
+//
+// A student can hold more than one card over their time here - a replacement
+// after a loss, an archived card kept for its scan history - so this is not a
+// plain "last row wins" map. A naive $map[$id] = $row lets an ARCHIVED or
+// LOST card overwrite the ACTIVE one, and the list then shows a dead card
+// number against a student who is carrying a working one. Ordered by status
+// rank, so the card a registrar could actually use today is the one that wins.
 $rfidCards = $db->fetchAll("SELECT student_id, card_uid, status, expiry_date FROM rfid_cards");
 $rfidMap = [];
+// Lower rank = preferred. Only a card the student could present today is
+// considered; archived and lost cards never displace a live one.
+$rfidRank = ['active' => 0, 'inactive' => 1, 'expired' => 2, 'lost' => 3, 'available' => 4, 'archived' => 5];
 foreach ($rfidCards as $rc) {
-    if ($rc['student_id']) $rfidMap[$rc['student_id']] = $rc;
+    if (empty($rc['student_id'])) continue;
+    $sid  = (int) $rc['student_id'];
+    $rank = $rfidRank[$rc['status'] ?? ''] ?? 9;
+    if (!isset($rfidMap[$sid]) || $rank < $rfidMap[$sid]['rank']) {
+        $rc['rank'] = $rank;
+        $rfidMap[$sid] = $rc;
+    }
 }
 
 $page_title = 'Masterlist';
@@ -206,29 +228,257 @@ body[data-page="masterlist"] .main{padding:24px clamp(18px,2.5vw,38px) 48px;back
 .masterlist-filter-btn{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
 body[data-page="masterlist"] .card{border:1px solid #dbeafe!important;border-radius:16px!important;background:#fff!important;box-shadow:0 8px 24px rgba(15,23,42,.045)!important}
 body[data-page="masterlist"] .masterlist-section-block{overflow:hidden;margin-bottom:16px!important;border:1px solid #dbeafe!important;border-radius:16px!important;box-shadow:0 8px 24px rgba(15,23,42,.045)!important}
-body[data-page="masterlist"] .masterlist-section-block>div:first-child{background:#f8faff;border-bottom-color:#e5e7eb}
-body[data-page="masterlist"] .masterlist-table th{background:#f8fafc!important;color:#475569!important;padding:11px 12px!important;font-size:10px!important;letter-spacing:.05em}
-body[data-page="masterlist"] .masterlist-table td{padding:10px 12px!important}
+/* The rule that tinted the block head is gone. It targeted
+   .masterlist-section-block > div:first-child, which IS .ml-block-head, and it
+   painted #f8faff over the colour the .ml-block-head rule sets - so the heading
+   redesign could not be seen for the same reason the table header one could
+   not. The heading's own rule owns its own background now, and nothing reaches
+   in to repaint it. */
+/* The roster is a ledger: rows read as horizontal lines of type, and the eye
+   needs to find one thing fast - whose name this is. Everything else is a
+   short token that should sit in a fixed track and never move. */
+body[data-page="masterlist"] .masterlist-table{width:100%;border-collapse:collapse;font-size:15px;table-layout:fixed}
+/* Column tracks. Fixed for the tokens so a value's width never shifts the
+   columns beside it; the name takes the slack and is the only flexible one.
+   Sized for 15px type: a 9-character student id at this size needs ~116px of
+   monospace, and the pill tracks are measured from the widest word they hold. */
+.masterlist-table .c-pick{width:42px}
+.masterlist-table .c-no{width:48px}
+.masterlist-table .c-num{width:128px}
+.masterlist-table .c-name{width:auto;min-width:240px}
+.masterlist-table .c-gender{width:96px}
+.masterlist-table .c-contact{width:150px}
+/* Email is a variable-length string, so the track is generous and the value
+   truncates from the LEFT: an address reads by its domain, and "…@school.edu"
+   still identifies it where "roldanti…gmail.com" does not. left-overflow needs
+   direction:rtl on the cell to render the ellipsis at the start. */
+.masterlist-table .c-email{width:210px}
+/* Email truncates from the START. An address reads by its domain, and
+   "…@school.edu" still identifies the account where "roldanti…gmail.com" does
+   not - the local part is the part the reader already knows. A cell only clips
+   the overflow on the leading edge under direction:rtl, so the value is set
+   rtl and then re-anchored left, which keeps the text itself in normal LTR
+   order; an address has no brackets or mixed-direction runs to reorder. */
+.ml-email{color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.masterlist-table .c-bday{width:140px}
+.masterlist-table .c-rfid{width:190px}
+.masterlist-table .c-course{width:102px}
+.masterlist-table .c-status{width:128px}
+body[data-page="masterlist"] .masterlist-table th{
+  /* The header is a ruled band, not a strip of labels. A ledger's column
+     headings are separated from the entries by a firm rule and by nothing else,
+     so that is what this does: a recessed band, a 2px rule in a darker tone
+     than the row hairlines, and no letterspacing. Sentence case at 600, not
+     800 - a heading that shouts competes with the names it sits above. */
+  background:#eef2f7;color:#334155;padding:12px 14px;
+  font-size:12.5px;font-weight:600;letter-spacing:0;text-transform:none;
+  text-align:left;border:0;border-bottom:2px solid #9fb0c4;
+  white-space:nowrap;position:relative;vertical-align:bottom
+}
+/* The columns group into three kinds of question - who is this, how do I reach
+   them, what state is the record in. They USED to be separated by a hairline at
+   each boundary (Contact and Email), letting the eye read a row in three passes.
+   Removed at the office's request: the boundaries read as a grid, and a
+   registrar scanning for one name saw cells first and a roster second. A
+   vertical rule inside a row is a cell boundary, not a separation of meaning.
+
+   The .ml-col-start class stays on the th/td. Removing it from the markup would
+   mean touching the header, the body and the column-alignment regression test
+   for no visible gain, and it is a hook the print path may want back. It now
+   carries no rule at all, which is what "no boundaries" means. */
+/* The sort arrow lives in the cell's right padding, not inline before the
+   label. Inline it pushed "Name" two characters right of every other label, so
+   the column of headings stopped aligning with the column of values - and it
+   was the only tell that three of the nine columns were sortable at all.
+   In the margin it marks the affordance without stealing any text width. */
+/* Sort state is carried by the RULE under the heading, not by tinting the cell.
+   Filling a cell with blue on hover meant a column lit up as a large flat block
+   the moment the pointer crossed it, which fought the ruled look of the band and
+   made the header the loudest thing in the table. A 3px accent on the bottom
+   edge reads as "this is the active column" and takes no vertical space. */
+body[data-page="masterlist"] .masterlist-table th[data-sort]{cursor:pointer;user-select:none}
+body[data-page="masterlist"] .masterlist-table th[data-sort] i{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  font-size:9px;color:#a8b6c6;opacity:0;transition:opacity .12s ease
+}
+body[data-page="masterlist"] .masterlist-table th[data-sort]:hover{color:#1d4ed8}
+body[data-page="masterlist"] .masterlist-table th[data-sort]:hover i,
+body[data-page="masterlist"] .masterlist-table th[data-sort][aria-sort] i{opacity:1}
+body[data-page="masterlist"] .masterlist-table th[aria-sort="ascending"],
+body[data-page="masterlist"] .masterlist-table th[aria-sort="descending"]{
+  color:#1d4ed8;box-shadow:inset 0 -3px 0 #2563eb
+}
+body[data-page="masterlist"] .masterlist-table th[aria-sort] i{color:#2563eb}
+body[data-page="masterlist"] .masterlist-table th[data-sort]:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+body[data-page="masterlist"] .masterlist-table td{padding:13px 14px;border-bottom:1px solid #eef2f6;color:#1e293b;vertical-align:middle}
+/* Row rhythm. A hairline rather than a full border: the row reads as one line
+   of type, and a full rule under every row would fight the name's caps. */
+body[data-page="masterlist"] .masterlist-table tbody tr:nth-child(even){background:#fbfcfe}
 body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff!important}
+body[data-page="masterlist"] .masterlist-table tbody tr:last-child td{border-bottom:0}
+/* Tokens. Monospaced digits so a column of IDs and year numbers aligns
+   vertically without the reader having to track it. Set at 13.5px, not the
+   11.5px the table used to run: monospace carries a small apparent size at any
+   given point size, so shrinking it again on top of a small table left the
+   student ids - the thing a registrar reads to call a student up - as the
+   smallest text on the page. It now matches the body size; the monospace face
+   being narrower means a token takes no more room than it did at 11.5px in a
+   15px-interleaved row, because the tracks were measured against it. */
+.ml-tok{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-variant-numeric:tabular-nums;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ml-rowno{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13.5px;font-variant-numeric:tabular-nums;color:#94a3b8}
+/* The name is the anchor, and it is set in caps. Three reasons, in order:
+
+   1. A roster is a register, not a contact list. Filipino school and office
+      records set names in caps for exactly this reason - it is the convention
+      of the document, and a name that breaks it reads as informally typed.
+   2. It gives the one column a texture nothing else has, so a clerk can find
+      their place in a fifty-row list by shape alone. Every other column is
+      short tokens of similar weight; this is the only block of unbroken type.
+   3. Caps let the SURNAME carry the weight instead of the size. Both halves
+      stay at 15px - the earlier version set the given names at 11.5px grey
+      under a caps surname, and that read as a headline over a caption, which
+      is not what a name is.
+
+   The caps are applied in CSS, not baked into the stored value. Uppercasing in
+   PHP would write AQUINO into the DOM text, and then a search for "Aquino" - the
+   name as it is actually written in the database and on every form the student
+   signs - would find nobody, because the box matches the rendered text. CSS
+   text-transform is presentation: the markup still carries "Aquino".
+
+   The name wraps rather than truncating. Every row must show the whole name. */
+.ml-name{display:block;min-width:0;text-decoration:none}
+.ml-name .sur{font-weight:700;color:#0f172a}
+.ml-name .giv{font-weight:400;color:#1e293b;overflow-wrap:anywhere}
+.ml-name .sur,.ml-name .giv{text-transform:uppercase;letter-spacing:.015em}
+.ml-name:hover .sur{color:#1d4ed8;text-decoration:underline}
+.ml-name:hover .giv{color:#1d4ed8}
+.ml-name:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:3px}
+/* Gender. A short word in the ordinary body face, not a pill: it is a
+   two-valued attribute, and a badge for every row would make the column shout
+   about the least interesting thing in the table. The muted tone for a blank
+   value matches "N/A" elsewhere rather than inventing a colour. */
+.ml-gender{color:#1e293b}
+.ml-gender:empty{color:#94a3b8}
+/* RFID. The card number is an identifier, so it is set as one - monospace, on
+   the same footing as the student id beside it. The tone is carried by the
+   state, not by the digits: a live card is plain type and only a card in
+   trouble is coloured, because most of a roster is live cards and colouring
+   those would hide the exceptions. "Not issued" is worded rather than blank,
+   since a blank cell in an id column reads as a fault. */
+.ml-card{font-family:inherit}
+.ml-card-none{font-style:italic;color:#94a3b8}
+.ml-card-lost,.ml-card-expired,.ml-card-archived{color:#b91c1c}
+.ml-card-ok{color:#334155}
+/* Data quality. Removed from this table: the score was a single number standing
+   in for a dozen fields, and the reader could not act on it from here. The two
+   fields it was really flagging - contact number and birth date - are both
+   columns now, so the gap it warned about is visible directly. The Students
+   roster still carries the score, where the modal to fix a record sits next to
+   it. */
+/* The program reads as its acronym. The full name is a whole line of itself
+   at column width and is already on the block heading above, so it rides
+   along in the title attribute instead. */
+.ml-course{display:inline-block;padding:3px 10px;border-radius:6px;background:#e8effd;color:#1d4ed8;font-size:14px;font-weight:800;letter-spacing:.05em}
+/* Status. Four tones, all quiet: a roster is not an alert dashboard, and a
+   column of saturated pills would out-shout the names it sits beside. "Not
+   recorded" is deliberately greyed and worded, not blanked - an empty pill
+   reads as a rendering failure, which is the one thing it must not do. */
+.ml-status{display:inline-block;padding:3px 10px;border-radius:6px;font-size:14px;font-weight:700;letter-spacing:.03em;white-space:nowrap}
+.ml-status-good{background:#e7f6ec;color:#15803d}
+.ml-status-watch{background:#fef3c7;color:#b45309}
+.ml-status-plain{background:#eef2f6;color:#475569}
+/* Not recorded is real information - "no status on file" - not decoration, so it
+   is worded and toned like the other three rather than faded to the point where
+   it reads as a smudge beside text that is now 15px. */
+.ml-status-unknown{background:transparent;color:#64748b;font-style:italic;font-weight:600;padding-left:0}
 /* The block heading. A block is a program-year cohort, so the heading names
-   only that - the section code is the receiving department's to write, and
-   putting it in the heading would claim a section that does not exist yet. */
-.ml-block-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 16px;background:#f8faff;border-bottom:1px solid #e5e7eb}
-.ml-block-head h2{display:flex;align-items:center;gap:9px;margin:0;font-size:15px;font-weight:800;letter-spacing:-.01em;color:#172554}
-.ml-block-head h2 i{color:#2563eb}
-.ml-block-acronym{display:inline-block;padding:2px 8px;border-radius:7px;background:#1d4ed8;color:#fff;font-size:11.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
-/* The Section Code column is a form field, not a value. It is drawn as an
-   empty ruled box: visibly writable, and clearly holding nothing yet. The
-   dashed rule says "to be filled in" - a solid one would read as data. */
-.ml-section-slot{width:118px;min-width:118px}
-.ml-section-slot span{display:block;min-height:20px;padding:2px 0 3px;border-bottom:1px dashed #cbd5e1}
-/* "Table 2 of 2" — only shown when a block runs past the cap and starts a new
-   list. Amber so it reads as a continuation of the block above, not as a
-   heading in its own right. */
-.ml-table-tag{display:flex;align-items:center;gap:8px;padding:7px 13px;background:#fefce8;border-bottom:1px solid #fde68a;color:#854d0e;font-size:11.5px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
-.ml-table-tag i{color:#d97706}
-.ml-table-tag span{font-weight:600;letter-spacing:0;text-transform:none;color:#a16207}
+   only that. It carries no section: the code is Class Scheduling's to assign,
+   and putting one here would claim a section that does not exist yet. */
+/* The block heading names a cohort: which program, which year, which term, how
+   many. That is a filing label, not a headline, so it is built like one.
+
+   The four facts are not peers. The PROGRAM is what the sheet is, so it leads
+   and is the largest thing here. Year and term define the cohort inside that
+   program, so they sit with it. The school year and the count are the frame
+   around the cohort - true of it, not part of its name - so they drop to a
+   second line in a lighter register. Setting them all at one weight and one
+   size, as a single run of chips, made the heading read as four unrelated
+   labels and gave the reader no way to tell which part names the cohort.
+
+   A 3px accent bar at the left, running the full height, keys the heading to
+   the table directly beneath it. It replaces the users icon, which was the same
+   glyph on every block and so told the reader nothing.
+   .ml-block-head is a flex row, so the bar is a ::before rather than an element
+   of its own - one less node in the markup for a decorative rule. */
+.ml-block-head{
+  display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;
+  padding:14px 18px 13px;background:#f7f9fc;border-bottom:1px solid #dbe3ee;
+  position:relative
+}
+.ml-block-head::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:linear-gradient(180deg,#2563eb,#1e40af)
+}
+.ml-block-id{min-width:0;flex:1 1 320px}
+.ml-block-lead{
+  display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  margin:0;font-size:19px;font-weight:800;letter-spacing:-.015em;line-height:1.2
+}
+/* The acronym leads. It is the one token a registrar scans for, and the full
+   program name is a whole line of itself at this size - it rides along in the
+   h2's title attribute, which is also what the printed sheet reads. */
+.ml-block-acronym{color:#0f172a}
+.ml-block-cohort{font-size:15px;font-weight:700;color:#1d4ed8;letter-spacing:0}
+/* The frame: school year and count, in the body's own grey. A count is a fact
+   about the block, not its name, so it is the quietest thing in the heading. */
+.ml-block-meta{
+  display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+  margin-top:4px;font-size:13px;font-weight:500;color:#64748b
+}
+.ml-block-sy{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12.5px;letter-spacing:-.01em}
+.ml-block-meta-sep{color:#c3ced9}
+.ml-block-count{font-variant-numeric:tabular-nums;font-weight:700;color:#475569}
+.ml-block-count-over{color:#b45309}
+/* Narrow: the lead wraps rather than shrinking, so the cohort name stays the
+   largest text on the line down to a phone. */
+@media(max-width:640px){
+  .ml-block-lead{font-size:17px}
+  .ml-block-cohort{font-size:14px}
+}
+/* The scroll container. overflow-x:auto ONLY - see the note at the div: adding
+   `overflow: hidden` after it to round the corners was silently disabling the
+   scroll and clipping the right-hand columns. clip-path rounds without
+   touching overflow. */
+.ml-table-scroll{margin-bottom:10px;overflow-x:auto;clip-path:inset(0 round 12px);-webkit-overflow-scrolling:touch}
+/* "Table 2 of 2" — shown only when a block runs past the cap and starts a new
+   list. A continuation of the block above, not a heading in its own right, so it
+   is quiet: white, a hairline, and the same small grey as the count. It was an
+   amber band on its own row, and once the block heading below it was given a
+   real hierarchy that band became the loudest thing in the block - a clerk's
+   eye went to "TABLE 1 OF 2" before it went to the cohort the table belongs to.
+   Amber is now reserved for the one thing on this page that IS a warning: a
+   count past the cap. */
+.ml-table-tag{
+  display:flex;align-items:center;gap:8px;padding:6px 18px;
+  background:#fbfcfe;border-bottom:1px solid #e8edf3;color:#64748b;
+  font-size:12.5px;font-weight:600;letter-spacing:0;text-transform:none
+}
+.ml-table-tag i{color:#94a3b8;font-size:11px}
+.ml-table-tag span{color:#475569;font-weight:700;font-variant-numeric:tabular-nums}
 @media(max-width:640px){.masterlist-header{padding:21px 18px}.masterlist-header h1{font-size:25px}.masterlist-actionbar{flex-direction:column}.masterlist-action-group{width:100%}.masterlist-action-buttons .btn{flex:1 1 100%;justify-content:center}.masterlist-toolbar{align-items:stretch}.masterlist-search{flex-basis:100%}.masterlist-ai,.masterlist-filter-btn{justify-content:center}}
+/* Narrow widths. The fixed tracks add up to more than a phone can show, and
+   a fixed-layout table squeezed below that does not reflow - it crushes the
+   one flexible track, which is the name, down to a single letter. So the table
+   is given a floor and the wrapper's existing overflow-x:auto takes over.
+
+   Dropping the narrow columns instead was tried and rejected: hiding a <col>
+   is not reliably supported, and hiding a <th> under table-layout:fixed leaves
+   the colgroup and the header row disagreeing about how many columns exist.
+   The parent already scrolls; a horizontally scrolling data table is a
+   well-understood affordance and it keeps every column readable, which a
+   silently hidden one does not. */
+body[data-page="masterlist"] .masterlist-table{min-width:1390px}
+@media(prefers-reduced-motion:reduce){body[data-page="masterlist"] .masterlist-table tbody tr{transition:none}}
 </style>
 
 <main class="main">
@@ -236,7 +486,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
         <div>
             <div class="masterlist-kicker"><i class="fas fa-table-list"></i> Registrar directory</div>
             <h1>Masterlist</h1>
-            <p>Search, filter, and send the full student list. Section codes are assigned by the department that receives this list.</p>
+            <p>Search, filter, and send the full student list. Section codes and advisers belong to other departments, so they are not recorded here.</p>
         </div>
     </header>
 
@@ -336,25 +586,32 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                          It names no section, because none exists yet - the
                          receiving department writes those. -->
                     <div class="ml-block-head">
-                        <h2 title="<?= htmlspecialchars(($block['course'] !== '' ? $block['course'] : 'No program recorded')
+                        <div class="ml-block-id">
+                        <h2 class="ml-block-lead" title="<?= htmlspecialchars(($block['course'] !== '' ? $block['course'] : 'No program recorded')
                                     . ($block['year_level'] !== '' ? ' — Year ' . $block['year_level'] : '')
                                     . ($block['semester'] !== '' ? ' — ' . $block['semester'] . ' Semester' : '')
                                     . ($block['school_year'] !== '' ? ' (' . $block['school_year'] . ')' : '')) ?>">
-                            <i class="fas fa-users"></i>
                             <span class="ml-block-acronym"><?= htmlspecialchars($block['acronym'] !== '' ? $block['acronym'] : 'N/A') ?></span>
-                            <?= htmlspecialchars('Year ' . ($block['year_level'] !== '' ? $block['year_level'] : '—')) ?>
-                            <?php if ($block['semester'] !== ''): ?>
-                                <span class="ml-block-term"><?= htmlspecialchars($block['semester']) ?> Sem</span>
-                            <?php endif; ?>
+                            <span class="ml-block-cohort"><?= htmlspecialchars('Year ' . ($block['year_level'] !== '' ? $block['year_level'] : '—')) ?><?php if ($block['semester'] !== ''): ?> · <?= htmlspecialchars($block['semester']) ?> sem<?php endif; ?></span>
                         </h2>
-                        <?php if ($block['school_year'] !== ''): ?>
-                            <span class="ml-block-sy"><?= htmlspecialchars($block['school_year']) ?></span>
-                        <?php endif; ?>
-                        <span class="badge <?= count($block['students']) > (int) $sectionCap ? 'badge-warning' : 'badge-success' ?>" style="font-size: 12px;"><?= count($block['students']) ?> students</span>
-                        <span style="font-size: 12px; color: #475569;"><i class="fas fa-circle-info" style="color: #2563eb; margin-right: 6px;"></i>Section codes are left blank for the receiving department to fill in</span>
+                        <div class="ml-block-meta">
+                            <?php if ($block['school_year'] !== ''): ?>
+                                <span class="ml-block-sy">S.Y. <?= htmlspecialchars($block['school_year']) ?></span>
+                            <?php endif; ?>
+                            <span class="ml-block-meta-sep" aria-hidden="true">·</span>
+                            <span class="ml-block-count<?= count($block['students']) > (int) $sectionCap ? ' ml-block-count-over' : '' ?>"><?= count($block['students']) ?> <?= count($block['students']) === 1 ? 'student' : 'students' ?></span>
+                        </div>
+                        </div>
                     </div>
                     <?php foreach ($block['tables'] as $tbl): ?>
-                    <div style="margin-bottom: 10px; overflow-x: auto; border-radius: 12px; overflow: hidden;">
+                    <!-- The scroll container. `overflow: hidden` was written after
+                         `overflow-x: auto` to square off the corners under the
+                         block's border radius, and it silently won - the
+                         shorthand resets overflow-x back to hidden, so on a
+                         narrow screen the table was clipped with no way to
+                         reach the last columns. `clip-path` rounds the corners
+                         without touching overflow, so the axis keeps working. -->
+                    <div class="ml-table-scroll">
                         <?php if (count($block['tables']) > 1): ?>
                             <!-- A block past 50 becomes several tables. The tag is
                                  what tells "Table 2 of 2" apart from a second
@@ -366,20 +623,47 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                 <span><?= (int) $tbl['n'] ?> students</span>
                             </div>
                         <?php endif; ?>
-                        <table class="masterlist-table" style="width: 100%; border-collapse: collapse; font-size: 13px; word-wrap: break-word; word-break: break-word;">
+                        <!-- Column widths are declared once, here, rather than left
+                             to the browser's auto algorithm. With eight columns
+                             of mixed content, auto sizing gave the name whatever
+                             was left over - which is how "Dela Cruz, Juan Pedro"
+                             ended up broken mid-word in a 200px cell. Fixed
+                             tracks for the tokens, one flexible track for the
+                             name: the name takes the slack, and every other
+                             column keeps the same width on every row of every
+                             table, so the eye can run straight down a column.
+
+                             word-wrap/word-break: break-word is deliberately NOT
+                             set on this table. It was what forced the mid-word
+                             breaks; the name cell truncates with an ellipsis
+                             instead, and carries the full name in its title. -->
+                        <table class="masterlist-table">
+                            <colgroup>
+                                <col class="c-pick">
+                                <col class="c-no">
+                                <col class="c-num">
+                                <col class="c-name">
+                                <col class="c-gender">
+                                <col class="c-contact">
+                                <col class="c-course">
+                                <col class="c-bday">
+                                <col class="c-status">
+                                <col class="c-email">
+                                <col class="c-rfid">
+                            </colgroup>
                             <thead>
-                                <tr style="background: #1a2d4a; color: white;">
-                                    <th style="padding: 10px 12px; text-align: center; width: 34px;"><input type="checkbox" class="block-select-all" style="width:15px;height:15px;accent-color:#2563eb;" title="Select all"></th>
-                                    <th style="padding: 10px 12px; text-align: left; white-space: nowrap;">#</th>
-                                    <th data-field="student_number" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="student_number"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Student ID</th>
-                                    <th data-field="name" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="name"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Name</th>
-                                    <th data-field="course" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="course"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Course</th>
-                                    <th data-field="year_level" style="padding: 10px 12px; text-align: left; cursor:pointer; white-space: nowrap;" data-sort="year_level"><i class="fas fa-sort" style="font-size:10px;margin-right:4px;"></i>Year</th>
-                                    <th data-field="school_year" style="padding: 10px 12px; text-align: left; white-space: nowrap;">S.Y.</th>
-                                    <th data-field="semester" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Sem</th>
-                                    <th data-field="section" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Section Code</th>
-                                    <th data-field="adviser" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Adviser</th>
-                                    <th data-field="status" style="padding: 10px 12px; text-align: left; white-space: nowrap;">Status</th>
+                                <tr>
+                                    <th style="text-align:center;"><input type="checkbox" class="block-select-all" style="width:15px;height:15px;accent-color:#2563eb;" title="Select all"></th>
+                                    <th>#</th>
+                                    <th data-field="student_number" data-sort="student_number"><i class="fas fa-sort"></i>Student ID</th>
+                                    <th data-field="name" data-sort="name"><i class="fas fa-sort"></i>Name</th>
+                                    <th data-field="gender">Gender</th>
+                                    <th data-field="contact" class="ml-col-start">Contact</th>
+                                    <th data-field="course" data-sort="course"><i class="fas fa-sort"></i>Course</th>
+                                    <th data-field="birthdate">Birthdate</th>
+                                    <th data-field="status">Status</th>
+                                    <th data-field="email" class="ml-col-start">Email</th>
+                                    <th data-field="rfid">RFID</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -388,23 +672,115 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
                                      // into "Table 2 of 2" would imply the two tables
                                      // are fragments of one numbered sheet, when
                                      // they are two separate lists. ?>
-                                <?php $i = 1; foreach ($tbl['rows'] as $student): ?>
-                                    <tr style="border-bottom: 1px solid #e2e8f0;" data-student-id="<?= (int)$student['id'] ?>">
-                                        <td style="padding: 8px 12px; text-align: center;"><input type="checkbox" class="student-cb" value="<?= (int)$student['id'] ?>" style="width:15px;height:15px;accent-color:#2563eb;"></td>
-                                        <td data-field="rowno" style="padding: 8px 12px; white-space: nowrap;"><?= $i++ ?></td>
-                                        <td data-field="student_number" style="padding: 8px 12px; font-weight:600; font-size:12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['student_number']) ?>"><?= htmlspecialchars($student['student_number']) ?></td>
-                                        <td data-field="name" style="padding: 8px 12px; max-width: 200px; white-space: normal; word-break: break-word;"><a href="javascript:void(0)" onclick="viewStudent(<?= (int)$student['id'] ?>)" style="color:#2563eb;font-weight:600;text-decoration:none;cursor:pointer;"><?= htmlspecialchars($student['last_name']) ?>, <?= htmlspecialchars($student['first_name']) ?></a></td>
-                                        <td data-field="course" style="padding: 8px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['course'] ?? 'N/A') ?>"><?= htmlspecialchars($student['course'] ?? 'N/A') ?></td>
-                                        <td data-field="year_level" style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['year_level'] ?? 'N/A') ?></td>
-                                        <td data-field="school_year" style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['school_year'] ?? '—') ?></td>
-                                        <td data-field="semester" style="padding: 8px 12px; white-space: nowrap;"><?= htmlspecialchars($student['semester'] ?? '—') ?></td>
-                                        <td data-field="section" class="ml-section-slot" style="padding: 8px 12px; white-space: nowrap;" title="Assigned by the receiving department"><?= htmlspecialchars($student['section'] ?? '') ?></td>
-                                        <td data-field="adviser" style="padding: 8px 12px; max-width: 150px; white-space: normal; word-break: break-word; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($student['adviser_name'] ?? '—') ?>"><?= htmlspecialchars($student['adviser_name'] ?? '—') ?></td>
-                                        <td data-field="status" style="padding: 8px 12px; white-space: nowrap;">
-                                            <span class="badge badge-<?= in_array($student['status'], ['active', 'enrolled'], true) ? 'success' : ($student['status'] === 'at-risk' || $student['status'] === 'probation' ? 'warning' : 'neutral') ?>">
-                                                <?= ucfirst($student['status'] ?? 'Active') ?>
-                                            </span>
-                                        </td>
+                                <?php $i = 1; foreach ($tbl['rows'] as $student):
+                                    // The block heading already spells the program out in
+                                    // full, so the column carries the acronym. Computed
+                                    // per row rather than per block because two blocks
+                                    // can share a heading only by accident, and a
+                                    // student whose stored course is blank still has to
+                                    // print N/A rather than inherit its neighbour's.
+                                    $acronym = courseAcronym((string) ($student['course'] ?? ''));
+
+                                    // Status is a vocabulary, not free text, and 42 of
+                                    // the seeded rows carry an EMPTY string rather
+                                    // than null - so `?? 'Active'` never fired and the
+                                    // cell rendered a blank grey pill. ucfirst('') is
+                                    // '', so the badge said nothing at all. An empty
+                                    // status means "not recorded", which is a real
+                                    // state on this list and gets its own word; it
+                                    // must never be confused with enrolled.
+                                    $statusRaw = trim((string) ($student['status'] ?? ''));
+                                    if ($statusRaw === '') {
+                                        $statusLabel = 'Not recorded';
+                                        $statusTone  = 'unknown';
+                                    } elseif (in_array($statusRaw, ['active', 'enrolled'], true)) {
+                                        $statusLabel = ucfirst($statusRaw);
+                                        $statusTone  = 'good';
+                                    } elseif (in_array($statusRaw, ['at-risk', 'probation'], true)) {
+                                        $statusLabel = ucfirst($statusRaw);
+                                        $statusTone  = 'watch';
+                                    } else {
+                                        $statusLabel = ucfirst($statusRaw);
+                                        $statusTone  = 'plain';
+                                    }
+
+                                    // Gender. An empty value is "not recorded",
+                                    // not "unknown" and not a guess - the column
+                                    // says what is on file.
+                                    $gender = trim((string) ($student['gender'] ?? ''));
+
+                                    // RFID. Most students on a roster have no card
+                                    // yet, and a blank cell there would read as a
+                                    // rendering fault. "Not issued" is the fact.
+                                    $card   = $rfidMap[(int) $student['id']] ?? null;
+                                    $cardUid   = trim((string) ($card['card_uid'] ?? ''));
+                                    $cardState = trim((string) ($card['status']  ?? ''));
+                                    if ($cardUid === '') {
+                                        $cardLabel = 'Not issued';
+                                        $cardTone  = 'none';
+                                    } else {
+                                        $cardLabel = $cardUid;
+                                        // Only a card in trouble is toned. An
+                                        // active card is plain type: the column
+                                        // is mostly live cards, and colouring the
+                                        // healthy ones would make the exceptions
+                                        // invisible.
+                                        $cardTone = in_array($cardState, ['lost', 'expired', 'archived'], true) ? $cardState : 'ok';
+                                    }
+                                    // Contact. The block heading says which year
+                                    // and term these students belong to, so Year
+                                    // and S.Y. were saying it a second time, once
+                                    // per row. The phone is what the clerk
+                                    // actually needs off this list - it is how a
+                                    // student gets called about the section they
+                                    // were placed in - and it is one of the fields
+                                    // the quality score is docking points for.
+                                    $phone = studentQualityNormalizePhone((string) ($student['contact_number'] ?? ''));
+
+                                    // Email. Replaces the LRN column. LRN is the
+                                    // DepEd identifier that travels with a student
+                                    // between schools, and it is the better field
+                                    // in principle - but every current student has
+                                    // students.lrn NULL, so the column would have
+                                    // read N/A down the entire list. Email is
+                                    // populated on the records that exist, and it
+                                    // is what an office actually sends to: a
+                                    // section notice, a schedule change, a
+                                    // documents-request update. A column that is
+                                    // empty for everyone teaches the reader
+                                    // nothing; this one answers "can we reach them
+                                    // in writing".
+                                    $email = trim((string) ($student['email'] ?? ''));
+
+                                    // Birthdate. The heaviest single field in the
+                                    // data-quality weighting, and the one that
+                                    // settles whether a Year level is plausible -
+                                    // a 40-year-old listed as 1st year is an
+                                    // enrolment error, and this is where it shows.
+                                    $bdayRaw = trim((string) ($student['birth_date'] ?? ''));
+                                    $bday    = '';
+                                    if ($bdayRaw !== '' && $bdayRaw !== '0000-00-00') {
+                                        $ts = strtotime($bdayRaw);
+                                        // Format as d M Y so the column is
+                                        // sortable-ish by eye and does not read
+                                        // as a second date field the page
+                                        // invented; YYYY-MM-DD is unambiguous
+                                        // but twice as wide for no gain here.
+                                        $bday = $ts !== false ? date('d M Y', $ts) : '';
+                                    }
+                                ?>
+                                    <tr data-student-id="<?= (int)$student['id'] ?>">
+                                        <td style="text-align:center;"><input type="checkbox" class="student-cb" value="<?= (int)$student['id'] ?>" style="width:15px;height:15px;accent-color:#2563eb;"></td>
+                                        <td data-field="rowno" class="ml-rowno"><?= $i++ ?></td>
+                                        <td data-field="student_number" class="ml-tok" title="<?= htmlspecialchars($student['student_number']) ?>"><?= htmlspecialchars($student['student_number']) ?></td>
+                                        <td data-field="name"><a class="ml-name" href="javascript:void(0)" onclick="viewStudent(<?= (int)$student['id'] ?>)" title="<?= htmlspecialchars(trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_name'] ?? ''))) ?>"><span class="sur"><?= htmlspecialchars(trim($student['last_name'] ?? '')) ?></span> <span class="giv"><?= htmlspecialchars(trim(($student['first_name'] ?? '') . ' ' . ($student['middle_name'] ?? ''))) ?></span></a></td>
+                                        <td data-field="gender" class="ml-gender"><?= htmlspecialchars($gender !== '' ? $gender : 'N/A') ?></td>
+                                        <td data-field="contact" class="ml-tok ml-col-start" title="<?= htmlspecialchars($phone !== '' ? $phone : 'No contact number on file') ?>"><?= htmlspecialchars($phone !== '' ? $phone : 'N/A') ?></td>
+                                        <td data-field="course" title="<?= htmlspecialchars($student['course'] ?? 'No program recorded') ?>"><span class="ml-course"><?= htmlspecialchars($acronym !== '' ? $acronym : 'N/A') ?></span></td>
+                                        <td data-field="birthdate" class="ml-tok" title="<?= htmlspecialchars($bdayRaw !== '' && $bdayRaw !== '0000-00-00' ? 'Born ' . $bdayRaw : 'No birth date on file') ?>"><?= htmlspecialchars($bday !== '' ? $bday : 'N/A') ?></td>
+                                        <td data-field="status"><span class="ml-status ml-status-<?= $statusTone ?>"><?= htmlspecialchars($statusLabel) ?></span></td>
+                                        <td data-field="email" class="ml-email ml-col-start" title="<?= htmlspecialchars($email !== '' ? $email : 'No email on file') ?>"><?= htmlspecialchars($email !== '' ? $email : 'N/A') ?></td>
+                                        <td data-field="rfid" class="ml-tok" title="<?= htmlspecialchars($cardUid !== '' ? 'Card ' . $cardUid . ' — ' . ucfirst($cardState) : 'No card issued to this student') ?>"><span class="ml-card ml-card-<?= $cardTone ?>"><?= htmlspecialchars($cardLabel) ?></span></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -420,7 +796,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:hover{background:#eff6ff
     <div class="card" style="margin-top: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
         <div class="table-footer">
             <div class="info-text">
-                Total: <strong><?= $totalStudents ?></strong> student(s) in <strong><?= $totalBlocks ?></strong> program-year block(s), listed in <strong><?= $tableCount ?></strong> list(s) of up to <?= (int) $sectionCap ?> — section codes are assigned by the receiving department
+                Total: <strong><?= $totalStudents ?></strong> student(s) in <strong><?= $totalBlocks ?></strong> program-year block(s), listed in <strong><?= $tableCount ?></strong> list(s) of up to <?= (int) $sectionCap ?>
             </div>
         </div>
     </div>
@@ -566,7 +942,17 @@ searchInput?.addEventListener('input', function () {
     const q = this.value.trim().toLowerCase();
     let visible = 0;
     document.querySelectorAll('#masterlistContent .masterlist-table tbody tr').forEach(row => {
-        const text = row.textContent.toLowerCase();
+        // row.textContent reads the surname and given names with the markup
+        // between them, so a search for "Cruz Juan" or "Cruz, Juan" would
+        // silently find nobody. The whitespace is collapsed first, so the box
+        // matches the name as it is written on the page.
+        const parts = row.querySelectorAll('.ml-name > span');
+        let text = row.textContent;
+        if (parts.length) {
+            const named = Array.from(parts).map(p => p.textContent.trim()).filter(Boolean).join(' ');
+            text = text.replace(parts[0].parentElement.textContent, named);
+        }
+        text = text.replace(/\s+/g, ' ').toLowerCase();
         const show = !q || text.includes(q);
         row.style.display = show ? '' : 'none';
         if (show) visible++;
@@ -590,6 +976,19 @@ document.querySelectorAll('#masterlistContent .masterlist-table th[data-sort]').
         const rows = Array.from(tbody.querySelectorAll('tr'));
         const dir = this._dir === 'asc' ? 'desc' : 'asc';
         this._dir = dir;
+        // aria-sort is what the new header CSS keys off to keep the arrow
+        // visible on the sorted column, and it is the only thing that tells a
+        // screen reader which way the list went. Without it the arrow showed on
+        // hover and vanished the moment the pointer left - so a user who sorted
+        // and looked away had no way to tell the list was no longer in its
+        // original order.
+        this.setAttribute('aria-sort', dir === 'asc' ? 'ascending' : 'descending');
+        // Only one column is sorted at a time, so the others give up the state.
+        this.closest('table').querySelectorAll('th[data-sort]').forEach(other => {
+            if (other !== this) other.removeAttribute('aria-sort');
+        });
+        const arrow = this.querySelector('i');
+        if (arrow) arrow.className = 'fas ' + (dir === 'asc' ? 'fa-sort-up' : 'fa-sort-down');
         rows.forEach(r => r._key = rowSortKey(r, key));
         rows.sort((a, b) => (a._key < b._key ? -1 : a._key > b._key ? 1 : 0) * (dir === 'asc' ? 1 : -1));
         rows.forEach(r => tbody.appendChild(r));
@@ -598,10 +997,18 @@ document.querySelectorAll('#masterlistContent .masterlist-table th[data-sort]').
     });
 });
 function rowSortKey(row, key) {
-    const cells = row.querySelectorAll('td');
-    const idx = { name: 3, student_number: 2, course: 4, year_level: 5 }[key] ?? 2;
-    const v = cells[idx] ? cells[idx].textContent.trim() : '';
+    // Addressed by data-field, not by cell position. The positional map this
+    // replaced broke the moment a column was inserted, and it had no way to
+    // notice: sorting by the wrong letter is invisible until someone reads a
+    // roster in the wrong order. Same rule the CSV and print sheet follow.
+    const c = row.querySelector('[data-field="' + key + '"]');
+    const v = c ? c.textContent.trim() : '';
     if (key === 'year_level') return String(parseInt(v) || 0).padStart(3, '0');
+    if (key === 'course') {
+        // The cell shows the acronym, so this sorts programs by the label the
+        // reader actually sees rather than by a hidden full name.
+        return v.toLowerCase();
+    }
     return v.toLowerCase();
 }
 
@@ -709,24 +1116,46 @@ async function bulkArchive() {
 const FALLBACK_FIELDS = [
     ['student_number', 'Student ID'],
     ['name',           'Name'],
+    ['gender',         'Gender'],
+    ['contact',        'Contact'],
     ['course',         'Course'],
-    ['year_level',     'Year'],
-    ['school_year',    'S.Y.'],
-    ['semester',       'Semester'],
-    ['section',        'Section Code'],
-    ['adviser',        'Adviser'],
+    ['birthdate',      'Birthdate'],
     ['status',         'Status'],
+    ['email',          'Email'],
+    ['rfid',           'RFID'],
 ];
 
 function exportFields() {
-    const ths = document.querySelectorAll(
-        '#masterlistContent .masterlist-table thead th[data-field]'
-    );
+    // Only the FIRST table's header. The blocks are separate tables, so
+    // querySelectorAll returned one set of <th> per block and the CSV came out
+    // with the same columns repeated N times - 28 columns for 4 blocks, with
+    // every row's value written four times over. A block is a display grouping,
+    // not a set of extra fields, and the columns are identical across them by
+    // construction.
+    //
+    // Scoped to a single table via querySelector, not :first-of-type: each
+    // table sits alone inside its own wrapper div, so every one of them is a
+    // first-of-type and that selector would match all of them, changing nothing.
+    const first = document.querySelector('#masterlistContent .masterlist-table');
+    if (!first) return FALLBACK_FIELDS;
+    const ths = first.querySelectorAll('thead th[data-field]');
     if (!ths.length) return FALLBACK_FIELDS;
 
     const out = [];
     ths.forEach(th => {
-        const label = th.textContent.replace(/\s+/g, ' ').trim();
+        // A header may carry a <small> naming the owning department. That is
+        // screen furniture explaining the N/A beneath it - it must not end up
+        // glued into the CSV header as "Section CodeClass Scheduling", where
+        // there is no column under it to explain. data-export is the override;
+        // without one, the <small> subtree is stripped.
+        const label = (th.dataset.export !== undefined
+            ? th.dataset.export
+            : (() => {
+                const c = th.cloneNode(true);
+                c.querySelectorAll('small').forEach(s => s.remove());
+                return c.textContent;
+            })()
+        ).replace(/\s+/g, ' ').trim();
         if (label === '') return;           // a header with no words carries nothing
         out.push([th.dataset.field, label]);
     });
@@ -735,7 +1164,21 @@ function exportFields() {
 
 function cellText(row, field) {
     const c = row.querySelector('[data-field="' + field + '"]');
-    return c ? c.textContent.trim() : '';
+    if (!c) return '';
+    // The Name cell holds a .ml-name element with two stacked children
+    // (surname over given names), so its textContent has no whitespace between
+    // them and would export as "DELA CRUZJUAN PEDRO". The children are joined
+    // with a space: in the file the name stays on one line, separated.
+    const holder = c.querySelector('.ml-name') || c;
+    // The name is already one run of text with a real space between the spans,
+    // so the two parts are collapsed on any stray whitespace rather than joined
+    // with another space - otherwise the CSV ships "AQUINO  Ana" and the search
+    // for a two-part name misses.
+    const blocks = holder.querySelectorAll(':scope > span');
+    if (blocks.length) {
+        return Array.from(blocks).map(b => b.textContent.trim()).filter(Boolean).join(' ');
+    }
+    return holder.textContent.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -853,9 +1296,8 @@ function printRows(rows) {
     w.document.write('table { width:100%; border-collapse:collapse; margin-bottom:6px; }');
     w.document.write('th,td { padding:5px 7px; border:1px solid #999; text-align:left; font-size:10px; }');
     w.document.write('th { background:#eef2f7; color:#0f172a; font-weight:700; }');
-    // The Section Code cell is printed as an empty ruled box, the same as on
-    // screen: the department fills it in by hand on the printed sheet.
-    w.document.write('td.code { width:90px; } td.code span { display:block; height:13px; border-bottom:1px solid #666; }');
+    w.document.write('p.scope { margin:4px 0 12px; font-size:9px; color:#475569; }');
+    w.document.write('p.scope em { color:#64748b; }');
     w.document.write('.sig { display:flex; justify-content:space-between; margin-top:26px; padding-top:6px; }');
     w.document.write('.sig .box { text-align:center; width:44%; }');
     w.document.write('.sig .line { border-top:1px solid #0f172a; margin-top:28px; padding-top:4px; font-size:10px; }');
@@ -871,9 +1313,17 @@ function printRows(rows) {
         // student, which both lost the grouping and pulled the wrong cells:
         // t(6)/t(7) are S.Y. and Semester, not section and gender, so the old
         // headings printed a school year where a section belonged.
+        // Names each printed table after its cohort. It reads the heading's
+        // `title` first, because that holds the full program name - the screen
+        // heading is deliberately compact ("BSIT Year 1 · 1st sem") and that
+        // compact form is what used to print, leaving the full course name off
+        // the sheet. title falls back to the h2 text so a heading without one
+        // still prints something.
         const blockTitleOf = block => {
             const h = block && block.querySelector('.ml-block-head h2');
-            return h ? h.textContent.replace(/\s+/g, ' ').trim() : '';
+            if (!h) return '';
+            const full = (h.getAttribute('title') || '').trim();
+            return (full || h.textContent).replace(/\s+/g, ' ').trim();
         };
         // A block past the cap is several tables, and the printed sheet has to
         // break the same way the screen does — otherwise a 91-student block
@@ -900,12 +1350,22 @@ function printRows(rows) {
         groups.forEach((groupRows, title) => {
             w.document.write('<h3>' + title + '</h3>');
             // Deliberately NOT exportFields(). The printed sheet is a
-            // narrower shape than the CSV: it drops S.Y. and Semester
-            // because the sheet's own heading already names the term, and
-            // repeating it on every row of a signed document is noise.
+            // narrower shape than the CSV: it is a signed document, so it
+            // carries only what a receiving office signs off - who, which
+            // program, what state - plus the two things a clerk works from
+            // all day, contact and the two identity fields. Year and Semester are
+            // absent because the sheet's own heading already names them, and
+            // repeating them on every row of a signed document is noise.
+            //
+            // Year was dropped from here at the same time as the column itself.
+            // It is addressed by data-field, so once the cell was gone from the
+            // table cellText() returned an empty string and every printed row
+            // carried a blank Year cell under a header that promised one - a
+            // document that looks like it has a gap in it.
+            //
             // The cell VALUES still come from data-field, so this header
             // cannot drift out of step with the table it prints.
-            w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Course</th><th>Year</th><th>Section Code</th><th>Adviser</th><th>Status</th></tr>');
+            w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Gender</th><th>Contact</th><th>Course</th><th>Birthdate</th><th>Status</th><th>Email</th></tr>');
             // Numbering restarts per printed table, matching the screen: each
             // table is its own list, not a page of a longer numbered run.
             let seq = 0;
@@ -915,14 +1375,18 @@ function printRows(rows) {
                 if (!row.querySelector('[data-field="student_number"]')) return;
                 w.document.write('<tr><td>' + (++seq) + '</td><td>' + cellText(row, 'student_number')
                     + '</td><td>' + cellText(row, 'name')
+                    + '</td><td>' + cellText(row, 'gender')
+                    + '</td><td>' + cellText(row, 'contact')
                     + '</td><td>' + cellText(row, 'course')
-                    + '</td><td>' + cellText(row, 'year_level')
-                    // The Section Code cell prints as an empty ruled box, the
-                    // same as on screen: the department fills it in by hand.
-                    + '</td><td class="code"><span></span></td><td>' + cellText(row, 'adviser')
-                    + '</td><td>' + cellText(row, 'status') + '</td></tr>');
+                    + '</td><td>' + cellText(row, 'birthdate')
+                    + '</td><td>' + cellText(row, 'status')
+                    + '</td><td>' + cellText(row, 'email') + '</td></tr>');
             });
             w.document.write('</table>');
+            // No scope note is printed. It was removed from the screen along with
+            // the columns it explained; leaving it on the printed sheet would put
+            // a paragraph about Section and Adviser onto a page that no longer
+            // mentions either, for a reader who was never going to look for them.
         });
     } else {
         w.document.write('<p>No records to print.</p>');
@@ -1125,10 +1589,13 @@ select.form-control { cursor: pointer !important; }
     border-radius: 12px !important;
     overflow: hidden !important;
 }
-body[data-page="masterlist"] .masterlist-table thead th {
-    background: #f8fafc !important;
-    color: #475569 !important;
-}
+/* The thead colours and the row hover now come from the page's own rule for
+   .masterlist-table th, which is where the sort states live. They were repeated
+   here with !important, which quietly won: the header rendered #f8fafc on
+   #475569 no matter what the main block said, so a redesign of the band could
+   not be seen on screen and only showed up in a print preview. Anything set
+   here has to be a plain override, never !important on a property the main
+   block owns. */
 body[data-page="masterlist"] .masterlist-table tbody tr:hover {
     background: #eff6ff !important;
 }
