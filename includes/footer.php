@@ -34,7 +34,23 @@ $page_scripts = $page_scripts ?? [];
 
     <!-- Page-specific scripts -->
     <?php foreach ($page_scripts as $script): ?>
-        <script src="<?= $APP_ROOT ?>js/<?= $script ?>"></script>
+        <?php
+        // Cache-bust from the file's mtime. Without this, js/queue.js is served
+        // with Cache-Control: max-age=2592000 (30 days) and a browser that
+        // loaded it before a fix keeps running the old code for a month - the
+        // wall displays showed the pre-fix "Network error" long after the fix
+        // was deployed, and the only way through was a manual hard refresh.
+        // Appending the mtime makes each deploy a new URL, so the normal
+        // refresh picks up the change. filemtime() is cached per-request with
+        // static so a page that loads the same file twice only stats it once.
+        static $_scriptMtimeCache = [];
+        $_scriptPath = __DIR__ . '/../js/' . $script;
+        if (!array_key_exists($script, $_scriptMtimeCache)) {
+            $_scriptMtimeCache[$script] = is_file($_scriptPath) ? (int) filemtime($_scriptPath) : 0;
+        }
+        $_scriptVer = $_scriptMtimeCache[$script] > 0 ? '?v=' . $_scriptMtimeCache[$script] : '';
+        ?>
+        <script src="<?= $APP_ROOT ?>js/<?= $script ?><?= $_scriptVer ?>"></script>
     <?php endforeach; ?>
 
     <!-- Custom page scripts -->

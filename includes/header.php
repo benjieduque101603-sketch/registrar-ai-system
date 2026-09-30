@@ -85,5 +85,18 @@ $__csrfToken = htmlspecialchars(csrfToken(), ENT_QUOTES, 'UTF-8');
             <?= $page_styles ?>
         </style>
     <?php endif; ?>
+    <?php
+    // Where the API actually is, told to the client by the server that knows.
+    // The serving console talks to api/queue.php, and js/queue.js must not guess
+    // that path from the URL: the guess (counting slashes) resolves to
+    // /registrar/api/queue.php on a root-mounted host, which 404s. That is why a
+    // ticket issued at the kiosk never appeared on the console - every state
+    // poll failed and the console sat on a stale/empty list. See js/queue.js.
+    //
+    // app_path.php is safe to include here and is deliberately NOT config.php:
+    // it defines no DB constants and opens no connection.
+    require_once __DIR__ . '/../shared/app_path.php';
+    $app_api_base = rtrim(app_url('/api'), '/') . '/';
+    ?>
 </head>
-<body<?= !empty($body_page) ? ' data-page="' . htmlspecialchars($body_page) . '"' : '' ?>>
+<body<?= !empty($body_page) ? ' data-page="' . htmlspecialchars($body_page) . '"' : '' ?> data-api-base="<?= htmlspecialchars($app_api_base, ENT_QUOTES, 'UTF-8') ?>">

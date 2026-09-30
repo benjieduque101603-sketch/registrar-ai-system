@@ -93,6 +93,6 @@ $api_base = rtrim(app_url('/api'), '/') . '/';
 <!-- Hidden RFID capture input: reader types the UID and presses Enter -->
 <input type="text" id="cardInput" class="q-hidden-input" autocomplete="off" />
 
-<script src="<?= $APP_ROOT ?>js/queue.js"></script>
+<script src="<?= $APP_ROOT ?>js/queue.js?v=<?= filemtime(__DIR__ . '/../js/queue.js') ?>"></script>
 </body>
 </html>

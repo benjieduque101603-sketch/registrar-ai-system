@@ -57,6 +57,6 @@ $api_base = rtrim(app_url('/api'), '/') . '/';
 
 </div>
 
-<script src="<?= $APP_ROOT ?>js/queue.js"></script>
+<script src="<?= $APP_ROOT ?>js/queue.js?v=<?= filemtime(__DIR__ . '/../js/queue.js') ?>"></script>
 </body>
 </html>

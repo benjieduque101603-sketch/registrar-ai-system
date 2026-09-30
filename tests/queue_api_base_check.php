@@ -140,7 +140,65 @@ foreach (['queue/monitor.php', 'queue/kiosk.php'] as $rel) {
     check("$rel renders without a fatal", stripos($local, 'Fatal error') === false);
 }
 
-// -- 5. Failures are reportable without server access ----------------------
+// The serving console is the third consumer of js/queue.js and it was the one
+// that was broken. It does not own its <body> - it gets it from
+// includes/header.php - so when data-api-base was introduced on the kiosk and
+// monitor, the console was never given one. With no attribute to read,
+// js/queue.js fell through to the URL-depth fallback, which on a root-mounted
+// host asks for /registrar/api/queue.php. That path does not exist.
+//
+// The symptom was the worst kind: the ticket WAS issued (the kiosk wrote the
+// row and showed a number) but every state poll 404'd, so the console's waiting
+// list stayed empty. The two halves disagreed and the student held a number
+// nobody could see. The two pages above could not catch this, because they
+// always carried the attribute - the defect lived in the page that reused the
+// shared chrome, and only the shared chrome could fix it.
+$header = $read('includes/header.php');
+check('includes/header.php emits data-api-base on <body>',
+    strpos($header, 'data-api-base=') !== false,
+    'pages using the shared header get no API base and fall back to guessing');
+check('includes/header.php computes it with app_url()',
+    strpos($header, "app_url('/api')") !== false);
+check('includes/header.php does not pull in config.php for it',
+    !preg_match('/require_once[^;]*shared\/config\.php/', $header),
+    'config.php opens a mysqli connection at include time');
+
+// The console body must therefore be the one carrying the attribute, and the
+// rendered page must carry the right one at each mount. Rendered, not grepped:
+// the fallback hid a correct-looking source behind a page that 404'd.
+$consoleAbs = $root . '/registrar/queue.php';
+$consoleLocal = renderAs($renderProbe, 'registrar/queue.php', '/registrar-ai-system/registrar/queue.php', $consoleAbs);
+$consoleProd  = renderAs($renderProbe, 'registrar/queue.php', '/registrar/queue.php', $consoleAbs);
+
+check('registrar/queue.php emits the subdirectory API base',
+    strpos($consoleLocal, 'data-api-base="/registrar-ai-system/api/"') !== false,
+    'the console would guess /registrar/api/ and 404');
+check('registrar/queue.php emits the root API base',
+    strpos($consoleProd, 'data-api-base="/api/"') !== false,
+    'the console would guess /registrar/api/ and 404 on the live host');
+check('registrar/queue.php renders without a fatal',
+    stripos($consoleLocal, 'Fatal error') === false,
+    trim((string) preg_replace('/\s+/', ' ', substr(strip_tags($consoleLocal), 0, 200))));
+
+// -- 5b. A fix must not need a hard refresh -------------------------------
+// js/queue.js is served with Cache-Control: max-age=2592000 - thirty days.
+// Without a version on the URL, any browser that loaded it before a fix kept
+// running the old code long after the fix was deployed, which is exactly what
+// happened: the wall displays showed the pre-fix "Network error" and the only
+// way through was Ctrl+Shift+R. A presentation should not depend on the
+// operator knowing that. Every consumer now appends a filemtime, so a changed
+// file is a changed URL and an ordinary refresh is enough.
+$footer = $read('includes/footer.php');
+check('includes/footer.php cache-busts page scripts',
+    strpos($footer, "filemtime") !== false && strpos($footer, "'?v='") !== false,
+    'page scripts are served uncached for 30 days, so JS fixes need a hard refresh');
+foreach (['queue/monitor.php', 'queue/kiosk.php'] as $rel) {
+    check("$rel cache-busts queue.js",
+        preg_match('/js\/queue\.js\?v=/', $read($rel)) === 1,
+        'the public displays are the least accessible to a keyboard, so they need this most');
+}
+
+// -- 6. Failures are reportable without server access ----------------------
 // The person reporting this bug could not reach the server. Five handlers
 // swallowed the error entirely and the rest said "Network error.", so a wrong
 // URL - a fault entirely visible from the client - looked identical to a dead
