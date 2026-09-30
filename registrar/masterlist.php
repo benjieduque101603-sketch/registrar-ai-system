@@ -33,10 +33,12 @@ $filterYear       = isset($_GET['year_level']) ? trim((string) $_GET['year_level
 $filterSchoolYear = isset($_GET['school_year']) ? trim((string) $_GET['school_year']) : '';
 $filterSemester   = isset($_GET['semester']) ? trim((string) $_GET['semester']) : '';
 $filterStatus     = isset($_GET['status']) ? trim((string) $_GET['status']) : '';
+$filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
 
-// Every student belongs on the masterlist. Section codes are written by the
-// department that assigns them, not by the registrar, so a blank section is
-// the normal state here and must never hide a student.
+// Every student belongs on the masterlist. A blank section is the
+// normal state for one nobody has placed yet, so it must never hide
+// a student - that is why the section filter is opt-in and the
+// unassigned count is reported rather than used to prune the list.
 $sql = "SELECT * FROM students WHERE 1=1";
 $params = [];
 if ($filterCourse !== '') {
@@ -59,7 +61,14 @@ if ($filterStatus !== '') {
     $sql .= " AND status = ?";
     $params[] = $filterStatus;
 }
-$sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, last_name ASC, first_name ASC";
+if ($filterSection !== '') {
+    $sql .= " AND TRIM(section) = ?";
+    $params[] = $filterSection;
+}
+// section before last_name: one section's students have to land
+// together in the printed list, since a section is the unit the list
+// is handed off in. Sorting by name first would interleave them.
+$sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, last_name ASC, first_name ASC";
 
 $students = $db->fetchAll($sql, $params);
 
@@ -72,11 +81,9 @@ $advisers = $db->fetchAll("SELECT id, full_name FROM users WHERE role = 'staff' 
 $adviserNames = [];
 foreach ($advisers as $ad) { $adviserNames[(int)$ad['id']] = $ad['full_name']; }
 
-// ─── BLOCKS: course + year level + semester, never section ───
+// ─── BLOCKS: course + year level + school year + semester ────
 // A block is what the registrar can actually vouch for: the program,
-// the year level, and the term they belong to. Section codes are the
-// receiving department's to write, so they are not part of the key - a
-// block is a group to be sectioned, not a section.
+// the year level, and the term they belong to.
 //
 // Semester IS part of the key. Keying on course + year alone put a 1st
 // sem and a 2nd sem cohort of the same program and year into one table,
@@ -85,6 +92,13 @@ foreach ($advisers as $ad) { $adviserNames[(int)$ad['id']] = $ad['full_name']; }
 // signed off as either. The academic year is included for the same
 // reason - a retained 2025-2026 row is a different cohort from a
 // 2026-2027 one, and merging them silently mixes two intakes.
+//
+// Section is deliberately NOT in the key. The code is [year][sem][###]
+// and carries no S.Y. digit, so one program+year+term has ONE section
+// space no matter how many intakes sit in it - splitting the block on
+// section would renumber a single space into several and print "11001"
+// twice. The section shows as a column instead, and a block past the
+// cap still starts a new list further down.
 //
 // The acronym (courseAcronym) leads the heading because the long program
 // name is a whole line of its own at heading size; the full name rides
@@ -109,6 +123,26 @@ foreach ($students as $student) {
     }
     $blocks[$key]['students'][] = $student;
 }
+
+// ─── SECTION ROLL-UP (per block, for the heading and the modals) ──
+// Computed after the blocks exist so a block can say which codes it
+// holds and how full each one is. A code that appears twice inside one
+// block would mean the same section is split across two intakes, so
+// the count is shown but the over-cap tone is reserved for a block
+// that is genuinely over the list size.
+foreach ($blocks as &$block) {
+    $bySection = [];
+    foreach ($block['students'] as $student) {
+        $code = trim((string) ($student['section'] ?? ''));
+        if ($code === '') continue;
+        $bySection[$code] = ($bySection[$code] ?? 0) + 1;
+    }
+    ksort($bySection);
+    $block['section_counts'] = $bySection;
+    $block['sections']       = array_keys($bySection);
+    $block['unassigned']     = count($block['students']) - array_sum($bySection);
+}
+unset($block);
 
 // Order the blocks the way a registrar reads them: by program, then year,
 // then academic year, then term. Semester sorts by the order of the school
@@ -158,6 +192,65 @@ unset($block);
 $totalStudents = count($students);
 $totalBlocks   = count($blocks);
 
+// ─── SECTION TOTALS (for the toolbar readout and the modals) ──
+// Counted across the whole table, not the filtered view: "how many
+// students still need a section" is a fact about the cohort, and it
+// would be wrong to report it as smaller just because a filter is on.
+$sectionStats = $db->fetchOne(
+    "SELECT COUNT(*) AS total,
+            SUM(CASE WHEN section IS NULL OR TRIM(section) = '' THEN 1 ELSE 0 END) AS unassigned,
+            COUNT(DISTINCT NULLIF(TRIM(section), '')) AS section_count
+     FROM students"
+);
+$studentsTotal   = (int) ($sectionStats['total'] ?? 0);
+$unassignedCount = (int) ($sectionStats['unassigned'] ?? 0);
+$sectionTotal    = (int) ($sectionStats['section_count'] ?? 0);
+
+// Per-section roll-up for the Create/Edit modals. Scoped to the
+// year level too, because that is what the code encodes - the same
+// code in two year levels is two different sections.
+$sectionSummaries = $db->fetchAll(
+    "SELECT TRIM(course) AS course, year_level, semester, school_year,
+            TRIM(section) AS section, COUNT(*) AS count
+     FROM students
+     WHERE section IS NOT NULL AND TRIM(section) != ''
+     GROUP BY TRIM(course), year_level, semester, school_year, TRIM(section)
+     ORDER BY TRIM(course), year_level, section"
+);
+
+// Section codes offered by the filter dropdown. A free-text filter on
+// a 5-digit code nobody can predict is unusable, so the list is
+// whatever codes actually exist.
+$sectionOptions = $db->fetchAll(
+    "SELECT DISTINCT TRIM(section) AS section FROM students
+     WHERE section IS NOT NULL AND TRIM(section) != ''
+     ORDER BY section"
+);
+
+// Candidates for the "assign students to this section" picker. Every
+// student who can legally hold a code is included - no section, or a
+// different one - because moving a student between sections is a
+// normal correction, not an edge case. Year-less students are left
+// out: a section code is derived from the year level, so they cannot
+// hold one, and the API rejects them by name if they are sent anyway.
+$assignableStudents = $db->fetchAll(
+    "SELECT id, student_number, first_name, middle_name, last_name,
+            TRIM(course) AS course, year_level, semester, TRIM(section) AS section
+     FROM students
+     WHERE year_level IS NOT NULL AND TRIM(IFNULL(year_level, '')) != ''
+     ORDER BY TRIM(course), year_level, last_name, first_name"
+);
+
+$offeredCourses = getOfferedCourses();
+
+// One flag for "is anything filtered", so the toolbar badge and the
+// filter modal cannot disagree about it. Adding a sixth filter meant
+// editing two separate five-term conditions, and the pair had already
+// drifted once.
+$anyFilterActive = $filterCourse !== '' || $filterYear !== ''
+    || $filterSchoolYear !== '' || $filterSemester !== ''
+    || $filterStatus !== '' || $filterSection !== '';
+
 // Dropdown data
 $courses = $db->fetchAll(
     "SELECT DISTINCT TRIM(course) AS course FROM students
@@ -196,7 +289,7 @@ foreach ($rfidCards as $rc) {
 }
 
 $page_title = 'Masterlist';
-$page_description = 'Enrolled student masterlist, prepared for section assignment by the receiving department';
+$page_description = 'Enrolled student masterlist, with section codes assigned in batches of up to ' . (int) $sectionCap;
 $body_page = 'masterlist';
 $APP_ROOT = '../';
 $ACTIVE_NAV = 'masterlist';
@@ -263,6 +356,7 @@ body[data-page="masterlist"] .masterlist-table{width:100%;border-collapse:collap
 .masterlist-table .c-bday{width:140px}
 .masterlist-table .c-rfid{width:190px}
 .masterlist-table .c-course{width:102px}
+.masterlist-table .c-section{width:106px}
 .masterlist-table .c-status{width:128px}
 body[data-page="masterlist"] .masterlist-table th{
   /* The header is a ruled band, not a strip of labels. A ledger's column
@@ -379,6 +473,14 @@ body[data-page="masterlist"] .masterlist-table tbody tr:last-child td{border-bot
    at column width and is already on the block heading above, so it rides
    along in the title attribute instead. */
 .ml-course{display:inline-block;padding:3px 10px;border-radius:6px;background:#e8effd;color:#1d4ed8;font-size:14px;font-weight:800;letter-spacing:.05em}
+/* The section code. Inherits .ml-tok's monospace, which is the point: a
+   code has to be read digit by digit, and 11001 vs 11011 in a
+   proportional face is a coin toss. Not a pill - it is a code, not a
+   status, and the roster already has two pill columns beside it.
+   "Unassigned" is a worded grey, never a blank cell, so nobody reads a
+   student nobody has placed yet as a student whose code failed to load. */
+.ml-section{color:#0f172a;font-weight:700;letter-spacing:.02em}
+.ml-section-none{color:#94a3b8;font-weight:600;font-style:italic;letter-spacing:0}
 /* Status. Four tones, all quiet: a roster is not an alert dashboard, and a
    column of saturated pills would out-shout the names it sits beside. "Not
    recorded" is deliberately greyed and worded, not blanked - an empty pill
@@ -391,9 +493,12 @@ body[data-page="masterlist"] .masterlist-table tbody tr:last-child td{border-bot
    is worded and toned like the other three rather than faded to the point where
    it reads as a smudge beside text that is now 15px. */
 .ml-status-unknown{background:transparent;color:#64748b;font-style:italic;font-weight:600;padding-left:0}
-/* The block heading. A block is a program-year cohort, so the heading names
-   only that. It carries no section: the code is Class Scheduling's to assign,
-   and putting one here would claim a section that does not exist yet. */
+/* The block heading. A block is a program-year-TERM cohort, so the heading
+   names exactly that and nothing more. The section codes are a roll-up of
+   the students inside it, not part of what defines it - one program+year+term
+   is one section space, so a block can hold several codes at once once it
+   outgrows the cap. They ride in the meta row as chips, which keeps the
+   heading a single filing label however many blocks a program has. */
 /* The block heading names a cohort: which program, which year, which term, how
    many. That is a filing label, not a headline, so it is built like one.
 
@@ -439,6 +544,36 @@ body[data-page="masterlist"] .masterlist-table tbody tr:last-child td{border-bot
 .ml-block-meta-sep{color:#c3ced9}
 .ml-block-count{font-variant-numeric:tabular-nums;font-weight:700;color:#475569}
 .ml-block-count-over{color:#b45309}
+/* Section chips in the block heading. They are buttons, not labels:
+   clicking one opens that section for editing, which is the only way
+   to rename a code or move a whole section. The count sits inside the
+   chip rather than beside it so the heading cannot reflow as codes are
+   added - a heading that jumps when auto-assign runs is a heading
+   nobody trusts. Over-cap is amber, the same tone the block count uses
+   for "past the list size", so the two warnings read as one language. */
+.ml-block-sections{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.ml-section-chip{
+  display:inline-flex;align-items:center;gap:5px;padding:2px 7px;
+  border:1px solid #c7d7fe;border-radius:7px;background:#eff6ff;color:#1d4ed8;
+  font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;font-weight:700;
+  letter-spacing:.02em;line-height:1.4;cursor:pointer;white-space:nowrap;
+  transition:background .12s ease,border-color .12s ease
+}
+.ml-section-chip:hover{background:#dbeafe;border-color:#93c5fd}
+.ml-section-chip:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.ml-section-chip-n{
+  padding:0 4px;border-radius:4px;background:#dbeafe;color:#1e40af;
+  font-size:10.5px;font-weight:800;font-variant-numeric:tabular-nums
+}
+.ml-section-chip-over{border-color:#fcd34d;background:#fffbeb;color:#b45309}
+.ml-section-chip-over .ml-section-chip-n{background:#fde68a;color:#92400e}
+.ml-block-unassigned{color:#b45309;font-weight:600}
+/* The count line under the buttons. Quiet by default: it is a status
+   readout, not a call to action, and the buttons above already say
+   what to do about it. */
+.masterlist-section-status{margin:2px 0 0;font-size:12px;color:#64748b;line-height:1.5}
+.masterlist-section-status i{margin-right:4px;color:#b45309}
+.masterlist-section-status strong{color:#b45309;font-variant-numeric:tabular-nums}
 /* Narrow: the lead wraps rather than shrinking, so the cohort name stays the
    largest text on the line down to a phone. */
 @media(max-width:640px){
@@ -486,29 +621,45 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
         <div>
             <div class="masterlist-kicker"><i class="fas fa-table-list"></i> Registrar directory</div>
             <h1>Masterlist</h1>
-            <p>Search, filter, and send the full student list. Section codes and advisers belong to other departments, so they are not recorded here.</p>
+            <p>Search, filter, and send the full student list. Auto-assign fills sections in batches of up to <?= (int) $sectionCap ?>, using the code format 11001 (year 1, 1st semester, section 1).</p>
         </div>
     </header>
 
-    <!-- Action bar: list tools + output -->
+    <!-- Action bar: section tools + output -->
     <section class="masterlist-actionbar" aria-label="Masterlist actions">
         <div class="masterlist-action-group">
-            <span class="masterlist-action-label">List tools</span>
+            <span class="masterlist-action-label">Section tools</span>
             <div class="masterlist-action-buttons">
-                <button type="button" class="btn btn-primary" id="btnPrepareList" title="Show every student, with no filters applied, ready to hand off for section assignment">
+                <button type="button" class="btn btn-primary" id="btnAutoAssign"
+                        title="Fill existing sections first, then open new ones only when needed (<?= (int) $sectionCap ?> max each)">
+                    <i class="fas fa-wand-magic-sparkles"></i> Auto-assign
+                </button>
+                <button type="button" class="btn btn-secondary" id="btnCreateSection"
+                        title="Create one section by hand, then add students to it">
+                    <i class="fas fa-plus-circle"></i> Create Section
+                </button>
+                <button type="button" class="btn btn-secondary" id="btnPrepareList"
+                        title="Show every student, with no filters applied">
                     <i class="fas fa-list-check"></i> Prepare Full List
                 </button>
-                <button class="btn btn-secondary" onclick="openGenerateModal()">
-                    <i class="fas fa-sliders"></i> Generate
-                </button>
             </div>
+            <p class="masterlist-section-status" id="sectionStatus">
+                <?php if ($studentsTotal === 0): ?>
+                    No students on file yet.
+                <?php elseif ($unassignedCount === 0): ?>
+                    <i class="fas fa-check-circle"></i> All <?= $studentsTotal ?> student(s) are in a section.
+                <?php else: ?>
+                    <i class="fas fa-user-clock"></i>
+                    <strong><?= $unassignedCount ?></strong> of <?= $studentsTotal ?> student(s) still need a section
+                    <?php if ($sectionTotal > 0): ?>
+                        &middot; <?= $sectionTotal ?> section(s) so far
+                    <?php endif; ?>
+                <?php endif; ?>
+            </p>
         </div>
         <div class="masterlist-action-group">
             <span class="masterlist-action-label">Output &amp; handoff</span>
             <div class="masterlist-action-buttons">
-                <button class="btn btn-secondary" onclick="window.print()">
-                    <i class="fas fa-print"></i> Print
-                </button>
                 <button type="button" class="btn btn-primary" onclick="sendList()" title="Send the masterlist to the Academic Strand / Course Assignment module (CMS)">
                     <i class="fas fa-paper-plane"></i> Send List
                 </button>
@@ -526,7 +677,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
 
     <?php if ($prepared): ?>
         <div class="card" style="margin-bottom: 16px; padding: 12px 16px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <i class="fas fa-check-circle"></i> Full list prepared. It is sorted by course and year, ready to hand off for section assignment.
+            <i class="fas fa-check-circle"></i> Full list prepared. It is sorted by course, year, and section, with no filters applied.
         </div>
     <?php endif; ?>
 
@@ -541,7 +692,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
         </button>
         <button type="button" class="btn btn-primary masterlist-filter-btn" onclick="openFilterSearchModal()">
             <i class="fas fa-sliders"></i> Filter
-            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterStatus !== ''): ?>
+            <?php if ($anyFilterActive): ?>
                 <span style="background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;">Active</span>
             <?php endif; ?>
         </button>
@@ -583,8 +734,12 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                          all: the blocks are separate tables now, and two
                          headings that read identically would leave the
                          registrar unable to tell which cohort a sheet is for.
-                         It names no section, because none exists yet - the
-                         receiving department writes those. -->
+
+                         The section codes are a roll-up, not part of the key:
+                         a block is one program+year+term, which is one section
+                         space, and a block can hold several codes at once
+                         because it outgrew the cap. They ride in the meta row
+                         as chips so the heading stays one line. -->
                     <div class="ml-block-head">
                         <div class="ml-block-id">
                         <h2 class="ml-block-lead" title="<?= htmlspecialchars(($block['course'] !== '' ? $block['course'] : 'No program recorded')
@@ -600,6 +755,25 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                             <?php endif; ?>
                             <span class="ml-block-meta-sep" aria-hidden="true">·</span>
                             <span class="ml-block-count<?= count($block['students']) > (int) $sectionCap ? ' ml-block-count-over' : '' ?>"><?= count($block['students']) ?> <?= count($block['students']) === 1 ? 'student' : 'students' ?></span>
+                            <?php if (!empty($block['sections'])): ?>
+                                <span class="ml-block-meta-sep" aria-hidden="true">·</span>
+                                <span class="ml-block-sections">
+                                    <?php foreach ($block['section_counts'] as $code => $n): ?>
+                                        <button type="button" class="ml-section-chip<?= $n > (int) $sectionCap ? ' ml-section-chip-over' : '' ?>"
+                                                data-section="<?= htmlspecialchars((string) $code) ?>"
+                                                data-course="<?= htmlspecialchars($block['course']) ?>"
+                                                data-year="<?= htmlspecialchars($block['year_level']) ?>"
+                                                data-semester="<?= htmlspecialchars($block['semester']) ?>"
+                                                data-school-year="<?= htmlspecialchars($block['school_year']) ?>"
+                                                title="Section <?= htmlspecialchars((string) $code) ?> — <?= (int) $n ?> student(s). Click to edit this section.">
+                                            <?= htmlspecialchars((string) $code) ?><span class="ml-section-chip-n"><?= (int) $n ?></span>
+                                        </button>
+                                    <?php endforeach; ?>
+                                </span>
+                            <?php elseif ($unassignedCount > 0): ?>
+                                <span class="ml-block-meta-sep" aria-hidden="true">·</span>
+                                <span class="ml-block-unassigned">No sections yet</span>
+                            <?php endif; ?>
                         </div>
                         </div>
                     </div>
@@ -646,6 +820,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                 <col class="c-gender">
                                 <col class="c-contact">
                                 <col class="c-course">
+                                <col class="c-section">
                                 <col class="c-bday">
                                 <col class="c-status">
                                 <col class="c-email">
@@ -660,6 +835,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                     <th data-field="gender">Gender</th>
                                     <th data-field="contact" class="ml-col-start">Contact</th>
                                     <th data-field="course" data-sort="course"><i class="fas fa-sort"></i>Course</th>
+                                    <th data-field="section" data-sort="section"><i class="fas fa-sort"></i>Section</th>
                                     <th data-field="birthdate">Birthdate</th>
                                     <th data-field="status">Status</th>
                                     <th data-field="email" class="ml-col-start">Email</th>
@@ -680,6 +856,15 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                     // student whose stored course is blank still has to
                                     // print N/A rather than inherit its neighbour's.
                                     $acronym = courseAcronym((string) ($student['course'] ?? ''));
+
+                                    // Section. Blank means "nobody has
+                                    // placed this student yet", which is a
+                                    // real state and not a rendering fault,
+                                    // so it says so rather than showing an
+                                    // empty cell. Monospaced: it is a code,
+                                    // and a proportional face makes 11001
+                                    // and 11011 hard to tell apart at a glance.
+                                    $section = trim((string) ($student['section'] ?? ''));
 
                                     // Status is a vocabulary, not free text, and 42 of
                                     // the seeded rows carry an EMPTY string rather
@@ -777,6 +962,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                         <td data-field="gender" class="ml-gender"><?= htmlspecialchars($gender !== '' ? $gender : 'N/A') ?></td>
                                         <td data-field="contact" class="ml-tok ml-col-start" title="<?= htmlspecialchars($phone !== '' ? $phone : 'No contact number on file') ?>"><?= htmlspecialchars($phone !== '' ? $phone : 'N/A') ?></td>
                                         <td data-field="course" title="<?= htmlspecialchars($student['course'] ?? 'No program recorded') ?>"><span class="ml-course"><?= htmlspecialchars($acronym !== '' ? $acronym : 'N/A') ?></span></td>
+                                        <td data-field="section" data-sort="section" class="ml-tok" title="<?= htmlspecialchars($section !== '' ? 'Section ' . $section : 'Not yet assigned to a section') ?>"><span class="ml-section<?= $section === '' ? ' ml-section-none' : '' ?>"><?= htmlspecialchars($section !== '' ? $section : 'Unassigned') ?></span></td>
                                         <td data-field="birthdate" class="ml-tok" title="<?= htmlspecialchars($bdayRaw !== '' && $bdayRaw !== '0000-00-00' ? 'Born ' . $bdayRaw : 'No birth date on file') ?>"><?= htmlspecialchars($bday !== '' ? $bday : 'N/A') ?></td>
                                         <td data-field="status"><span class="ml-status ml-status-<?= $statusTone ?>"><?= htmlspecialchars($statusLabel) ?></span></td>
                                         <td data-field="email" class="ml-email ml-col-start" title="<?= htmlspecialchars($email !== '' ? $email : 'No email on file') ?>"><?= htmlspecialchars($email !== '' ? $email : 'N/A') ?></td>
@@ -852,38 +1038,23 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                             <?php endforeach; ?>
                         </select>
                     </div>
+                    <div class="form-group"><label>Section</label>
+                        <select name="section" id="filterSection" class="form-control">
+                            <option value="">All sections</option>
+                            <?php foreach ($sectionOptions as $row): ?>
+                                <option value="<?= htmlspecialchars($row['section']) ?>" <?= $filterSection === $row['section'] ? 'selected' : '' ?>><?= htmlspecialchars($row['section']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
                 </div>
             </form>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeFilterSearchModal()">Cancel</button>
-            <?php if ($filterCourse !== '' || $filterYear !== '' || $filterSchoolYear !== '' || $filterSemester !== '' || $filterStatus !== ''): ?>
+            <?php if ($anyFilterActive): ?>
                 <a class="btn btn-light" href="masterlist.php">Clear</a>
             <?php endif; ?>
             <button type="submit" form="filterSearchForm" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
-        </div>
-    </div>
-</div>
-
-<!-- Generate Masterlist Modal -->
-<div class="modal-overlay" id="generateModal">
-    <div class="modal-content" style="max-width: 620px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-sliders" style="color:#2563eb;"></i> Generate Masterlist</h2><button class="modal-close" onclick="closeGenerateModal()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <form id="generateForm">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                    <div class="form-group"><label>School Year</label><select id="genSchoolYear" class="form-control"><option value="">All</option><?php foreach ($schoolYears as $row): ?><option value="<?= htmlspecialchars($row['school_year']) ?>"><?= htmlspecialchars($row['school_year']) ?></option><?php endforeach; ?></select></div>
-                    <div class="form-group"><label>Semester</label><select id="genSemester" class="form-control"><option value="">All</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
-                    <div class="form-group"><label>Course</label><select id="genCourse" class="form-control"><option value="">All courses</option><?php foreach ($courses as $row): ?><option value="<?= htmlspecialchars($row['course']) ?>"><?= htmlspecialchars($row['course']) ?></option><?php endforeach; ?></select></div>
-                    <div class="form-group"><label>Year Level</label><select id="genYear" class="form-control"><option value="">All years</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
-                    <div class="form-group"><label>Status</label><select id="genStatus" class="form-control"><option value="">All statuses</option><?php foreach ($statusOptions as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></div>
-                </div>
-                <p style="font-size:12px;color:#94a3b8;margin-top:8px;"><i class="fas fa-info-circle"></i> Course serves as the department filter. Leave fields blank to include all.</p>
-            </form>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeGenerateModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="applyGenerate()"><i class="fas fa-table-list"></i> Generate</button>
         </div>
     </div>
 </div>
@@ -924,9 +1095,464 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
     </div>
 </div>
 
+<!-- Create Section Modal -->
+<!-- Creating a section does not create a section record: there is no
+     sections table. It computes the next free code and opens the
+     workspace on it, and the code only exists once students are
+     actually assigned to it. That is why the primary button says
+     "Create & Assign" - it is honest that the write happens on the
+     students, and it means a section can never be created empty and
+     then forgotten. -->
+<div class="modal-overlay" id="createSectionModal">
+    <div class="modal-content" style="max-width: 560px;">
+        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-plus-circle" style="color:#2563eb;"></i> Create Section</h2><button class="modal-close" onclick="closeCreateSectionModal()"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                <div class="form-group"><label>Course</label><select id="csCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
+                <div class="form-group"><label>Year Level</label><select id="csYear" class="form-control"><option value="">Select</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
+                <div class="form-group"><label>Semester</label><select id="csSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
+                <div class="form-group"><label>School Year</label><input type="text" id="csSchoolYear" class="form-control" placeholder="2026-2027" list="csSyOptions"><datalist id="csSyOptions"><?php foreach ($schoolYears as $row): ?><option value="<?= htmlspecialchars($row['school_year']) ?>"><?php endforeach; ?></datalist></div>
+                <div class="form-group" style="grid-column:span 2;">
+                    <label>Section Code</label>
+                    <!-- The suggested code is shown but not editable. An
+                         override here would let someone type a code whose
+                         year and semester digits contradict the two selects
+                         above, and the list would then print a section that
+                         says 2nd semester inside a 1st-semester block. Rename
+                         an existing section instead - that path checks the
+                         code against the students actually in it. -->
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                        <div id="csCode" style="font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:18px;font-weight:700;color:#2563eb;min-width:90px;">—</div>
+                        <span style="font-size:12px;color:#94a3b8;">Next free code for this course, year and term.</span>
+                    </div>
+                </div>
+            </div>
+            <p id="csError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateSectionModal()">Cancel</button>
+            <button class="btn btn-primary" id="csCreateBtn" onclick="createSectionAndOpen()"><i class="fas fa-user-check"></i> Create &amp; Assign Students</button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Section Modal -->
+<div class="modal-overlay" id="editSectionModal">
+    <div class="modal-content" style="max-width: 560px;">
+        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-pen" style="color:#b45309;"></i> Edit Section</h2><button class="modal-close" onclick="closeEditSection()"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <p style="font-size:13px;color:#64748b;margin-bottom:14px;">Changes to section <strong id="esOldSection" style="font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;">—</strong> apply to <strong id="esStudentCount">0</strong> student(s) at once.</p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                <div class="form-group"><label>Section Code</label><input type="text" id="esSection" class="form-control" placeholder="11001" style="font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;"></div>
+                <div class="form-group"><label>School Year</label><input type="text" id="esSchoolYear" class="form-control" placeholder="2026-2027" list="csSyOptions"></div>
+                <div class="form-group"><label>Course</label><select id="esCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
+                <div class="form-group"><label>Year Level</label><select id="esYear" class="form-control"><option value="">Select</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
+                <div class="form-group"><label>Semester</label><select id="esSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
+                <div class="form-group"><label>Adviser</label><select id="esAdviser" class="form-control"><option value="">Not set</option><?php foreach ($advisers as $ad): ?><option value="<?= (int)$ad['id'] ?>"><?= htmlspecialchars($ad['full_name']) ?></option><?php endforeach; ?></select></div>
+            </div>
+            <p style="font-size:12px;color:#94a3b8;margin-top:8px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i> The code's first two digits encode the year and the term. Changing them moves the whole section to a different block.</p>
+            <p id="esError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeEditSection()">Cancel</button>
+            <button class="btn btn-primary" id="esSaveBtn" onclick="saveEditSection()"><i class="fas fa-save"></i> Save Changes</button>
+            <button class="btn btn-secondary" onclick="manageSectionStudents()"><i class="fas fa-users"></i> Manage Students</button>
+        </div>
+    </div>
+</div>
+
+<!-- Section Workspace Modal: pick students for one section -->
+<div class="modal-overlay" id="sectionWorkspaceModal">
+    <div class="modal-content" style="max-width: 720px;">
+        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-users" style="color:#2563eb;"></i> <span id="wsTitle">Section</span></h2><button class="modal-close" onclick="closeSectionWorkspace()"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+                <div style="flex:1;min-width:200px;position:relative;"><i class="fas fa-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:13px;"></i><input type="text" id="wsAssignSearch" class="form-control" style="padding-left:34px;" placeholder="Search by name or student no.…"></div>
+                <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#475569;cursor:pointer;"><input type="checkbox" id="wsIncludeOthers" style="width:15px;height:15px;accent-color:#2563eb;"> Include already-assigned</label>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+                <div style="flex:1;min-width:200px;"><label style="display:block;font-size:11px;color:#64748b;margin-bottom:3px;font-weight:600;">Assign to</label><input type="text" id="wsTargetSection" class="form-control" readonly></div>
+                <button class="btn btn-primary" id="wsAssignBtn" onclick="assignSelectedToSection()"><i class="fas fa-user-check"></i> Assign Selected</button>
+            </div>
+            <p style="font-size:12px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i><span id="wsCount">0</span> student(s) listed. Students with no year level are not listed — a section code is built from the year level, so they cannot hold one.</p>
+            <div id="wsAssignList" style="max-height:320px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:10px;"></div>
+        </div>
+    </div>
+</div>
+
 <script>
+const MAX_PER_SECTION = <?= (int) $sectionCap ?>;
+const ASSIGNABLE_STUDENTS = <?= json_encode($assignableStudents) ?>;
 const RFID_MAP = <?= json_encode(array_map(fn($c) => ['card_uid' => $c['card_uid'], 'status' => $c['status'], 'expiry_date' => $c['expiry_date']], $rfidMap)) ?>;
 const ADVISER_NAMES = <?= json_encode($adviserNames) ?>;
+
+// ─── AUTO-ASSIGN ───────────────────────────────────────────────
+// The one-click path. Fills the gaps in sections that already exist
+// and only opens a new code once every existing one is at the cap, so
+// running it twice does not renumber anybody. The dialog says what it
+// will do before it does it, because the write touches every
+// unassigned student in one transaction and there is no undo button.
+document.getElementById('btnAutoAssign')?.addEventListener('click', async function () {
+    const btn = this;
+    const ok = await confirmAction({
+        title: 'Auto-assign sections',
+        body: 'Give a section code to every student who does not have one?<br><br>'
+            + 'Students are grouped by course, year level and term, and split into sections of at most '
+            + '<strong>' + MAX_PER_SECTION + '</strong>. Existing sections are filled first, so codes already '
+            + 'assigned do not change. Students with no year level are skipped and reported back.',
+        confirmLabel: 'Assign sections'
+    });
+    if (!ok) return;
+    btn.disabled = true;
+    const original = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Assigning…';
+    try {
+        const r = await fetch('../api/masterlist.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'assign_sections', max_per_section: MAX_PER_SECTION })
+        });
+        const d = await r.json();
+        if (!d.success) { showToast(d.message || 'Failed to assign sections.', 'error'); return; }
+        showToast(d.message || 'Sections assigned.', 'success');
+        // Reload rather than patch: the block headings carry the section
+        // chips and the status line carries the unassigned count, and both
+        // are server-rendered. A local update would leave them stale.
+        setTimeout(() => window.location.reload(), 700);
+    } catch (e) {
+        showToast('Network error. Please try again.', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = original;
+    }
+});
+
+// ─── CREATE SECTION ────────────────────────────────────────────
+function openCreateSectionModal() {
+    document.getElementById('csCourse').value = '';
+    document.getElementById('csYear').value = '';
+    document.getElementById('csSemester').value = '';
+    document.getElementById('csError').style.display = 'none';
+    document.getElementById('csCode').textContent = '—';
+    document.getElementById('createSectionModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+function closeCreateSectionModal() {
+    document.getElementById('createSectionModal').classList.remove('active');
+    document.body.style.overflow = '';
+}
+document.getElementById('btnCreateSection')?.addEventListener('click', openCreateSectionModal);
+document.getElementById('createSectionModal')?.addEventListener('click', function (e) {
+    if (e.target === this) closeCreateSectionModal();
+});
+
+// The suggested code refreshes as the three inputs settle. These are
+// selects, so 'change' fires once on commit rather than on every
+// keystroke - three lookups per character was the alternative.
+['csCourse', 'csYear', 'csSemester'].forEach(function (id) {
+    document.getElementById(id)?.addEventListener('change', refreshSectionCode);
+});
+async function refreshSectionCode() {
+    const course = document.getElementById('csCourse').value;
+    const year   = document.getElementById('csYear').value;
+    const sem    = document.getElementById('csSemester').value;
+    const codeEl = document.getElementById('csCode');
+    if (!course || !year || !sem) { codeEl.textContent = '—'; return; }
+    try {
+        const r = await fetch('../api/masterlist.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'next_section', course: course, year_level: parseInt(year, 10), semester: sem })
+        });
+        const d = await r.json();
+        codeEl.textContent = d.success ? d.code : '—';
+    } catch (e) { codeEl.textContent = '—'; }
+}
+
+function createSectionAndOpen() {
+    const course = document.getElementById('csCourse').value;
+    const year   = document.getElementById('csYear').value;
+    const sem    = document.getElementById('csSemester').value;
+    const schoolYear = document.getElementById('csSchoolYear').value.trim();
+    const errEl  = document.getElementById('csError');
+
+    if (!course || !year || !sem) {
+        errEl.textContent = 'Course, year level and semester are all required — the code is built from them.';
+        errEl.style.display = 'block';
+        return;
+    }
+    // The code is checked here rather than trusted, because "—" is a
+    // legitimate thing for that element to hold: it means the lookup
+    // did not come back. Opening the workspace on "—" would create a
+    // section literally named "—".
+    const code = document.getElementById('csCode').textContent.trim();
+    if (!/^[0-9]{5}$/.test(code)) {
+        errEl.textContent = 'Could not work out a section code. Check the year level and semester, then try again.';
+        errEl.style.display = 'block';
+        return;
+    }
+    closeCreateSectionModal();
+    openSectionWorkspace({
+        course: course,
+        year_level: parseInt(year, 10),
+        semester: sem,
+        school_year: schoolYear,
+        section: code,
+        isNew: true
+    });
+}
+
+// ─── EDIT SECTION ──────────────────────────────────────────────
+let editSectionContext = null;
+
+// A section chip in a block heading. The block knows the course, year
+// and term; the chip carries the code, so one delegated listener reads
+// them off data attributes instead of a handler being re-bound on
+// every server render.
+document.addEventListener('click', function (e) {
+    const chip = e.target.closest('.ml-section-chip');
+    if (!chip) return;
+    openEditSection({
+        section: chip.dataset.section,
+        course: chip.dataset.course,
+        year_level: chip.dataset.year,
+        semester: chip.dataset.semester,
+        school_year: chip.dataset.schoolYear
+    });
+});
+
+function openEditSection(ctx) {
+    editSectionContext = ctx;
+    document.getElementById('esOldSection').textContent = ctx.section;
+    document.getElementById('esSection').value = ctx.section;
+    document.getElementById('esSchoolYear').value = ctx.school_year || '';
+    document.getElementById('esCourse').value = ctx.course || '';
+    document.getElementById('esYear').value = ctx.year_level || '';
+    document.getElementById('esSemester').value = ctx.semester || '';
+    document.getElementById('esAdviser').value = '';
+
+    // Counted from the full student list, not from whatever the page is
+    // filtered to. This number is what the user is about to move, so a
+    // section filter hiding 40 of its 50 members must not report "10".
+    const n = ASSIGNABLE_STUDENTS.filter(function (s) {
+        return (s.course || '') === (ctx.course || '')
+            && String(s.year_level || '') === String(ctx.year_level || '')
+            && (s.section || '') === (ctx.section || '');
+    }).length;
+    document.getElementById('esStudentCount').textContent = n;
+    document.getElementById('esError').style.display = 'none';
+    document.getElementById('editSectionModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+function closeEditSection() {
+    document.getElementById('editSectionModal').classList.remove('active');
+    document.body.style.overflow = '';
+    // editSectionContext is deliberately kept. "Manage Students" reads
+    // it after this closes, and clearing it here broke that button.
+}
+document.getElementById('editSectionModal')?.addEventListener('click', function (e) {
+    if (e.target === this) closeEditSection();
+});
+function manageSectionStudents() {
+    const ctx = editSectionContext;
+    if (!ctx) return;
+    closeEditSection();
+    openSectionWorkspace(ctx);
+}
+
+async function saveEditSection() {
+    if (!editSectionContext) return;
+    const ctx = editSectionContext;
+    const newSection = document.getElementById('esSection').value.trim();
+    const newCourse  = document.getElementById('esCourse').value;
+    const newYear    = document.getElementById('esYear').value;
+    const newSem     = document.getElementById('esSemester').value;
+    const newSy      = document.getElementById('esSchoolYear').value.trim();
+    const newAdviser = document.getElementById('esAdviser').value;
+    const errEl = document.getElementById('esError');
+    const count = document.getElementById('esStudentCount').textContent;
+
+    if (!/^[0-9]{5}$/.test(newSection)) {
+        errEl.textContent = 'A section code is 5 digits, e.g. 11001.';
+        errEl.style.display = 'block';
+        return;
+    }
+    if (!newCourse || !newYear || !newSem) {
+        errEl.textContent = 'Course, year level and semester are all required.';
+        errEl.style.display = 'block';
+        return;
+    }
+    if (!await confirmAction({
+        title: 'Update section',
+        body: 'Move <strong>' + count + '</strong> student(s) from section <strong>' + escText(ctx.section)
+            + '</strong> to <strong>' + escText(newSection) + '</strong>?',
+        confirmLabel: 'Update section'
+    })) return;
+
+    const btn = document.getElementById('esSaveBtn');
+    btn.disabled = true;
+    try {
+        const r = await fetch('../api/masterlist.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'edit_section',
+                old_course: ctx.course, old_year_level: ctx.year_level,
+                old_semester: ctx.semester, old_section: ctx.section,
+                course: newCourse, year_level: newYear, semester: newSem,
+                section: newSection, school_year: newSy,
+                adviser_id: newAdviser || null
+            })
+        });
+        const d = await r.json();
+        if (d.success) {
+            showToast(d.message || 'Section updated.', 'success');
+            setTimeout(() => window.location.reload(), 600);
+        } else {
+            errEl.textContent = d.message || 'Failed to update section.';
+            errEl.style.display = 'block';
+            btn.disabled = false;
+        }
+    } catch (e) {
+        showToast('Network error. Please try again.', 'error');
+        btn.disabled = false;
+    }
+}
+
+// ─── SECTION WORKSPACE ─────────────────────────────────────────
+// Where a section actually gets its members. Reached from Create
+// Section (a brand-new code) and from Edit Section → Manage Students
+// (an existing one), so it has to work for a section that holds
+// nobody yet and for one that is already full.
+let wsContext = null;
+
+function openSectionWorkspace(ctx) {
+    wsContext = ctx;
+    const semLabel = ctx.semester || '1st';
+    document.getElementById('wsTitle').textContent =
+        'Section ' + ctx.section + ' — ' + (ctx.course || 'No program') + ' · Year ' + (ctx.year_level || '?') + ' · ' + semLabel;
+    document.getElementById('wsTargetSection').value =
+        ctx.section + ' — ' + (ctx.course || 'No program') + ' · Y' + (ctx.year_level || '?') + ' · ' + semLabel;
+
+    document.getElementById('wsAssignSearch').value = '';
+    // A section created a moment ago holds nobody, so defaulting to
+    // "everyone" would bury the list under every assigned student in
+    // the program. Off means: show me who still needs placing.
+    document.getElementById('wsIncludeOthers').checked = false;
+    renderAssignList();
+    document.getElementById('sectionWorkspaceModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+function closeSectionWorkspace() {
+    document.getElementById('sectionWorkspaceModal').classList.remove('active');
+    document.body.style.overflow = '';
+}
+document.getElementById('sectionWorkspaceModal')?.addEventListener('click', function (e) {
+    if (e.target === this) closeSectionWorkspace();
+});
+document.getElementById('wsAssignSearch')?.addEventListener('input', renderAssignList);
+document.getElementById('wsIncludeOthers')?.addEventListener('change', renderAssignList);
+
+function renderAssignList() {
+    const q = (document.getElementById('wsAssignSearch').value || '').toLowerCase().trim();
+    const includeAssigned = document.getElementById('wsIncludeOthers').checked;
+    const listEl = document.getElementById('wsAssignList');
+
+    let students = ASSIGNABLE_STUDENTS;
+    if (!includeAssigned) {
+        // Off: only students with no section at all. The point of the
+        // default is to answer "who still needs placing", and a list of
+        // the 400 who already have a code does not answer it.
+        students = students.filter(function (s) { return !(s.section || '').trim(); });
+    }
+    // Narrowed to this section's own program and year while the list is
+    // untouched, because those are the only students who can hold this
+    // code. Searching, or asking for everyone, lifts the narrowing.
+    if (!q && wsContext) {
+        students = students.filter(function (s) {
+            return (s.course || '') === (wsContext.course || '')
+                && String(s.year_level || '') === String(wsContext.year_level || '');
+        });
+    }
+    if (q) {
+        students = students.filter(function (s) {
+            return ((s.first_name || '') + ' ' + (s.last_name || '') + ' ' + (s.middle_name || '')
+                + ' ' + (s.student_number || '') + ' ' + (s.section || '')).toLowerCase().indexOf(q) !== -1;
+        });
+    }
+
+    document.getElementById('wsCount').textContent = students.length;
+
+    if (!students.length) {
+        listEl.innerHTML = '<p style="text-align:center;color:#94a3b8;padding:30px;margin:0;">'
+            + 'No students to show. Tick <strong>Include already-assigned</strong> to see everyone in this program and year.</p>';
+        return;
+    }
+
+    let html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">'
+        + '<tr style="background:#f8fafc;color:#64748b;font-weight:600;">'
+        + '<th style="padding:8px;"></th><th style="padding:8px;text-align:left;">Student</th>'
+        + '<th style="padding:8px;text-align:left;">Program</th><th style="padding:8px;text-align:left;">Yr</th>'
+        + '<th style="padding:8px;text-align:left;">Section</th></tr>';
+    students.forEach(function (s) {
+        const inTarget = (s.section || '') === (wsContext ? wsContext.section : '');
+        html += '<tr style="border-bottom:1px solid #f1f5f9;">'
+            + '<td style="padding:6px;"><input type="checkbox" class="ws-assign-cb" value="' + s.id
+            + '" style="width:15px;height:15px;accent-color:#2563eb;"></td>'
+            + '<td style="padding:6px;"><strong>' + escText(trim(s.last_name || '') + ', ' + trim(s.first_name || ''))
+            + '</strong><br><span style="color:#94a3b8;">' + escText(s.student_number || 'No student no.') + '</span></td>'
+            + '<td style="padding:6px;">' + escText(s.course || '—') + '</td>'
+            + '<td style="padding:6px;">' + escText(s.year_level || '—') + '</td>'
+            + '<td style="padding:6px;">'
+            + (inTarget
+                ? '<span style="color:#15803d;font-weight:700;">' + escText(s.section) + '</span>'
+                : escText(s.section || '—'))
+            + '</td></tr>';
+    });
+    html += '</table>';
+    listEl.innerHTML = html;
+}
+
+async function assignSelectedToSection() {
+    if (!wsContext) { showToast('No target section.', 'warning'); return; }
+    const ids = Array.from(document.querySelectorAll('.ws-assign-cb:checked')).map(function (cb) { return cb.value; });
+    if (!ids.length) { showToast('Select at least one student.', 'warning'); return; }
+
+    const section = wsContext.section;
+    if (!await confirmAction({
+        title: 'Assign to section',
+        body: 'Move <strong>' + ids.length + '</strong> student' + (ids.length === 1 ? '' : 's')
+            + ' to section <strong>' + escText(section) + '</strong>?'
+            + '<br><br>Their program, year and term are set to match the section, so the list stays coherent.',
+        confirmLabel: 'Assign'
+    })) return;
+
+    const btn = document.getElementById('wsAssignBtn');
+    btn.disabled = true;
+    try {
+        const r = await fetch('../api/masterlist.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'bulk_assign_section',
+                ids: ids,
+                section: section,
+                course: wsContext.course,
+                year_level: wsContext.year_level,
+                semester: wsContext.semester,
+                school_year: wsContext.school_year || ''
+            })
+        });
+        const d = await r.json();
+        if (!d.success) { showToast(d.message || 'Failed to assign.', 'error'); return; }
+        showToast(d.message || 'Assigned.', 'success');
+        setTimeout(() => window.location.reload(), 600);
+    } catch (e) {
+        showToast('Network error. Please try again.', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
 
 // ─── PREPARE FULL LIST ───────────────────────────────────────
 // Clears every filter so the whole roster is on screen, ready to hand off.
@@ -1011,27 +1637,6 @@ function rowSortKey(row, key) {
     }
     return v.toLowerCase();
 }
-
-// ─── GENERATE MODAL ──────────────────────────────────────────
-function openGenerateModal() {
-    document.getElementById('generateModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeGenerateModal() {
-    document.getElementById('generateModal').classList.remove('active');
-    document.body.style.overflow = '';
-}
-function applyGenerate() {
-    const p = new URLSearchParams();
-    const set = (id, name) => { const v = document.getElementById(id).value; if (v) p.set(name, v); };
-    set('genSchoolYear', 'school_year');
-    set('genSemester', 'semester');
-    set('genCourse', 'course');
-    set('genYear', 'year_level');
-    set('genStatus', 'status');
-    window.location.href = 'masterlist.php?' + p.toString();
-}
-document.getElementById('generateModal').addEventListener('click', function (e) { if (e.target === this) closeGenerateModal(); });
 
 // ─── EXPORT DROPDOWN ─────────────────────────────────────────
 document.getElementById('exportBtn').addEventListener('click', function (e) {
@@ -1119,6 +1724,7 @@ const FALLBACK_FIELDS = [
     ['gender',         'Gender'],
     ['contact',        'Contact'],
     ['course',         'Course'],
+    ['section',        'Section'],
     ['birthdate',      'Birthdate'],
     ['status',         'Status'],
     ['email',          'Email'],
@@ -1365,7 +1971,12 @@ function printRows(rows) {
             //
             // The cell VALUES still come from data-field, so this header
             // cannot drift out of step with the table it prints.
-            w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Gender</th><th>Contact</th><th>Course</th><th>Birthdate</th><th>Status</th><th>Email</th></tr>');
+            // Section sits next to Course because that is how the sheet is
+            // filed - a reader looks for the program and the block together.
+            // The export reads this table's header, so a column added here
+            // without a matching cell would print an empty column under a
+            // heading that promises a value.
+            w.document.write('<table><tr><th>#</th><th>Student No.</th><th>Name</th><th>Gender</th><th>Contact</th><th>Course</th><th>Section</th><th>Birthdate</th><th>Status</th><th>Email</th></tr>');
             // Numbering restarts per printed table, matching the screen: each
             // table is its own list, not a page of a longer numbered run.
             let seq = 0;
@@ -1378,15 +1989,17 @@ function printRows(rows) {
                     + '</td><td>' + cellText(row, 'gender')
                     + '</td><td>' + cellText(row, 'contact')
                     + '</td><td>' + cellText(row, 'course')
+                    + '</td><td>' + cellText(row, 'section')
                     + '</td><td>' + cellText(row, 'birthdate')
                     + '</td><td>' + cellText(row, 'status')
                     + '</td><td>' + cellText(row, 'email') + '</td></tr>');
             });
             w.document.write('</table>');
-            // No scope note is printed. It was removed from the screen along with
-            // the columns it explained; leaving it on the printed sheet would put
-            // a paragraph about Section and Adviser onto a page that no longer
-            // mentions either, for a reader who was never going to look for them.
+            // Still no scope note. It was rejected for repeating itself on
+            // every block heading, and the printed sheet inherits that: a
+            // paragraph of policy on a signed document helps nobody. The
+            // Section column speaks for itself, and Adviser is not printed
+            // at all because this office does not record it.
         });
     } else {
         w.document.write('<p>No records to print.</p>');
@@ -1408,7 +2021,11 @@ function viewStudent(id) {
         document.getElementById('vName').textContent = s.first_name + ' ' + s.last_name;
         document.getElementById('vStudentId').textContent = s.student_number || 'ID not yet assigned';
         document.getElementById('vCourse').textContent = s.course || '—';
-        document.getElementById('vYearSection').textContent = (s.year_level ? s.year_level + ' Year' : '') + (s.section ? ' — ' + s.section : '');
+        // Year and Section are one field here, so the em dash between
+        // them has to be conditional too. Unconditionally it rendered
+        // "1 Year — " for a student with no section yet: a trailing
+        // dash reading as a value that failed to arrive.
+        document.getElementById('vYearSection').textContent = (s.year_level ? s.year_level + ' Year' : 'Year not set') + (s.section ? ' — Section ' + s.section : ' — No section');
         document.getElementById('vSchoolYearSem').textContent = (s.school_year ? s.school_year : '—') + (s.semester ? ' — ' + s.semester : '');
         document.getElementById('vStatus').innerHTML = '<span class="badge badge-' + (s.status === 'active' ? 'success' : s.status === 'at-risk' || s.status === 'probation' ? 'warning' : 'neutral') + '">' + ucfirst(s.status || 'Active') + '</span>';
         document.getElementById('vGender').textContent = s.gender || '—';
@@ -1554,7 +2171,7 @@ function closeFilterSearchModal() {
 document.getElementById('filterSearchModal').addEventListener('click', function (e) { if (e.target === this) closeFilterSearchModal(); });
 
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeViewModal(); closeGenerateModal(); closeFilterSearchModal(); }
+    if (e.key === 'Escape') { closeViewModal(); closeFilterSearchModal(); closeCreateSectionModal(); closeEditSection(); closeSectionWorkspace(); }
 });
 
 // ---- SEND LIST / HAND-OFF (CMS) ----
@@ -1578,8 +2195,7 @@ async function sendList() {
 <style>
 .bulk-bar a { text-decoration: none; }
 /* Filter dropdowns should look clickable */
-#filterCourse, #filterYear, #filterSchoolYear, #filterSemester, #filterStatus,
-#genSchoolYear, #genSemester, #genCourse, #genYear, #genStatus,
+#filterCourse, #filterYear, #filterSchoolYear, #filterSemester, #filterStatus, #filterSection,
 select.form-control { cursor: pointer !important; }
 
 /* Masterlist table styling */
