@@ -2463,11 +2463,29 @@ function exportFiltered() {
     exportStudents(visible);
 }
 function exportStudents(list) {
-    let csv = "Student ID,Last Name,First Name,Middle Name,Course,Year Level,Section,Gender,Email,Contact,Status\n";
-    list.forEach(s => {
-        csv += (s.student_number||'')+','+(s.last_name||'')+','+(s.first_name||'')+','+(s.middle_name||'')+','+(s.course||'')+','+(s.year_level||'')+','+(s.section||'')+','+(s.gender||'')+','+(s.email||'')+','+(s.contact_number||'')+','+(s.status||'active')+'\n';
-    });
-    const blob = new Blob([csv], { type: 'text/csv' });
+    // RFC 4180 quoting + formula-injection guard.
+    //
+    // This previously built the CSV by raw concatenation, with no quoting
+    // and none of the '= + - @' protection that csvCell() in
+    // registrar/masterlist.php applies. A student whose last_name was
+    // =cmd|'/c calc'!A1 produced an executable cell in the registrar's
+    // Excel — the same defect masterlist.php already guards against, so
+    // the helper is reused rather than reinvented.
+    const cell = v => {
+        let s = String(v == null ? '' : v);
+        if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+        return '"' + s.replace(/"/g, '""') + '"';
+    };
+    const head = ['Student ID','Last Name','First Name','Middle Name','Course','Year Level','Section','Gender','Email','Contact','Status'];
+    const rows = list.map(s => [
+        s.student_number, s.last_name, s.first_name, s.middle_name, s.course,
+        s.year_level, s.section, s.gender, s.email, s.contact_number,
+        s.status || 'active'
+    ].map(cell).join(','));
+
+    const csv = [head.map(cell).join(','), ...rows].join('\r\n');
+    // BOM so Excel opens UTF-8 names correctly.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'students_export.csv'; a.click();
     URL.revokeObjectURL(a.href);
 }

@@ -1,13 +1,21 @@
-# Uploaded files are data, never code: block script execution.
-# Kept alongside the other upload directories (uploads/ids/, uploads/, assets/)
-# rather than relying on uploads/.htaccess inheriting, so the guard travels with
-# this directory if it is ever served directly.
-<FilesMatch \.(?i:php|php3|php4|php5|php7|phar|phtml|pl|py|cgi|sh)$>
-    Require all denied
-</FilesMatch>
-Options -ExecCGI
-RemoveHandler .php .phtml .phar
-
-<IfModule mod_php.c>
-    php_flag engine off
-</IfModule>
+# ============================================================
+#  STUDENT FILES — no direct web access (F1)
+#
+#  These are PSA birth certificates, health records and affidavits.
+#  Apache was serving this directory straight to anyone who could guess
+#  a filename. Names are <student_id>_<unixtime>_<original>, and both
+#  halves are guessable, so an unauthenticated visitor could read a
+#  student's records.
+#
+#  Files are now downloaded through api/file-download.php, which checks
+#  the session, the role, and that the file belongs to the requesting
+#  student before streaming a byte.
+#
+#  Script execution was already blocked below; this closes READ access,
+#  which that guard never did.
+#
+#  Assets such as avatars (assets/uploads/students) and ID QR codes
+#  (uploads/ids) are deliberately NOT blocked — they are rendered inline
+#  in <img> tags and must stay fetchable.
+# ============================================================
+Require all denied

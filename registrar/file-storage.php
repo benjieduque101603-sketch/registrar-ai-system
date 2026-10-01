@@ -79,9 +79,24 @@ require_once __DIR__ . '/../shared/stored_file.php';
 $fileUrlById  = [];   // id => loadable URL, or '' when the file is not here
 $fileGoneById = [];   // id => true
 foreach ($files as $f) {
-    $url = storedFileUrl($f['file_path'], '../');
-    $fileUrlById[(int) $f['id']] = $url;
-    if ($url === '') $fileGoneById[(int) $f['id']] = true;
+    // F1: point at the authorising endpoint, not the raw uploads/ path.
+    //
+    // uploads/student_files/ and uploads/document_requirements/ are now
+    // `Require all denied`, so a direct ../uploads/... link returns 403.
+    // api/file-download.php checks the session, the role and ownership,
+    // then streams the file with Content-Disposition: attachment.
+    //
+    // storedFileUrl() is still used to decide whether the file EXISTS on
+    // this host (it checks the disk) — only the URL handed to the browser
+    // changes.
+    $onDisk = storedFileUrl($f['file_path'], '../');
+    $id     = (int) $f['id'];
+    if ($onDisk === '') {
+        $fileUrlById[$id] = '';
+        $fileGoneById[$id] = true;
+    } else {
+        $fileUrlById[$id] = '../api/file-download.php?id=' . $id;
+    }
 }
 $missingFileCount = count($fileGoneById);
 

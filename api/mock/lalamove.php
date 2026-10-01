@@ -10,20 +10,26 @@
 //    action=simulate_delivery → flips an order DELIVERED + request Shipped→Claimed
 // ============================================================
 
+// config.php must load FIRST: corsSameOrigin() is defined there, and the
+// session cookie flags in security_headers.php must be set before
+// session_config.php calls session_start().
+require_once __DIR__ . '/../../shared/config.php';
+require_once __DIR__ . '/../../shared/security_headers.php';
+require_once __DIR__ . '/../../shared/session_config.php';
+require_once __DIR__ . '/../../shared/csrf_guard.php';
+require_once __DIR__ . '/../../shared/database.php';
+require_once __DIR__ . '/../../shared/functions.php';
+
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
+// Same-origin only; see the note in api/mock/payment.php.
+corsSameOrigin();
 header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-CSRF-Token');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
-
-require_once __DIR__ . '/../../shared/config.php';
-require_once __DIR__ . '/../../shared/database.php';
-require_once __DIR__ . '/../../shared/session_config.php';
-require_once __DIR__ . '/../../shared/functions.php';
 
 if (!isLoggedIn()) {
     echo json_encode(['success' => false, 'message' => 'Unauthorized.']);

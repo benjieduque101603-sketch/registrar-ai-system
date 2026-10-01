@@ -46,10 +46,36 @@ if (!is_array($input)) {
     $input = [];
 }
 
-$qualityActions = ['quality', 'quality_summary', 'apply_safe_repairs'];
-if (in_array($action, $qualityActions, true) && !in_array(getCurrentUserRole(), ['admin', 'registrar'], true)) {
+// ── Authorization (A1: IDOR) ───────────────────────────────────
+//
+// Every action in this file is registrar/staff analytical work: data
+// quality across the whole roster, status evidence, risk levels and
+// anomaly scans. None of it belongs to a logged-in STUDENT, yet the
+// endpoint previously accepted any authenticated session and only
+// role-checked three of eleven actions.
+//
+// The result was an IDOR (CWE-639): a student could POST
+// {"action":"case_brief","student_id":<any other id>} and read another
+// student's status evidence, GWA history and profile, or pass an array
+// of ids to student_risks to enumerate the roster.
+//
+// Fixed by allow-listing the roles that legitimately use these tools
+// rather than deny-listing the actions, so a newly added action cannot
+// silently default to "open to everyone". Only registrar/ pages call
+// this endpoint (registrar/students.php, registrar/status-tracker.php),
+// so staff-tier roles are the right boundary.
+$AI_TOOLS_ROLES = ['admin', 'registrar', 'staff'];
+
+if (!in_array(getCurrentUserRole(), $AI_TOOLS_ROLES, true)) {
+    error_log('[ai-tools] denied action=' . ($action ?: '(none)')
+        . ' role=' . (getCurrentUserRole() ?? '(none)')
+        . ' uid=' . (int)($_SESSION['user_id'] ?? 0));
     http_response_code(403);
-    echo json_encode(['success' => false, 'message' => 'Forbidden.']);
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'message' => 'Forbidden. These tools are limited to registrar staff.',
+    ]);
     exit;
 }
 

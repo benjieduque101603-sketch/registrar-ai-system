@@ -208,7 +208,26 @@ switch ($action) {
         exit;
 
     // ─── DUPLICATE CHECK (deterministic) ────────────────────
+    //
+    // A2: this returns real student rows — name, student number and
+    // birth date — for anyone whose name fuzzy-matches. It is a
+    // registrar data-entry aid, not a student-facing feature, so it
+    // previously disclosed cross-student PII to any authenticated
+    // session (a student could enumerate names and collect student
+    // numbers and birth dates).
+    //
+    // No page outside registrar/ calls check_duplicate, so the fix is a
+    // staff-tier role gate here rather than changing the helper.
     case 'check_duplicate':
+        if (!in_array(getCurrentUserRole(), ['admin', 'registrar', 'staff'], true)) {
+            error_log('[ai-assist] denied check_duplicate role=' . (getCurrentUserRole() ?? '(none)'));
+            http_response_code(403);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Forbidden. Duplicate lookup is limited to registrar staff.',
+            ]);
+            exit;
+        }
         $firstName = trim((string) ($input['first_name'] ?? ''));
         $lastName  = trim((string) ($input['last_name'] ?? ''));
         $birthDate = trim((string) ($input['birth_date'] ?? ''));

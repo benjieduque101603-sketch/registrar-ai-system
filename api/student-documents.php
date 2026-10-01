@@ -170,6 +170,17 @@ try {
             echo json_encode(['success' => false, 'message' => 'Requirement file must be a PDF, JPG, or PNG image.']);
             exit;
         }
+        // F2: verify the real content, not just the .pdf/.jpg name.
+        $reqSig = validateUploadSignature($_FILES['requirement_file']['tmp_name'], $_FILES['requirement_file']['name']);
+        if (!$reqSig['ok']) {
+            error_log('[student-documents] rejected requirement upload: ' . $reqSig['reason']
+                . ' (detected ' . $reqSig['detected'] . ')');
+            echo json_encode([
+                'success' => false,
+                'message' => 'Requirement file rejected: ' . $reqSig['reason'] . '.',
+            ]);
+            exit;
+        }
         $dir = __DIR__ . '/../uploads/document_requirements/';
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);

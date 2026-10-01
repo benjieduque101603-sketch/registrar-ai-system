@@ -1,10 +1,11 @@
-# Deny script execution inside uploaded files (see root uploads/.htaccess).
-<FilesMatch \.(?i:php|php3|php4|php5|php7|phar|phtml|pl|py|cgi|sh)$>
-    Require all denied
-</FilesMatch>
-Options -ExecCGI
-RemoveHandler .php .phtml .phar
-
-<IfModule mod_php.c>
-    php_flag engine off
-</IfModule>
+# ============================================================
+#  REQUIREMENT FILES — no direct web access (F1)
+#
+#  Scanned IDs, affidavits and supporting evidence for document
+#  requests. Same exposure as student_files: Apache served the directory
+#  to anyone who could guess a filename, so scanned IDs were readable
+#  without logging in.
+#
+#  Downloaded through api/file-download.php after an authorisation check.
+# ============================================================
+Require all denied

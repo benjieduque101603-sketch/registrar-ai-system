@@ -87,19 +87,51 @@ share addresses, and a student may later become staff.
   defaults. The app now refuses to boot on placeholder secrets.
 - [DONE] **C11 — Live credential scrubbed** from `gmail-oauth-setup.php`.
 
-## Phase 2 — Authorization (next)
+## Phase 2 — Authorization
 
-- [TODO] **A1** — `api/ai-tools.php`: `case_brief`, `student_risks`, `profile` accept any
-  `student_id`. A `student` session can read any other student's record. **IDOR.**
-- [TODO] **A2** — `api/ai-assist.php` `findDuplicateStudents()` discloses cross-student PII.
-- [TODO] **A3** — CSRF guard missing in `api/clinic-incidents.php`, `api/clinic-supplies.php`,
-  `api/mock/payment.php`, `api/mock/lalamove.php`.
-- [TODO] **A4** — `delete-guardian` in `api/students.php` lacks an ownership predicate.
+- [DONE] **A1 — `api/ai-tools.php` IDOR closed (CWE-639).** The endpoint is registrar
+  analytics and previously accepted any authenticated session, role-checking only 3 of
+  11 actions. A logged-in **student** could read any other student's status evidence,
+  GWA history and profile. Now an allow-list (`admin/registrar/staff`) gates the whole
+  file, so a future action cannot default to open. Allow-listing roles rather than
+  deny-listing actions is deliberate: it fails closed as the file grows.
+- [DONE] **A2 — `check_duplicate` gated.** It returned real rows (name, student number,
+  birth date) for fuzzy name matches, disclosing cross-student PII to any session.
+  Now staff-tier only.
+- [DONE] **A3 — CSRF guard added** to `api/clinic-incidents.php`,
+  `api/clinic-supplies.php`, `api/mock/payment.php` and `api/mock/lalamove.php` — all
+  accept POST/DELETE and previously loaded no guard. `security_headers.php` added to
+  match.
+- [DONE] **A3b — CORS wildcards removed** from both `api/mock/*` endpoints in favour of
+  the existing `corsSameOrigin()`. Include order fixed so `config.php` loads first.
+- [DONE] **A4 — `delete-guardian` scoped by `student_id`**, matching the update path a
+  few lines above it. It previously deleted by `id` alone, so any guardian row in the
+  table could be removed (CWE-639).
 
 ## Phase 3 — Files & exports
 
-- [TODO] **F1** — Uploaded files are served **directly by Apache from the webroot** with no
----
+- [DONE] **F1 — Uploaded files no longer readable over the web.**
+  `uploads/student_files/` and `uploads/document_requirements/` are now
+  `Require all denied`; the old `.htaccess` blocked script *execution* but never
+  *reading*, so a PSA birth certificate was fetchable by anyone who guessed
+  `<student_id>_<unixtime>_<name>`. New `api/file-download.php` authorises then streams:
+  session required, students restricted to their own records, forced
+  `Content-Disposition: attachment`, `nosniff`, and a neutral `Content-Type` so a stored
+  `.txt`/`.svg` cannot execute in the app origin. Avatars (`assets/uploads/students`) and
+  ID QR codes (`uploads/ids`) are deliberately **not** blocked — they render inline.
+- [DONE] **F2 — Upload signature validation.** `validateUploadSignature()` checks real
+  magic bytes with `finfo` and refuses content that contradicts its extension, with an
+  explicit branch for executable payloads. Wired into `api/documents.php` and
+  `api/student-documents.php`. Container formats (doc/xls/zip) stay extension-validated,
+  since finfo reports them generically and strict checking would reject real documents.
+- [DONE] **F3 — CSV formula injection fixed** in `registrar/students.php`. The export
+  built CSV by raw concatenation with no quoting and no `= + - @` guard, unlike
+  `masterlist.php` which already had `csvCell()`. Now RFC 4180 quoted with the same
+  guard, plus a BOM so Excel reads UTF-8 names correctly.
+- [DONE] **F4 — Document delete no longer builds paths by hand.** It used
+  `__DIR__ . '/../' . ltrim($file_path, './')`, which does no traversal normalisation.
+  Now resolves through `storedFileDiskPath()` with a `realpath` boundary re-asserted
+  immediately before `unlink()`.
 
 ## What is already genuinely good
 
@@ -119,7 +151,17 @@ Do not regress these. They were verified as working:
 
 ---
 
-## How to verify Phase 0 + Phase 1 locally
+## How to verify locally (all phases)
+
+One command runs every layer:
+
+```powershell
+C:\xampp\php\php.exe scripts\test_security.php
+```
+
+Apache and MySQL must be running. It resets the login counters, then runs:
+`verify_phase01.php` → `tests/AuthHardeningTest.php` → `security_attack_sim.php`,
+and prints a single verdict. Exit code 0 means everything passed.
 
 ### Step 0 — one-time: set local secrets + apply the migration
 
@@ -178,7 +220,7 @@ Expected: `PASS: 19   FAIL: 0`.
 C:\xampp\php\php.exe vendor\phpunit\phpunit\phpunit --no-coverage tests\AuthHardeningTest.php
 ```
 
-Expected: `OK (17 tests, 77 assertions)`.
+Expected: `OK (27 tests, 136 assertions)`.
 
 ### Step 2b — live attack simulation (recommended)
 
@@ -189,7 +231,7 @@ attacks, by actually attempting them over HTTP:
 C:\xampp\php\php.exe scripts\security_attack_sim.php
 ```
 
-Apache and MySQL must be running. Expected: `BLOCKED: 9   VULNERABLE: 0`.
+Apache and MySQL must be running. Expected: `BLOCKED: 14   VULNERABLE: 0`.
 
 It is read-only — no account is taken over and no password is changed. It
 attempts, and expects to fail:

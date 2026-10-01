@@ -241,6 +241,94 @@ function getFileMime($path) {
     return mime_content_type($path);
 }
 
+/**
+ * F2 — validate an upload by its ACTUAL CONTENT, not its name.
+ *
+ * The extension allowlist above is necessary but not sufficient: a file
+ * called report.pdf can contain anything, and a polyglot can be both a
+ * valid image and valid script. OWASP's File Upload guidance is explicit
+ * that the extension and the client-supplied Content-Type are attacker
+ * controlled and must not be trusted; the file signature is what counts.
+ *
+ * This checks the real magic bytes with finfo and refuses anything that
+ * does not match what its extension claims. Extensions with no reliable
+ * signature (doc/xls/zip-family containers) are allowed through, because
+ * finfo reports the container generically and a strict check would reject
+ * legitimate registrar documents — the script-execution block in
+ * uploads/.htaccess remains the control that matters for those.
+ *
+ * @return array{ok:bool, reason:string, detected:string}
+ */
+function validateUploadSignature(string $tmpPath, string $originalName): array
+{
+    $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+
+    // Extensions whose format has no dependable magic number. These stay
+    // extension-validated only; see the note above.
+    $containerExts = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods',
+                      'zip', 'rar', '7z', 'txt', 'csv'];
+
+    if (!is_uploaded_file($tmpPath)) {
+        return ['ok' => false, 'reason' => 'not an uploaded file', 'detected' => ''];
+    }
+    if (in_array($ext, $containerExts, true)) {
+        return ['ok' => true, 'reason' => 'extension-only (container format)', 'detected' => ''];
+    }
+
+    if (!function_exists('finfo_open')) {
+        // fileinfo extension unavailable: fall back to extension-only
+        // rather than rejecting every legitimate upload.
+        error_log('[upload] finfo unavailable; skipping signature check for ' . $originalName);
+        return ['ok' => true, 'reason' => 'finfo unavailable', 'detected' => ''];
+    }
+
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    if ($finfo === false) {
+        error_log('[upload] finfo_open failed; skipping signature check');
+        return ['ok' => true, 'reason' => 'finfo_open failed', 'detected' => ''];
+    }
+    $detected = (string) finfo_file($finfo, $tmpPath);
+    finfo_close($finfo);
+
+    if ($detected === '') {
+        return ['ok' => false, 'reason' => 'could not identify file content', 'detected' => ''];
+    }
+
+    // What a file claiming to be <ext> is actually allowed to be.
+    $expected = [
+        'jpg'  => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png'  => ['image/png'],
+        'gif'  => ['image/gif'],
+        'webp' => ['image/webp'],
+        'bmp'  => ['image/bmp', 'image/x-ms-bmp'],
+        'pdf'  => ['application/pdf'],
+    ];
+
+    if (!isset($expected[$ext])) {
+        return ['ok' => true, 'reason' => 'no signature rule for this extension', 'detected' => $detected];
+    }
+
+    if (!in_array(strtolower($detected), $expected[$ext], true)) {
+        // Explicitly refuse anything that looks executable. This is the
+        // case that matters: a .png that is really PHP.
+        if (preg_match('#(php|script|html|xml|executable)#i', $detected)) {
+            return [
+                'ok'       => false,
+                'reason'   => 'the file content is executable code, not a ' . strtoupper($ext),
+                'detected' => $detected,
+            ];
+        }
+        return [
+            'ok'       => false,
+            'reason'   => 'file content does not match its .' . $ext . ' extension',
+            'detected' => $detected,
+        ];
+    }
+
+    return ['ok' => true, 'reason' => 'signature verified', 'detected' => $detected];
+}
+
 // ─── LOGGING HELPERS ───────────────────────────────────────────
 
 /**

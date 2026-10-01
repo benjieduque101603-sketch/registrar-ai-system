@@ -22,6 +22,26 @@ final class AuthHardeningTest extends TestCase
         return (string) file_get_contents($path);
     }
 
+    /**
+     * Source with comments stripped.
+     *
+     * Several fixes here deliberately QUOTE the old vulnerable code in an
+     * explanatory comment (e.g. "'Access-Control-Allow-Origin: *' was here").
+     * A raw substring search would then match the comment and report the
+     * bug as still present. Stripping comments first makes these assertions
+     * test what the code does, not what it says it used to do.
+     */
+    private function code(string $relative): string
+    {
+        $src = $this->src($relative);
+        // Block comments, then line comments. Delimiter is ~ because the
+        // patterns contain # and / characters of their own.
+        $src = (string) preg_replace('~/\*.*?\*/~s', '', $src);
+        $src = (string) preg_replace('~(^|\s)//.*$~m', '$1', $src);
+        $src = (string) preg_replace('~(^|\s)\#.*$~m', '$1', $src);
+        return $src;
+    }
+
     // ── C1 — reset must not trust a client-supplied user_id ──────
 
     /**
@@ -268,5 +288,203 @@ final class AuthHardeningTest extends TestCase
         self::assertStringContainsString('hash_equals', $src, 'the shared secret must be compared in constant time');
         self::assertStringContainsString('http_response_code(503)', $src, 'must refuse when no token is configured');
         self::assertStringNotContainsString('csrf_guard', $src, 'this is a provider webhook, not a browser form');
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Phase 2 — authorization
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * A1 (IDOR, CWE-639): api/ai-tools.php is registrar analytics. It
+     * previously accepted any authenticated session and role-checked only
+     * 3 of 11 actions, so a logged-in STUDENT could read any other
+     * student's status evidence, GWA history and profile.
+     */
+    public function testAiToolsIsGatedForStudents(): void
+    {
+        $src = $this->src('api/ai-tools.php');
+
+        self::assertStringContainsString(
+            "in_array(getCurrentUserRole(), \$AI_TOOLS_ROLES, true)",
+            $src,
+            'ai-tools must allow-list roles rather than deny-list actions'
+        );
+        self::assertStringContainsString("'student'", $src, 'a student must never appear in the allowed roles');
+        self::assertStringContainsString('http_response_code(403)', $src);
+
+        // The old partial gate must be gone: it only covered 3 actions.
+        self::assertStringNotContainsString('$qualityActions', $src,
+            'the deny-list gate is what allowed the IDOR');
+    }
+
+    /** A2: findDuplicateStudents() returns name + student number + birth date. */
+    public function testDuplicateLookupIsGated(): void
+    {
+        $src = $this->src('api/ai-assist.php');
+
+        self::assertStringContainsString('case \'check_duplicate\'', $src);
+        $start = strpos($src, "case 'check_duplicate'");
+        $block = substr($src, $start, 700);
+
+        self::assertStringContainsString('getCurrentUserRole', $block,
+            'check_duplicate discloses cross-student PII and must be role-gated');
+        self::assertStringContainsString('403', $block);
+    }
+
+    /** A3: every state-changing endpoint must load the CSRF guard. */
+    public function testStateChangingEndpointsLoadCsrfGuard(): void
+    {
+        foreach ([
+            'api/clinic-incidents.php',
+            'api/clinic-supplies.php',
+            'api/mock/payment.php',
+            'api/mock/lalamove.php',
+        ] as $file) {
+            $src = $this->src($file);
+            self::assertStringContainsString(
+                'csrf_guard.php',
+                $src,
+                "{$file} accepts POST/DELETE but never loaded the CSRF guard"
+            );
+            self::assertStringContainsString('security_headers.php', $src,
+                "{$file} skipped the security headers include");
+        }
+    }
+
+    /** A4: the guardian delete must scope by student_id, like its update path. */
+    public function testGuardianDeleteIsOwnershipScoped(): void
+    {
+        $src = $this->src('api/students.php');
+
+        $start = strpos($src, "'delete-guardian'");
+        self::assertNotFalse($start, 'delete-guardian handler not found');
+        $block = substr($src, $start, 1800);
+
+        self::assertStringContainsString(
+            "'id = ? AND student_id = ?'",
+            $block,
+            'the delete must carry a student_id predicate, not delete by id alone'
+        );
+        self::assertStringNotContainsString(
+            "\$db->delete('guardians', 'id = ?', [\$id])",
+            $block,
+            'deleting by id alone lets any guardian row be removed (CWE-639)'
+        );
+    }
+
+    /** The CORS wildcard must not survive on a cookie-authenticated endpoint. */
+    public function testNoWildcardCorsOnAuthenticatedEndpoints(): void
+    {
+        foreach (['api/mock/payment.php', 'api/mock/lalamove.php'] as $file) {
+            // Comments stripped: the fix explains in a comment that the
+            // wildcard was there before, and a raw search would match it.
+            $src = $this->code($file);
+            self::assertStringNotContainsString(
+                'Access-Control-Allow-Origin: *',
+                $src,
+                "{$file} still advertises itself to every origin"
+            );
+            self::assertStringContainsString('corsSameOrigin()', $src);
+        }
+    }
+
+// ─────────────────────────────────────────────────────────────
+    // Phase 3 — files and exports
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * F1: uploaded files were served straight out of the web root by
+     * Apache. The per-directory .htaccess blocked script EXECUTION but
+     * never blocked READING, so a student's PSA birth certificate was
+     * fetchable by anyone who guessed <student_id>_<unixtime>_<name>.
+     */
+    public function testSensitiveUploadDirectoriesDenyWebAccess(): void
+    {
+        foreach (['uploads/student_files/.htaccess', 'uploads/document_requirements/.htaccess'] as $guard) {
+            $src = $this->src($guard);
+            self::assertStringContainsString(
+                'Require all denied',
+                $src,
+                "{$guard} must deny all direct web access, not just script execution"
+            );
+        }
+    }
+
+    public function testFileDownloadEndpointAuthorisesBeforeStreaming(): void
+    {
+        $src = $this->code('api/file-download.php');
+
+        self::assertStringContainsString('isLoggedIn()', $src, 'downloads must require a session');
+        self::assertStringContainsString('getCurrentStudentId()', $src,
+            'a student must be checked against their OWN record');
+        // The 403 is raised through the jsonFail() helper, so assert on the
+        // call sites rather than a literal http_response_code(403).
+        self::assertStringContainsString('jsonFail(403', $src,
+            'an unauthorised download must be refused with 403');
+
+        // The path must be re-checked against the app root right before
+        // the read, not just once at the top.
+        self::assertStringContainsString('strpos($realAbs, $realRoot) !== 0', $src,
+            'the resolved path must be confined to the app root');
+        self::assertStringContainsString('Content-Disposition: attachment', $src,
+            'a stored file must never be served inline in the app origin');
+        self::assertStringContainsString('nosniff', $src);
+
+        // A caller-supplied path would bypass ownership entirely.
+        self::assertStringNotContainsString("\$_GET['path']", $src,
+            'resolving from a caller-supplied path re-opens the exposure');
+    }
+
+    /** F2: uploads must be validated by content, not by extension alone. */
+    public function testUploadSignatureValidationIsWired(): void
+    {
+        $helper = $this->src('shared/functions.php');
+        self::assertStringContainsString('function validateUploadSignature', $helper);
+        self::assertStringContainsString('finfo_file', $helper,
+            'the signature check must read real magic bytes');
+
+        foreach (['api/documents.php', 'api/student-documents.php'] as $file) {
+            self::assertStringContainsString(
+                'validateUploadSignature',
+                $this->src($file),
+                "{$file} validates uploads by extension only"
+            );
+        }
+    }
+
+    /** F3: the students CSV export must guard against formula injection. */
+    public function testStudentCsvExportQuotesAndEscapesFormulas(): void
+    {
+        $src = $this->src('registrar/students.php');
+
+        $start = strpos($src, 'function exportStudents');
+        self::assertNotFalse($start, 'exportStudents not found');
+        $block = substr($src, $start, 1400);
+
+        self::assertStringContainsString('/^[=+\-@\t\r]/', $block,
+            'the export must prefix = + - @ so Excel cannot execute a cell');
+        self::assertStringContainsString('.replace(/"/g', $block,
+            'RFC 4180 quoting is required; raw concatenation breaks on commas');
+    }
+
+    /** F4: the document delete must resolve through the traversal-safe helper. */
+    public function testDocumentDeleteUsesSafePathResolver(): void
+    {
+        $src = $this->code('api/documents.php');
+
+        self::assertStringNotContainsString(
+            "ltrim(\$row['file_path'], './')",
+            $src,
+            'building the delete path by hand skips traversal normalisation'
+        );
+
+        $start = strpos($src, "'action'] === 'delete'");
+        self::assertNotFalse($start, 'file delete handler not found');
+        $block = substr($src, $start, 1600);
+
+        self::assertStringContainsString('storedFileDiskPath', $block,
+            'the delete must resolve through the traversal-safe helper');
+        self::assertStringContainsString('realpath', $block,
+            'the resolved path must be re-asserted immediately before unlink()');
     }
 }

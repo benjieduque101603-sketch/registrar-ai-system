@@ -122,7 +122,11 @@ if ($failed) {
 }
 
 echo "  All three layers passed.\n\n";
-echo "  Phase 0 (mail) and Phase 1 (authentication) hold.\n";
-echo "  Note: the Phase 2 authorization issues are NOT covered here —\n";
-echo "  in particular the ai-tools.php IDOR, where a logged-in student\n";
-echo "  can read another student's record. That is still open.\n";
+echo "  Phase 0 (mail), Phase 1 (authentication), Phase 2 (authorization)\n";
+echo "  and Phase 3 (files and exports) all hold.\n\n";
+echo "  Not covered here: any defect that needs TWO authenticated users of\n";
+echo "  different roles at once. The deepest IDOR case — a logged-in student\n";
+echo "  reading another student's record — is asserted at the source level in\n";
+echo "  AuthHardeningTest, and its role allow-list is checked by the attack\n";
+echo "  simulator, but an end-to-end two-student test would need real student\n";
+echo "  passwords. Do that manually before deploying.\n";

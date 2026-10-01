@@ -101,11 +101,40 @@ try {
     }
 
     // ─── DELETE GUARDIAN ────────────────────────────────────────
+    //
+    // A4: this deleted by `id` alone, with no student_id predicate —
+    // unlike the update path a few lines above, which correctly scopes to
+    // 'id = ? AND student_id = ?'. Any guardian id in the table could be
+    // deleted regardless of which student it belonged to (CWE-639).
+    //
+    // Fixed by looking the row up first and confirming the student is in
+    // scope for this session, then deleting by the pair so the predicate
+    // is enforced in the WHERE clause rather than trusted from PHP.
     if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'delete-guardian') {
         $input = json_decode(file_get_contents('php://input'), true);
         $id = intval($input['id'] ?? 0);
         if (!$id) { echo json_encode(['success' => false, 'message' => 'Guardian ID required.']); exit; }
-        $db->delete('guardians', 'id = ?', [$id]);
+
+        $guardian = $db->fetchOne("SELECT id, student_id FROM guardians WHERE id = ?", [$id]);
+        if (!$guardian) {
+            echo json_encode(['success' => false, 'message' => 'Guardian not found.']);
+            exit;
+        }
+
+        // A student-role session may only touch its own record.
+        $ownerStudentId = (int) ($guardian['student_id'] ?? 0);
+        if (getCurrentUserRole() === 'student') {
+            $own = getCurrentStudentId();
+            if ($own === null || $own !== $ownerStudentId) {
+                error_log('[students] denied delete-guardian id=' . $id
+                    . ' owner=' . $ownerStudentId . ' self=' . var_export($own, true));
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Forbidden.']);
+                exit;
+            }
+        }
+
+        $db->delete('guardians', 'id = ? AND student_id = ?', [$id, $ownerStudentId]);
         echo json_encode(['success' => true, 'message' => 'Guardian deleted.']);
         exit;
     }

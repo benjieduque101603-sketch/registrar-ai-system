@@ -120,6 +120,18 @@ try {
                 echo json_encode(['success' => false, 'message' => 'File too large (max 25 MB).']);
                 exit;
             }
+            // F2: extension-only validation is bypassable — a file named
+            // .pdf can contain anything. Verify the real magic bytes too.
+            $sig = validateUploadSignature($file['tmp_name'], $file['name']);
+            if (!$sig['ok']) {
+                error_log('[documents] rejected upload: ' . $sig['reason']
+                    . ' (detected ' . $sig['detected'] . ')');
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'File rejected: ' . $sig['reason'] . '.',
+                ]);
+                exit;
+            }
             if (!in_array($docType, ['enrollment','transcript','health','photo','clearance','other','form_137','psa'], true)) {
                 $docType = 'other';
             }
@@ -244,6 +256,15 @@ try {
         }
 
         // ── DELETE FILE ──
+        // F4: this built the path by hand —
+        //     __DIR__ . '/../' . ltrim($row['file_path'], './')
+        // — which does no traversal normalisation. A file_path of
+        // '../../../windows/win.ini' (or any row whose value were ever
+        // influenced by input) resolves outside the app and gets unlinked.
+        //
+        // storedFileDiskPath() resolves through storedFileRel(), which
+        // normalises the path and returns null when it escapes the app
+        // root, so the delete is confined to uploads we actually own.
         if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'delete') {
             $input = json_decode(file_get_contents('php://input'), true);
             $id = intval($input['id'] ?? 0);
@@ -253,9 +274,18 @@ try {
             }
             $row = $db->fetchOne("SELECT file_path FROM documents WHERE id = ?", [$id]);
             if ($row) {
-                $abs = __DIR__ . '/../' . ltrim($row['file_path'], './');
-                $abs = str_replace(['\\', '//'], ['/', '/'], $abs);
-                if (file_exists($abs)) @unlink($abs);
+                $abs = storedFileDiskPath($row['file_path']);
+                if ($abs !== null) {
+                    // Re-assert the boundary even though the helper already
+                    // checks it: unlink() is destructive and irreversible, so
+                    // the final guard lives immediately before the call.
+                    $root = realpath(dirname(__DIR__));
+                    if ($root !== false && strpos(realpath(dirname($abs)), $root) === 0) {
+                        @unlink($abs);
+                    } else {
+                        error_log('[documents] refused unlink outside app root: ' . $row['file_path']);
+                    }
+                }
                 $db->delete('documents', 'id = ?', [$id]);
             }
             echo json_encode(['success' => true, 'message' => 'File deleted.']);

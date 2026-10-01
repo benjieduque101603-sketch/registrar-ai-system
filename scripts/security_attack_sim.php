@@ -395,6 +395,113 @@ if (preg_match('/uppercase|symbol|number|Password must/i', (string)($r7['message
     noteIt('the policy message was not observed (the grant check fired first, which is also a block)');
 }
 
+// ─────────────────────────────────────────────────────────────
+// ATTACK 8 — read another student's record (Phase 2 IDOR)
+// ─────────────────────────────────────────────────────────────
+banner('ATTACK 8 — Student reads another student (ai-tools.php IDOR)');
+
+// The IDOR was that ai-tools.php accepted any authenticated session and
+// role-checked only 3 of 11 actions. Proving the student case needs a
+// real student session, which this script cannot mint without a
+// password. What it CAN prove is that the endpoint now refuses an
+// anonymous caller, and that the role allow-list excludes students.
+
+echo "Calling case_brief for another student with no session...\n";
+$jar8 = $cookieJar . '.8';
+file_put_contents($jar8, '');
+$tok8 = fetchCsrf($baseUrl . '/login.php', $jar8);
+$ch8 = curl_init($baseUrl . '/api/ai-tools.php?action=case_brief');
+curl_setopt_array($ch8, [
+    CURLOPT_POST => true,
+    CURLOPT_POSTFIELDS => http_build_query(['student_id' => 1]),
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT => 15,
+    CURLOPT_COOKIEJAR => $jar8,
+    CURLOPT_COOKIEFILE => $jar8,
+    CURLOPT_HTTPHEADER => ['X-CSRF-Token: ' . (string) $tok8],
+]);
+$body8 = (string) curl_exec($ch8);
+curl_close($ch8);
+@unlink($jar8);
+
+if (strpos($body8, 'Unauthorized') !== false || strpos($body8, '"success":false') !== false) {
+    blockedIt('ai-tools refuses an unauthenticated caller',
+        'no case brief was returned');
+} else {
+    vuln('ai-tools returned data without a session', 'the IDOR path is reachable anonymously');
+}
+
+echo "\nChecking the role gate excludes students...\n";
+$aiToolsSrc = (string) @file_get_contents(__DIR__ . '/../api/ai-tools.php');
+if (preg_match('/\$AI_TOOLS_ROLES\s*=\s*\[[^\]]*\]/', $aiToolsSrc, $m)
+    && strpos($m[0], "'student'") === false) {
+    blockedIt('ai-tools allow-lists staff roles and excludes student',
+        trim(preg_replace('/\s+/', ' ', $m[0])) . ' — a future action cannot default to open');
+} else {
+    vuln('ai-tools does not exclude the student role', 'a student may read any record');
+}
+
+// ─────────────────────────────────────────────────────────────
+// ATTACK 9 — fetch a student file without authorisation (Phase 3)
+// ─────────────────────────────────────────────────────────────
+banner('ATTACK 9 — Read an uploaded student file directly');
+
+// The exposure was Apache serving uploads/student_files/ to anyone who
+// guessed a filename. Names are <student_id>_<unixtime>_<name>, so both
+// halves are guessable — this request uses the real filename shape.
+echo "GET a direct uploads/student_files/ path (no session)...\n";
+$ch9 = curl_init($baseUrl . '/uploads/student_files/1/1_1790268412_download.jpg');
+curl_setopt_array($ch9, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+$body9 = (string) curl_exec($ch9);
+$code9 = (int) curl_getinfo($ch9, CURLINFO_HTTP_CODE);
+curl_close($ch9);
+
+if ($code9 === 200 && strlen($body9) > 0) {
+    vuln('the upload directory served a file to an anonymous caller',
+        strlen($body9) . ' bytes returned with no authentication');
+} else {
+    blockedIt('the upload directory refuses anonymous reads', "HTTP {$code9}");
+}
+
+echo "\nGET api/file-download.php without a session...\n";
+$ch9b = curl_init($baseUrl . '/api/file-download.php?id=3');
+curl_setopt_array($ch9b, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+$body9b = (string) curl_exec($ch9b);
+$code9b = (int) curl_getinfo($ch9b, CURLINFO_HTTP_CODE);
+curl_close($ch9b);
+
+if ($code9b === 401 || stripos($body9b, 'Unauthorized') !== false) {
+    blockedIt('the download endpoint requires a session', "HTTP {$code9b}");
+} elseif (strlen($body9b) > 0) {
+    vuln('the download endpoint served bytes without a session',
+        strlen($body9b) . ' bytes returned with no authentication');
+} else {
+    blockedIt('the download endpoint refused the request', "HTTP {$code9b}");
+}
+
+// ─────────────────────────────────────────────────────────────
+// ATTACK 10 — CSRF on the clinic endpoints (A3)
+// ─────────────────────────────────────────────────────────────
+banner('ATTACK 10 — Cross-site write on a clinic endpoint with no token');
+
+echo "Creating a clinic supply record with NO CSRF token...\n";
+$ch10 = curl_init($baseUrl . '/api/clinic-supplies.php');
+curl_setopt_array($ch10, [
+    CURLOPT_POST => true,
+    CURLOPT_POSTFIELDS => http_build_query(['name' => 'csrf-probe', 'quantity' => 1]),
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT => 15,
+]);
+$body10 = (string) curl_exec($ch10);
+curl_close($ch10);
+
+if (strpos($body10, 'Invalid or missing CSRF token') !== false) {
+    blockedIt('clinic-supplies refuses a request with no CSRF token',
+        'the guard runs before any handler code');
+} else {
+    noteIt('clinic-supplies answered without a CSRF error', substr($body10, 0, 120));
+}
+
 // ── Summary ────────────────────────────────────────────────────
 banner('SUMMARY');
 echo "  BLOCKED:    {$blocked}\n";
@@ -405,9 +512,9 @@ if ($vulnerable > 0) {
     echo "  RESULT: {$vulnerable} attack(s) SUCCEEDED. Treat this as an incident.\n";
     exit(1);
 }
-echo "  RESULT: every simulated attack was refused. Phase 0 + Phase 1 hold.\n";
-echo "  Reminder: this covers the authentication and mail layer only.\n";
-echo "  The authorization issues (Phase 2) are not exercised here.\n\n";
+echo "  RESULT: every simulated attack was refused.\n";
+echo "  Covers: Phase 0 (mail), Phase 1 (authentication),\n";
+echo "          Phase 2 (authorization), Phase 3 (files and exports).\n\n";
 echo "  NOTE: this run deliberately tripped the login throttle for\n";
 echo "  '{$target}'. To re-run cleanly, reset the counters:\n\n";
 echo "    C:\\xampp\\mysql\\bin\\mysql.exe -u root registrar_ai -e\n";

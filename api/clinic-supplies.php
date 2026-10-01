@@ -10,7 +10,9 @@
 // ============================================================
 
 header('Content-Type: application/json');
+require_once __DIR__ . '/../shared/security_headers.php';
 require_once __DIR__ . '/../shared/session_config.php';
+require_once __DIR__ . '/../shared/csrf_guard.php';
 require_once __DIR__ . '/../shared/database.php';
 if (!isLoggedIn() || !in_array(getCurrentUserRole(), ['nurse','admin'])) {
     http_response_code(403); echo json_encode(['success'=>false,'message'=>'Forbidden.']); exit;
