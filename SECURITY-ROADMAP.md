@@ -121,14 +121,45 @@ Do not regress these. They were verified as working:
 
 ## How to verify Phase 0 + Phase 1 locally
 
-### Step 0 — one-time: apply the migration
+### Step 0 — one-time: set local secrets + apply the migration
+
+`APP_ENV` now defaults to `production`, so a missing secret stops the app with:
+
+```
+Server configuration error: JWT_SECRET is not set. Set it before going live.
+```
+
+That is the fail-closed guard doing its job. On local XAMPP, set the secrets in
+`shared/secrets.local` (already gitignored via the `*.local` rule):
+
+```
+JWT_SECRET=<64 hex chars>
+KIOSK_ACCESS_TOKEN=<64 hex chars>
+MAIL_BOUNCE_TOKEN=<64 hex chars>
+```
+
+Generate a value with:
 
 ```powershell
-cd C:\xampp\htdocs\registrar-ai-system
+C:\xampp\php\php.exe -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
+```
+
+`shared/config.php` resolves secrets in this order:
+
+1. a real environment variable (cPanel / Docker `.env`)
+2. `shared/secrets.local`
+3. **fail closed** — any HTTP request in production mode aborts
+
+On your real host, prefer the hosting panel's environment variables and leave
+`secrets.local` alone. Never commit either.
+
+Then apply the migration:
+
+```powershell
 C:\xampp\mysql\bin\mysql.exe -u root registrar_ai < migrations\security_hardening_phase1.sql
 ```
 
-Without this the reset flow cannot work and the verifier reports FAILs.
+Without it the reset flow cannot work and the verifier reports FAILs.
 
 ### Step 1 — automated checks (30 seconds)
 
