@@ -1861,8 +1861,11 @@ function exportExcel() {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const xcell = v => '<Cell><Data ss:Type="String">' + esc(v) + '</Data></Cell>';
 
-    let xml = '<?xml version="1.0"?>\n'
-        + '<?mso-application progid="Excel.Sheet"?>\n'
+    // \x3C is written instead of a literal "<" so the "?xml" and
+    // "?mso-application" processing instructions can never be read as a
+    // PHP short open tag on servers with short_open_tag = On.
+    let xml = '\x3C?xml version="1.0"?>\n'
+        + '\x3C?mso-application progid="Excel.Sheet"?>\n'
         + '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"\n'
         + '          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n'
         + '<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/></Style></Styles>\n'
