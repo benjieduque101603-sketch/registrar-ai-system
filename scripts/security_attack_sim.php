@@ -140,10 +140,24 @@ function post(string $url, array $fields, string $jar, ?string $csrf = null): ar
     curl_close($ch);
 
     $body = substr($raw, $hsize);
-    // Strip a UTF-8 BOM: json_decode() fails on a leading BOM, which is why
-    // an apparently fine response would decode to null and read as
-    // "no response".
-    $body = preg_replace('/^\xEF\xBB\xBF/', '', $body);
+    // Decode robustly. json_decode() returns null when the payload has any
+    // leading non-JSON bytes, and an unfixed response then reads as
+    // "no response" — which previously made a WORKING control look broken.
+    //
+    // Two defects are handled here:
+    //   1. a UTF-8 BOM (EF BB BF) before the JSON;
+    //   2. a stray byte sequence before the BOM. Some sources write a
+    //      mojibake em-dash, so the payload can begin with stray bytes
+    //      that are not part of the JSON at all.
+    // Both are stripped before decoding.
+    $body = ltrim($body, "\xEF\xBB\xBF");
+    // Drop any bytes before the first '{' or '[' that cannot be JSON.
+    if ($body !== '' && $body[0] !== '{' && $body[0] !== '[') {
+        $bracePos = strcspn($body, '{[');
+        if ($bracePos < strlen($body)) {
+            $body = substr($body, $bracePos);
+        }
+    }
     $json = json_decode($body, true);
 
     return [$status, is_array($json) ? $json : [], $body, $err];

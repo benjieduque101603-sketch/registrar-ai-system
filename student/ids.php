@@ -7,6 +7,9 @@
 require_once __DIR__ . '/../shared/security_headers.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/database.php';
+// resolveStudentQrUrl() lives here and is used for the QR <img> below.
+require_once __DIR__ . '/../shared/qr_generator.php';
+require_once __DIR__ . '/../shared/functions.php';   // e() for output escaping
 
 $page_title = 'ID &amp; Status';
 $APP_ROOT = '../';
@@ -80,11 +83,22 @@ $initial  = strtoupper(substr(trim($firstLast), 0, 1));
                         <div class="id-meta-item"><div class="m-label">Card Color</div><div class="m-value"><?= htmlspecialchars(ucfirst($id['card_color'] ?? 'Blue')) ?></div></div>
                     </div>
 
-                    <?php if (!empty($id['qr_code_path'])): ?>
+                    // D2: this wrote a raw DB value straight into a src attribute, bypassing
+// the resolveStudentQrUrl() helper every other page uses for this exact
+// column. A stored value containing a quote could break out of the
+// attribute and inject markup (stored XSS). It is server-generated today,
+// so it is not directly attacker-controlled — but it is a DB value in an
+// unescaped HTML attribute, which is exactly the shape that becomes
+// exploitable the moment any other code path writes the column.
+//
+// Escaped with e() and routed through the shared resolver, which also
+// makes it '' (renders nothing) if the file is not on disk.
+$qrUrl = resolveStudentQrUrl($id['qr_code_path'] ?? null, $APP_ROOT); ?>
+                    <?php if ($qrUrl !== ''): ?>
                     <div class="id-sep"></div>
                     <div class="id-footer">
                         <span class="chip gray"><i class="fa-solid fa-qrcode"></i> Scan to verify</span>
-                        <div class="id-qr"><img src="<?= $APP_ROOT . ltrim($id['qr_code_path'], './') ?>" alt="ID QR code"></div>
+                        <div class="id-qr"><img src="<?= e($qrUrl) ?>" alt="ID QR code"></div>
                     </div>
                     <?php endif; ?>
                 </div>

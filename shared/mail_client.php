@@ -713,6 +713,9 @@ function contactAutoForwardInvoice(int $requestId, int $studentId): array {
 }
 
 /** HTML-escape helper (short alias used in the senders above). */
+// Defined in shared/functions.php so every page can use it, not just the
+// mail module. The guard keeps this file self-contained if it is loaded on
+// its own without functions.php.
 if (!function_exists('e_')) {
     function e_(?string $value): string {
         return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');

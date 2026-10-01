@@ -308,16 +308,39 @@ queue. Revisit when a measurable bottleneck or a second team appears.
   (`csvCell()` already exists in `masterlist.php` and should be reused).
 - [TODO] **F4** — `api/documents.php` delete path bypasses `storedFileDiskPath()`.
 
-## Phase 4 — Defence in depth
+## Phase 4 — Defence in depth ✅
 
-- [TODO] **D1** — 36 of 46 `api/*.php` include `session_config.php` without
-  `security_headers.php`, so cookie flags silently fall back to php.ini defaults.
-- [TODO] **D2** — Global `e()` output helper; escaping is currently opt-in per call site.
-- [TODO] **D3** — Whitelist identifiers inside `Database::insert/update/delete`
-  (raw interpolation is safe today but fragile).
-- [DONE] **D4** — Security regression tests: `tests/AuthHardeningTest.php`
-  (15 tests, 71 assertions) pins every Phase 0/1 defect above.
-  Existing suite verified unchanged against a stashed baseline.
-- [KNOWN-PRE-EXISTING] `tests/DocumentTemplateTest.php` has 4 errors
-  (`Call to undefined function app_url()` from `shared/document_templates.php:551`).
-  Unrelated to security work; present before these changes.
+- [DONE] **D1 — Session cookie flags moved to `session_config.php`.** They lived only in
+  `security_headers.php`, so 32 `api/*.php` endpoints that never included it issued their
+  session cookie with `php.ini` defaults — commonly **no `HttpOnly` and no `SameSite`**.
+  Setting them inside `session_config.php` before `session_start()` fixes all 32 at once
+  and makes the include-order requirement impossible to miss. Verified live: five
+  endpoints that never included `security_headers.php` now emit
+  `HttpOnly; SameSite=Lax`.
+- [DONE] **D2 — Global `e()` escape helper.** Escaping was manual
+  `htmlspecialchars()` at every site (and `nurse/dashboard.php` had its own local `h()`),
+  so one forgotten call is stored XSS. `e()` now lives in `shared/functions.php` with
+  `ENT_QUOTES` (the default flags do **not** escape single quotes, which is what protects
+  a single-quoted attribute). `e_()` delegates to it so there is one implementation.
+  Also fixed the one real miss the audit found: `student/ids.php` wrote a raw DB value
+  into an `<img src>` attribute; it now goes through `resolveStudentQrUrl()` + `e()`.
+- [DONE] **D3 — SQL identifier whitelist in `Database`.** `insert/update/delete`
+  interpolate the table and column names because PDO cannot bind them. Every current
+  call site passes a literal, so this is defence in depth — but it turns a future
+  mistake into an immediate exception instead of silent SQL injection. Verified with a
+  probe: normal operations still work, backticked identifiers are accepted, and five
+  injection shapes (`users; DROP TABLE users`, `users WHERE 1=1`, empty, spaced,
+  malicious column name) are all refused.
+- [DONE] **D4 — Regression tests.** `tests/AuthHardeningTest.php` now 31 tests / 161
+  assertions, pinning every defect above by behaviour.
+
+### Known limitation
+
+The deepest IDOR case — a logged-in **student** reading another student's record — is
+asserted at source level and via the role allow-list, but a true end-to-end test needs
+**two real student logins**. Do that manually before deploying.
+
+### Known pre-existing issue (unrelated to security)
+
+`tests/DocumentTemplateTest.php` has 4 errors: `Call to undefined function app_url()` from
+`shared/document_templates.php:551`. Present before this work began.

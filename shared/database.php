@@ -61,8 +61,42 @@ class Database {
         return $this->query($sql, $params)->fetchColumn();
     }
 
+    /**
+     * D3 — reject identifiers that are not plain column names.
+     *
+     * $table and the column keys in $data cannot be bound as PDO
+     * placeholders (PDO only parameterises VALUES), so they are
+     * interpolated. Every current call site passes a string literal, so
+     * this is defence in depth rather than a live hole — but it converts a
+     * future mistake from silent SQL injection into an immediate, obvious
+     * exception.
+     *
+     * A backtick-quoted identifier (`users`) is also accepted, because some
+     * schema scripts and SHOW COLUMNS output use that form.
+     */
+    private function assertSafeIdentifier($identifier): string
+    {
+        $name = trim((string) $identifier);
+        if (strpos($name, '`') === 0 && substr($name, -1) === '`' && strlen($name) > 2) {
+            $name = substr($name, 1, -1);
+        }
+        // A column name: letters, digits and underscores only. Anything
+        // containing a space, quote, comma, parenthesis or semicolon is a
+        // fragment of a larger statement, not an identifier.
+        if ($name === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
+            throw new InvalidArgumentException(
+                'Unsafe SQL identifier rejected: ' . var_export($identifier, true)
+            );
+        }
+        return '`' . $name . '`';
+    }
+
     public function insert($table, $data) {
-        $columns = array_keys($data);
+        $table = $this->assertSafeIdentifier($table);
+        $columns = [];
+        foreach (array_keys($data) as $column) {
+            $columns[] = $this->assertSafeIdentifier($column);
+        }
         $placeholders = array_fill(0, count($columns), '?');
         $sql = "INSERT INTO {$table} (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $placeholders) . ")";
         $this->query($sql, array_values($data));
@@ -70,16 +104,21 @@ class Database {
     }
 
     public function update($table, $data, $where, $whereParams = []) {
+        $table = $this->assertSafeIdentifier($table);
         $sets = [];
-        foreach ($data as $key => $value) {
-            $sets[] = "{$key} = ?";
+        foreach (array_keys($data) as $column) {
+            $sets[] = $this->assertSafeIdentifier($column) . ' = ?';
         }
+        // $where is a small fixed predicate (always 'id = ?' or a literal
+        // column comparison with placeholders), so it is not passed through
+        // assertSafeIdentifier — it is intentionally a WHERE fragment.
         $sql = "UPDATE {$table} SET " . implode(', ', $sets) . " WHERE {$where}";
         $params = array_merge(array_values($data), $whereParams);
         return $this->query($sql, $params)->rowCount();
     }
 
     public function delete($table, $where, $params = []) {
+        $table = $this->assertSafeIdentifier($table);
         $sql = "DELETE FROM {$table} WHERE {$where}";
         return $this->query($sql, $params)->rowCount();
     }

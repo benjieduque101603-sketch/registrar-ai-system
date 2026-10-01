@@ -34,15 +34,22 @@ final class AuthHardeningTest extends TestCase
     private function code(string $relative): string
     {
         $src = $this->src($relative);
-        // Block comments, then line comments. Delimiter is ~ because the
-        // patterns contain # and / characters of their own.
+
+        // ORDER MATTERS: strip full-line comments FIRST, then block comments.
+        //
+        // A line comment can legitimately contain the characters "/*" — for
+        // example "the api/*.php endpoints did not". If block comments were
+        // stripped first, that "/*" would be treated as an opening delimiter
+        // and paired with the next real "*/" hundreds of lines later,
+        // deleting a large slab of genuine code and making a present control
+        // look absent.
+        $src = (string) preg_replace('~^\s*//.*$~m', '', $src);
+        $src = (string) preg_replace('~^\s*\#.*$~m', '', $src);
         $src = (string) preg_replace('~/\*.*?\*/~s', '', $src);
-        $src = (string) preg_replace('~(^|\s)//.*$~m', '$1', $src);
-        $src = (string) preg_replace('~(^|\s)\#.*$~m', '$1', $src);
         return $src;
     }
 
-    // ── C1 — reset must not trust a client-supplied user_id ──────
+    // â”€â”€ C1 â€” reset must not trust a client-supplied user_id â”€â”€â”€â”€â”€â”€
 
     /**
      * The reset_password handler must derive the user id from a verified,
@@ -62,9 +69,9 @@ final class AuthHardeningTest extends TestCase
             self::assertNotFalse($start, "{$file}: reset_password handler not found");
 
             // End the block at the next top-level action handler.
-            $end = strpos($src, '// ─── LOGOUT ACTION', $start);
+            $end = strpos($src, '// â”€â”€â”€ LOGOUT ACTION', $start);
             if ($end === false) {
-                $end = strpos($src, "// ─── LOGOUT", $start);
+                $end = strpos($src, "// â”€â”€â”€ LOGOUT", $start);
             }
             if ($end === false) {
                 $end = strlen($src);
@@ -95,7 +102,7 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-    // ── C2 — the OTP must never appear in an API response ────────
+    // â”€â”€ C2 â€” the OTP must never appear in an API response â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testOtpIsNeverReturnedInAResponse(): void
     {
@@ -108,7 +115,7 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-    // ── C4 — brute-force controls must actually be called ────────
+    // â”€â”€ C4 â€” brute-force controls must actually be called â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testLoginEndpointsInvokeLockoutAndThrottle(): void
     {
@@ -135,7 +142,7 @@ final class AuthHardeningTest extends TestCase
         );
     }
 
-    // ── C7 — no user enumeration ─────────────────────────────────
+    // â”€â”€ C7 â€” no user enumeration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testLoginDoesNotRevealThatAnAccountIsDisabled(): void
     {
@@ -148,7 +155,7 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-    // ── C8 — fail closed on environment ──────────────────────────
+    // â”€â”€ C8 â€” fail closed on environment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testAppEnvDefaultsToProduction(): void
     {
@@ -158,7 +165,7 @@ final class AuthHardeningTest extends TestCase
             'APP_ENV must default to production so a misconfigured host is not permissive'
         );
     }
-    // ── Phase 0 — the fabricated-mailbox bug ─────────────────────
+    // â”€â”€ Phase 0 â€” the fabricated-mailbox bug â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testNoCodePathFabricatesAMailboxAddress(): void
     {
@@ -232,7 +239,7 @@ final class AuthHardeningTest extends TestCase
         );
     }
 
-    // ── Secrets hygiene ──────────────────────────────────────────
+    // â”€â”€ Secrets hygiene â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testNoCommittedCredentialRemains(): void
     {
@@ -253,7 +260,7 @@ final class AuthHardeningTest extends TestCase
         );
     }
 
-    // ── C6 — password change must invalidate earlier sessions ───
+    // â”€â”€ C6 â€” password change must invalidate earlier sessions â”€â”€â”€
 
     public function testSessionIsInvalidatedWhenPasswordChanges(): void
     {
@@ -278,7 +285,7 @@ final class AuthHardeningTest extends TestCase
         self::assertStringContainsString('email_bounced_at', $sql);
     }
 
-    // ── Bounce webhook must not be an open write endpoint ────────
+    // â”€â”€ Bounce webhook must not be an open write endpoint â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function testBounceEndpointFailsClosedWithoutAToken(): void
     {
@@ -290,9 +297,9 @@ final class AuthHardeningTest extends TestCase
         self::assertStringNotContainsString('csrf_guard', $src, 'this is a provider webhook, not a browser form');
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Phase 2 — authorization
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Phase 2 â€” authorization
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /**
      * A1 (IDOR, CWE-639): api/ai-tools.php is registrar analytics. It
@@ -388,9 +395,9 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-// ─────────────────────────────────────────────────────────────
-    // Phase 3 — files and exports
-    // ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Phase 3 â€” files and exports
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /**
      * F1: uploaded files were served straight out of the web root by
@@ -486,5 +493,87 @@ final class AuthHardeningTest extends TestCase
             'the delete must resolve through the traversal-safe helper');
         self::assertStringContainsString('realpath', $block,
             'the resolved path must be re-asserted immediately before unlink()');
+    }
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Phase 4 â€” defence in depth
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    /**
+     * D1: the session cookie flags must be set by session_config.php
+     * itself, before session_start(). They used to live only in
+     * security_headers.php, so 32 api/*.php endpoints that never included
+     * it issued their cookie with php.ini defaults (no HttpOnly, no
+     * SameSite). Fixing it at the source makes the include-order
+     * requirement impossible to miss.
+     */
+    public function testSessionCookieFlagsAreSetBeforeSessionStart(): void
+    {
+        $src = $this->code('shared/session_config.php');
+
+        $startOfFlags = strpos($src, "ini_set('session.cookie_httponly'");
+        $sessionStart = strpos($src, 'session_start()');
+
+        self::assertNotFalse($startOfFlags, 'cookie flags are never set in session_config.php');
+        self::assertNotFalse($sessionStart, 'session_start() not found');
+        self::assertLessThan(
+            $sessionStart,
+            $startOfFlags,
+            'cookie flags must be set BEFORE session_start() or php.ini defaults win'
+        );
+        self::assertStringContainsString("ini_set('session.cookie_samesite'", $src);
+        self::assertStringContainsString("ini_set('session.cookie_secure'", $src);
+        self::assertStringContainsString("ini_set('session.use_strict_mode'", $src);
+    }
+
+    /** D2: one shared, greppable escape helper instead of hand-rolled calls. */
+    public function testGlobalEscapeHelperExists(): void
+    {
+        $src = $this->code('shared/functions.php');
+
+        self::assertStringContainsString('function e(', $src, 'the shared escape helper e() must exist');
+        self::assertStringContainsString('ENT_QUOTES', $src,
+            'ENT_QUOTES is required: the default flags do not escape single quotes, '
+            . 'which is what protects a single-quoted attribute');
+        self::assertStringContainsString('UTF-8', $src);
+    }
+
+    /** D2: the one real stored-XSS miss found in the audit must stay fixed. */
+    public function testQrPathIsEscapedAndResolved(): void
+    {
+        $src = $this->code('student/ids.php');
+
+        self::assertStringNotContainsString(
+            "ltrim(\$id['qr_code_path'], './')",
+            $src,
+            'the QR path is written into a src attribute without escaping (stored XSS shape)'
+        );
+        self::assertStringContainsString('resolveStudentQrUrl', $src,
+            'this column must go through the shared resolver used by every other page');
+        self::assertStringContainsString('e($qrUrl)', $src);
+    }
+
+    /**
+     * D3: Database::insert/update/delete interpolate the table and column
+     * names because PDO cannot bind them. Every call site passes a literal
+     * today, so this is defence in depth â€” but it turns a future mistake
+     * into an exception instead of silent SQL injection.
+     */
+    public function testDatabaseRejectsUnsafeIdentifiers(): void
+    {
+        $src = $this->code('shared/database.php');
+
+        self::assertStringContainsString('function assertSafeIdentifier', $src);
+        self::assertStringContainsString('/^[A-Za-z_][A-Za-z0-9_]*$/', $src,
+            'identifiers must be restricted to plain column names');
+        self::assertStringContainsString('InvalidArgumentException', $src);
+        // All three writers must route through it.
+        foreach (['insert', 'update', 'delete'] as $method) {
+            $start = strpos($src, "function {$method}(");
+            self::assertNotFalse($start, "{$method}() not found");
+            $body = substr($src, $start, 700);
+            self::assertStringContainsString('assertSafeIdentifier', $body,
+                "{$method}() must validate its table identifier");
+        }
     }
 }

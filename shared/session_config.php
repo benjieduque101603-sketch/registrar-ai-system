@@ -1,4 +1,4 @@
-<?php
+â<?php
 // shared/session_config.php
 
 if (defined('SESSION_CONFIG_LOADED')) {
@@ -16,17 +16,49 @@ require_once __DIR__ . '/config.php';
 $idleTimeout = defined('SESSION_IDLE_TIMEOUT') ? (int) SESSION_IDLE_TIMEOUT : 1200;
 $idleLogout  = $idleTimeout > 0;
 
-// Start session if not already started
+// -- Start the session -------------------------------------------------
+//
+// The cookie flags MUST be set before session_start(), or PHP falls back
+// to php.ini defaults and the session cookie silently loses protection.
+//
+// They used to live only in shared/security_headers.php, which required
+// every entry point to include that file BEFORE this one. 32 of the
+// api/*.php endpoints did not, so on a direct request their cookie was
+// issued with whatever php.ini happened to say - commonly without HttpOnly
+// and without SameSite.
+//
+// Setting them here fixes all of them at once and makes the ordering
+// impossible to get wrong. security_headers.php still sends the response
+// headers (CSP, X-Frame-Options, HSTS); this only owns the cookie, so
+// there is no conflict when a page includes both.
 if (session_status() === PHP_SESSION_NONE) {
     ini_set('session.use_strict_mode', '1');
     // Keep PHP's session GC from collecting the file before the idle
-    // timeout fires; use a long lifetime when idle logout is disabled.
+    // timeout fires; long lifetime when idle logout is disabled.
     ini_set('session.gc_maxlifetime', (string) ($idleLogout ? $idleTimeout : 30 * 86400));
+
+    // HttpOnly: JavaScript cannot read the cookie, so an XSS bug cannot
+    // exfiltrate the session.
+    ini_set('session.cookie_httponly', '1');
+    // Lax: allows normal external navigation into the app (a student
+    // clicking a link from email or the queue portal) while still
+    // blocking cross-site POSTs. Strict would break the QR-verification
+    // and email-link flows.
+    ini_set('session.cookie_samesite', 'Lax');
+    // Secure: only over HTTPS. Gated so plain-HTTP local XAMPP still
+    // works; a live host terminates HTTPS at the vhost or proxy.
+    $isHttps = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+        || (($_SERVER['SERVER_PORT'] ?? '') === '443');
+    if ($isHttps) {
+        ini_set('session.cookie_secure', '1');
+    }
+
     session_name('BCP_REGISTRAR_SESSION');
     session_start();
 }
 
-// ─── Idle session timeout ────────────────────────────────────
+// --- Idle session timeout ---------------------------------------
 // Log the user out if they've been inactive past SESSION_IDLE_TIMEOUT.
 // Touching last_activity on every request keeps the window sliding.
 if (!empty($_SESSION['user_id'])) {
@@ -49,7 +81,7 @@ if (!empty($_SESSION['user_id'])) {
     $_SESSION['last_activity'] = time();
 }
 
-// ─── Password-change invalidation ─────────────────────────────
+// â”€â”€â”€ Password-change invalidation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // A password change must end every session that predates it, so a
 // stolen cookie stops working the moment the victim resets.
 //
@@ -146,7 +178,7 @@ function requireStudent() {
 
 /**
  * Resolve the linked students.id for the currently logged-in user.
- * Returns int|null — null when the account has no linked student record.
+ * Returns int|null â€” null when the account has no linked student record.
  * Requires the database to be available (pages call this after Database::getInstance()).
  */
 function getCurrentStudentId() {

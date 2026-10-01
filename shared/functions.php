@@ -8,6 +8,49 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/section_code.php';
 
+// ─── Output escaping (D2) ────────────────────────────────────────
+//
+// HTML-escape a value for output in a text node or a quoted attribute.
+//
+// WHY THIS EXISTS: escaping was opt-in and manual — every page called
+// htmlspecialchars() by hand, and nurse/dashboard.php even defined its own
+// local h(). That makes escaping easy to forget, and one forgotten call is
+// a stored XSS: a student record with a name like `<img src=x
+// onerror=alert(1)>` renders as live script for every staff member who
+// opens the page. The 2026 audit found exactly one such miss
+// (student/ids.php, a raw DB value written into a src attribute).
+//
+// e() is the short name the codebase already uses in mail bodies
+// (e_(), dt_esc() in document_templates.php). It lives here, in the file
+// every page already includes, so escaping becomes the path of least
+// resistance rather than something to remember.
+//
+// Note this does NOT make escaping automatic. PHP has no auto-escaping
+// template layer here, so e() still has to be called — the difference is
+// that there is now one obvious, greppable helper to call instead of a
+// hand-written htmlspecialchars() call with the wrong flags at each site.
+//
+// ENT_QUOTES matters: it escapes single quotes too, which is what protects
+// an attribute written with single quotes. The default flags do not.
+if (!function_exists('e')) {
+    /**
+     * @param mixed $value Any scalar, array-key, or null; null becomes ''.
+     */
+    function e($value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+// Alias used throughout the mail senders. Delegates to e() so there is a
+// single implementation, not two that can drift.
+if (!function_exists('e_')) {
+    function e_(?string $value): string
+    {
+        return e($value);
+    }
+}
+
 // ── Prevent direct access ──
 if (defined('FUNCTIONS_LOADED')) {
     return;
