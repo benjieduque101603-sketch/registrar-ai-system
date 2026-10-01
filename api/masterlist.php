@@ -47,7 +47,13 @@ try {
         $yearFilter    = isset($_GET['year_level']) ? trim((string) $_GET['year_level']) : '';
         $sectionFilter = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
 
-        $sql = "SELECT * FROM students WHERE 1=1";
+        // Section-only, same rule the page renders from: an unplaced
+        // student is a real enrolment but is not on the section list,
+        // so a caller that exports or prints from this endpoint must not
+        // get one either. Auto-assign (below) is unaffected - it reads the
+        // students table directly, not this filtered roster.
+        $sql = "SELECT * FROM students
+                WHERE section IS NOT NULL AND TRIM(section) != ''";
         $params = [];
 
         if ($courseFilter !== '') {
