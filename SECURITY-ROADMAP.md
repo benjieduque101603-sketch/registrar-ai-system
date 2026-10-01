@@ -96,7 +96,62 @@ Do not regress these. They were verified as working:
 
 ---
 
-## Operator actions (cannot be automated from the repo)
+## How to verify Phase 0 + Phase 1 locally
+
+### Step 0 — one-time: apply the migration
+
+```powershell
+cd C:\xampp\htdocs\registrar-ai-system
+C:\xampp\mysql\bin\mysql.exe -u root registrar_ai < migrations\security_hardening_phase1.sql
+```
+
+Without this the reset flow cannot work and the verifier reports FAILs.
+
+### Step 1 — automated checks (30 seconds)
+
+```powershell
+C:\xampp\php\php.exe scripts\verify_phase01.php
+```
+
+Read-only. It checks the schema, proves the fabricated mailboxes are gone,
+exercises the real reset-grant and lockout helpers inside a rolled-back
+transaction, and reports which mail transport is actually live.
+Expected: `PASS: 19   FAIL: 0`.
+
+### Step 2 — unit tests
+
+```powershell
+C:\xampp\php\php.exe vendor\phpunit\phpunit\phpunit --no-coverage tests\AuthHardeningTest.php
+```
+
+Expected: `OK (15 tests, 71 assertions)`.
+
+### Step 3 — manual browser tests
+
+1. **No code leaks to the screen.** Click *Forgot password*, enter your email,
+   then open DevTools → Network → find the `forgot` call. The response JSON
+   must contain `masked_email` and `delivered` but **no `otp` field**.
+2. **Reset actually works.** Complete the reset with a real code. The new
+   password must satisfy the policy (12+ chars, mixed case, digit, symbol).
+3. **Replay is refused.** Immediately resubmit the *same* reset request. It must
+   fail — the grant is single-use.
+4. **Session dies with the password.** Stay logged in on one browser (Student
+   Portal). Change the password in a second (private window). The first session
+   must be bounced to login on its next click.
+5. **Lockout works.** Sign in with a wrong password 5 times. The 6th attempt —
+   even with the *correct* password — must be refused for ~10 minutes.
+6. **No bounce for the fixed account.** Open a student with no real email and
+   resend the welcome email. It must not attempt delivery (nothing arrives, and
+   no bounce is generated either).
+7. **Secret dumper is gone.** Visit
+   `http://localhost/registrar-ai-system/registrar/smtp-debug.php` → 404.
+
+### Step 4 — clean up the old fabricated address
+
+```powershell
+C:\xampp\php\php.exe scripts\purge_fake_emails.php          # preview
+C:\xampp\php\php.exe scripts\purge_fake_emails.php --run    # apply
+```
 
 These must be done in the hosting control panel:
 

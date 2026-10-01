@@ -39,7 +39,12 @@ $doUsers    = $onlyUsers || !$onlyStudents;
 
 echo ($apply ? 'LIVE' : 'DRY RUN') . " — purge fabricated email addresses\n";
 echo str_repeat('=', 66) . "\n";
-echo "Dry run prints what would change and writes nothing.\n\n";
+if ($apply) {
+    echo "LIVE: this WILL change the database. Take a backup first.\n\n";
+} else {
+    echo "Dry run: prints what would change and writes nothing.\n";
+    echo "Re-run with --run to apply.\n\n";
+}
 
 // The two shapes that were ever generated:
 //   student_<student_number>@<domain>
