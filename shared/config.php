@@ -57,6 +57,54 @@ define('APP_VERSION', '1.0.0');
 define('APP_ENV', getenv('APP_ENV') ?: 'production');
 define('APP_ROOT', dirname(__DIR__) . '/');
 
+// ── DB credential guard (fail closed on a live host) ───────────
+//
+// DB_HOST / DB_USER / DB_PASSWORD fall back to localhost / root / EMPTY.
+// If the environment variables never reach PHP on shared hosting, the app
+// does not error out: it silently tries to connect as root with no password
+// and either fails confusingly ("Access denied for user 'root'") or, worse,
+// succeeds against the WRONG database.
+//
+// JWT/KIOSK already fail closed further down, but DB_* had no equivalent, so
+// a missing password was invisible until the first query.
+//
+// LOCAL DEVELOPMENT IS EXEMPT. Bare XAMPP genuinely runs MySQL as root with
+// no password, so an unconditional guard would break every local install.
+// shared/secrets.local sets DB_ALLOW_INSECURE_DEFAULTS=true for that case;
+// that file is gitignored, so a production host never carries it.
+if (APP_ENV === 'production' && PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
+    $allowInsecure = filter_var(getenv('DB_ALLOW_INSECURE_DEFAULTS'), FILTER_VALIDATE_BOOLEAN);
+
+    if (!$allowInsecure) {
+        $slFile = __DIR__ . '/secrets.local';
+        if (is_file($slFile)) {
+            foreach (file($slFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $slLine) {
+                $slLine = trim((string) $slLine);
+                if ($slLine === '' || $slLine[0] === '#') continue;
+                if (stripos($slLine, 'DB_ALLOW_INSECURE_DEFAULTS') === 0
+                    && stripos($slLine, 'true') !== false) {
+                    $allowInsecure = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    $missingDb = [];
+    if (!$allowInsecure) {
+        if ($pass === '')     { $missingDb[] = 'DB_PASSWORD (or DB_PASS) is empty'; }
+        if ($user === 'root') { $missingDb[] = 'DB_USER is still the default "root"'; }
+    }
+    if ($missingDb) {
+        error_log('[config] FAILING CLOSED: ' . implode('; ', $missingDb)
+            . '. Set them as environment variables in your hosting panel.');
+        http_response_code(500);
+        header('Content-Type: text/plain');
+        echo "Server configuration error: database credentials are not configured.";
+        exit;
+    }
+}
+
 // app_base_path() and app_url() live in shared/app_path.php so that a public
 // page can work out where the app is mounted without pulling in this file and
 // opening a mysqli connection it has no use for (the queue kiosk and monitor
