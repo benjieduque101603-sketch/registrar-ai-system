@@ -35,11 +35,26 @@ $filterSemester   = isset($_GET['semester']) ? trim((string) $_GET['semester']) 
 $filterStatus     = isset($_GET['status']) ? trim((string) $_GET['status']) : '';
 $filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
 
-// Every student belongs on the masterlist. A blank section is the
-// normal state for one nobody has placed yet, so it must never hide
-// a student - that is why the section filter is opt-in and the
-// unassigned count is reported rather than used to prune the list.
-$sql = "SELECT * FROM students WHERE 1=1";
+// The list below only holds students who HAVE a section.
+//
+// A student with a blank section is a real enrolment, but this list is not
+// the enrolment record - it is the section list that gets handed off and
+// signed. A row nobody could sign (no code, no block membership) has no
+// place on it, and one such row is enough to make the whole sheet look
+// unsigned: a block that is otherwise complete, printed, sent out.
+//
+// So the rule is: assigned = on the list, unassigned = counted, not listed.
+// The unassigned count is still reported in the header status line, which
+// is how a registrar knows there is work left to do; the "assign students"
+// picker and Auto-assign both read the students table directly
+// ($assignableStudents below), so hiding these rows here costs no ability to
+// place them.
+//
+// NULL and whitespace-only both count as unassigned: a section saved as a
+// space is exactly as unplaced as one saved as NULL, and TRIM() is what the
+// rest of this page already compares on.
+$sql = "SELECT * FROM students
+        WHERE section IS NOT NULL AND TRIM(section) != ''";
 $params = [];
 if ($filterCourse !== '') {
     $sql .= " AND TRIM(course) = ?";
@@ -130,6 +145,10 @@ foreach ($students as $student) {
 // block would mean the same section is split across two intakes, so
 // the count is shown but the over-cap tone is reserved for a block
 // that is genuinely over the list size.
+//
+// The list is already section-only, so this roll-up finds no gaps. It is
+// kept because it is what the block heading renders from, and because it
+// keeps the heading correct if the list rule above is ever relaxed again.
 foreach ($blocks as &$block) {
     $bySection = [];
     foreach ($block['students'] as $student) {
@@ -209,6 +228,10 @@ $sectionTotal    = (int) ($sectionStats['section_count'] ?? 0);
 // Per-section roll-up for the Create/Edit modals. Scoped to the
 // year level too, because that is what the code encodes - the same
 // code in two year levels is two different sections.
+//
+// This is what the Edit Section modal checks a typed code against, so
+// a code that is already taken is reported as it is typed rather than
+// only when Save is pressed and the server rejects the write.
 $sectionSummaries = $db->fetchAll(
     "SELECT TRIM(course) AS course, year_level, semester, school_year,
             TRIM(section) AS section, COUNT(*) AS count
@@ -639,7 +662,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                     <i class="fas fa-plus-circle"></i> Create Section
                 </button>
                 <button type="button" class="btn btn-secondary" id="btnPrepareList"
-                        title="Show every student, with no filters applied">
+                        title="Show every student who has a section, with no filters applied">
                     <i class="fas fa-list-check"></i> Prepare Full List
                 </button>
             </div>
@@ -651,6 +674,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 <?php else: ?>
                     <i class="fas fa-user-clock"></i>
                     <strong><?= $unassignedCount ?></strong> of <?= $studentsTotal ?> student(s) still need a section
+                    &mdash; not listed below
                     <?php if ($sectionTotal > 0): ?>
                         &middot; <?= $sectionTotal ?> section(s) so far
                     <?php endif; ?>
@@ -677,7 +701,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
 
     <?php if ($prepared): ?>
         <div class="card" style="margin-bottom: 16px; padding: 12px 16px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <i class="fas fa-check-circle"></i> Full list prepared. It is sorted by course, year, and section, with no filters applied.
+            <i class="fas fa-check-circle"></i> Full list prepared. It holds every student who has a section, sorted by course, year, and section, with no filters applied.
         </div>
     <?php endif; ?>
 
@@ -723,7 +747,23 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 <div style="padding: 48px 24px; text-align: center; color: #64748b;">
                     <i class="fas fa-users-slash" style="font-size:40px;color:#e2e8f0;display:block;margin-bottom:14px;"></i>
                     <p style="font-size:16px;font-weight:600;color:#334155;margin:0 0 8px;">No students found</p>
-                    <p style="margin:0;">No students match your filters. Clear the filters to see the full list.</p>
+                    <?php if ($anyFilterActive): ?>
+                        <p style="margin:0;">No students match your filters. Clear the filters to see the full list.</p>
+                    <?php elseif ($unassignedCount > 0): ?>
+                        <!-- The empty state has to say WHICH kind of empty this
+                             is. "No students match your filters" is false when
+                             no filter is on and the reason is simply that
+                             nobody has placed these students in a section yet,
+                             so the reader would go looking for a filter to
+                             clear and find nothing to clear. -->
+                        <p style="margin:0;">
+                            <?= (int) $unassignedCount ?> student(s) on file have not been assigned to a section yet,
+                            and this list only shows students who have one.
+                            Use <strong>Auto-assign sections</strong> or <strong>Assign Students</strong> above to place them.
+                        </p>
+                    <?php else: ?>
+                        <p style="margin:0;">There are no students on file yet.</p>
+                    <?php endif; ?>
                 </div>
             </div>
         <?php else: ?>
@@ -1185,6 +1225,13 @@ const MAX_PER_SECTION = <?= (int) $sectionCap ?>;
 const ASSIGNABLE_STUDENTS = <?= json_encode($assignableStudents) ?>;
 const RFID_MAP = <?= json_encode(array_map(fn($c) => ['card_uid' => $c['card_uid'], 'status' => $c['status'], 'expiry_date' => $c['expiry_date']], $rfidMap)) ?>;
 const ADVISER_NAMES = <?= json_encode($adviserNames) ?>;
+const SECTION_SUMMARIES = <?= json_encode(array_map(fn($s) => [
+    'course'    => (string) $s['course'],
+    'year'      => (string) ($s['year_level'] ?? ''),
+    'semester'  => (string) ($s['semester'] ?? ''),
+    'section'   => (string) $s['section'],
+    'count'     => (int) $s['count'],
+], $sectionSummaries)) ?>;
 
 // ─── AUTO-ASSIGN ───────────────────────────────────────────────
 // The one-click path. Fills the gaps in sections that already exist
@@ -1302,6 +1349,109 @@ function createSectionAndOpen() {
     });
 }
 
+// ─── DUPLICATE SECTION CODE ───────────────────────────────────
+// A code is only unique within one program + year + term, which is
+// exactly the scope api/masterlist.php enforces on write. Checking
+// here means the registrar is told while typing, not after Save has
+// already been pressed and the round trip refused the change.
+//
+// A duplicate is a WARNING, not a block. Renaming a section onto a
+// code that already exists is a legitimate move - it merges the two
+// blocks - and only the server can say how big that merge is. So this
+// names the section that already holds the code and lets the person
+// decide, and Save still goes through to the server for the real
+// answer.
+//
+// The same conflict must not shout twice. Every keystroke re-runs this,
+// so a held-down key or a backspace-and-retype would otherwise stack
+// up toasts and fight the inline message. One toast per distinct
+// conflict, and a new one only when the conflict itself changes.
+let warnedDuplicateKey = null;
+let lastDuplicateHit = null;
+
+// The conflict currently shown inline, so the inline line can be
+// cleared when the code stops being a duplicate.
+function findSectionCollision() {
+    if (!editSectionContext) return null;
+    const code = document.getElementById('esSection').value.trim();
+    if (!/^[0-9]{5}$/.test(code)) return null;
+
+    const ctx = editSectionContext;
+    const course = document.getElementById('esCourse').value;
+    const year = document.getElementById('esYear').value;
+    const semester = document.getElementById('esSemester').value;
+
+    // The section being edited cannot collide with itself, and neither
+    // can a row that is only unchanged because nothing was edited.
+    const unchanged = code === ctx.section
+        && course === (ctx.course || '')
+        && year === String(ctx.year_level || '')
+        && semester === (ctx.semester || '');
+    if (unchanged) return null;
+
+    const hit = SECTION_SUMMARIES.find(function (s) {
+        return s.course === course
+            && s.year === String(year)
+            && s.semester === semester
+            && s.section === code;
+    });
+    if (!hit) return null;
+
+    return {
+        key: course + '|' + year + '|' + semester + '|' + code,
+        code: code,
+        course: course,
+        year: year,
+        semester: semester,
+        count: hit.count
+    };
+}
+
+function warnDuplicateSection(hit) {
+    const errEl = document.getElementById('esError');
+    const termLabel = hit.semester === 'summer' ? 'Summer'
+        : (hit.semester === '2nd' ? '2nd Semester' : '1st Semester');
+
+    errEl.textContent = 'Section ' + hit.code + ' is already in use for '
+        + hit.course + ' / Year ' + hit.year + ' (' + termLabel + ') - '
+        + hit.count + ' student(s) already hold it. Saving will move '
+        + 'this section onto that one and merge them.';
+    errEl.style.display = 'block';
+
+    // Toast once per distinct conflict, not once per keystroke. The
+    // key includes the code and the block, so correcting one and
+    // colliding with a different section warns again - which is the
+    // point - while retyping the same colliding code stays quiet.
+    if (warnedDuplicateKey === hit.key) return;
+    warnedDuplicateKey = hit.key;
+    showToast('Section ' + hit.code + ' is already in use.', 'warning');
+}
+
+function checkDuplicateSection() {
+    const hit = findSectionCollision();
+    // Clear the previous duplicate line before deciding, so correcting
+    // the code removes the warning instead of leaving it up next to a
+    // code that no longer conflicts. The format error in saveEditSection
+    // owns this same element, but that is not reachable while typing.
+    if (lastDuplicateHit) {
+        const errEl = document.getElementById('esError');
+        if (errEl.textContent.indexOf('already in use') !== -1) {
+            errEl.textContent = '';
+            errEl.style.display = 'none';
+        }
+    }
+    lastDuplicateHit = hit;
+    if (!hit) return;
+    warnDuplicateSection(hit);
+}
+
+// Fires on every keystroke, so it must stay cheap and must not toast
+// more than once per conflict - see warnDuplicateSection.
+['esSection', 'esCourse', 'esYear', 'esSemester'].forEach(function (id) {
+    document.getElementById(id)?.addEventListener('input', checkDuplicateSection);
+    document.getElementById(id)?.addEventListener('change', checkDuplicateSection);
+});
+
 // ─── EDIT SECTION ──────────────────────────────────────────────
 let editSectionContext = null;
 
@@ -1341,6 +1491,10 @@ function openEditSection(ctx) {
     }).length;
     document.getElementById('esStudentCount').textContent = n;
     document.getElementById('esError').style.display = 'none';
+    // Each modal session gets a fresh warning budget: reopening a
+    // section should be able to warn about the same code again.
+    warnedDuplicateKey = null;
+    lastDuplicateHit = null;
     document.getElementById('editSectionModal').classList.add('active');
     document.body.style.overflow = 'hidden';
 }
