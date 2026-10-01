@@ -7,8 +7,17 @@
 //    php tests/seed_masterlist_150.php --execute
 //
 //  150 is the interesting number: it is exactly three full 50-row
-//  sheets, so the spill, the "Sheet 2 of 3" tag and the padding are
-//  all visible at once. A cohort of 12 would hide every one of them.
+//  sheets, so the spill and the "Sheet 2 of 3" tag are both visible at
+//  once. A cohort of 12 would hide every one of them.
+//
+//  It is also the shape that exercises sectioning. The 90 / 40 / 20 split
+//  across three year levels is what proves auto-assign opens a second code
+//  only where it has to: Year 1 (90) becomes 50 + 40, while Year 2 (40) and
+//  Year 3 (20) each fit inside a single section. One program throughout, so
+//  the year level alone distinguishes the section space a code belongs to.
+//
+//  Every row starts with an empty section, on purpose - see the note
+//  beside the 'section' key.
 //
 //  Scope, deliberately narrow: inserts students only. Nothing is
 //  updated and nothing is deleted — the one student already in the
@@ -32,8 +41,10 @@ $COUNT   = 150;
 $SECTIONS = ['1st', '2nd'];
 
 // Deliberately mixes year levels. A single-year cohort would prove the
-// 50-row padding but not the grouping, and the grouping is the other
-// half of what this seed is for.
+// 50-row list split but not the grouping, and the grouping is the other
+// half of what this seed is for. Every term is 1st semester on purpose:
+// a code's second digit is the term, so mixing terms would make the
+// expected 11xxx / 21xxx / 31xxx prefixes depend on a second variable.
 $PLAN = [
     ['year' => 1, 'sy' => '2026-2027', 'sem' => '1st', 'n' => 90],
     ['year' => 2, 'sy' => '2026-2027', 'sem' => '1st', 'n' => 40],
@@ -86,19 +97,32 @@ foreach ($PLAN as $group) {
             'year_level'     => $group['year'],
             'school_year'    => $group['sy'],
             'semester'       => $group['sem'],
-            // No section. The registrar does not write section codes, and a
-            // seeded value would put a code on screen that nobody assigned.
+            // Left empty ON PURPOSE, and that is now the interesting part of
+            // the seed rather than a detail. The Masterlist auto-assigns
+            // sections, so an empty column is the state a real cohort arrives
+            // in, and it is what makes this seed able to prove the feature:
+            // 150 blank rows in, 50 + 40 / 40 / 20 placed out.
+            //
+            // Seeding a code here instead would hide the thing being tested -
+            // a pre-filled column proves nothing about assignment, and it
+            // would make every run start from a state a real cohort is never
+            // in. tests/section_e2e.php depends on this being blank: it runs
+            // auto-assign and asserts the split.
             'section'        => '',
             'status'         => $STATUS[$seq % count($STATUS)],
         ];
     }
 }
 
+// The term is printed because it is half of what a section code encodes.
+// Without it, a dry run showing "Year 1" twice gives no way to tell two
+// cohorts that auto-assign will place in different sections apart.
 foreach ($rows as $r) {
-    printf("  %s  %-26s  Year %d  %-9s%s\n",
+    printf("  %s  %-26s  Year %d  %-4s  %-9s%s\n",
         $r['student_number'],
         $r['last_name'] . ($r['middle_name'] ? ' ' . substr($r['middle_name'], 0, 1) . '.' : '') . ', ' . $r['first_name'],
         $r['year_level'],
+        $r['semester'],
         $r['status'],
         in_array($r['status'], ['probation', 'at-risk'], true) ? '  <- needs attention' : ''
     );

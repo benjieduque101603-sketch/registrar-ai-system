@@ -19,36 +19,60 @@ which document templates may populate real data versus print `N/A`.
 | Digital File Storage | ✅ In scope — `documents` |
 | Student Masterlist Generator | ✅ In scope — `registrar/masterlist.php` |
 
-### Note on "Section"
+### Note on "Section" — RESOLVED: the Masterlist assigns sections
 
-`students.section` is **Class Scheduling (#297)** to assign. A block is a
-schedule artefact: it exists for a term, it is created when enrolment is
-planned, and it is changed when a student shifts. The Registrar records the
-enrolment — course, year level, term — and does not decide how that
-enrolment is grouped into blocks.
+**Settled.** The office **may** auto-assign sections, and the Masterlist is
+where that happens. This supersedes the earlier note below, which parked the
+question as an open scheduling decision.
 
-So the Registrar does not ask for it, does not display it as its own data,
-and does not score it. Concretely:
+The reasoning: Masterlist generation is Registrar-owned, and a masterlist is
+the artefact a block is *cut from*. Handing a department a list of students
+with no blocks on it asks that department to do the registrar's grouping.
+The Registrar still does not decide the block structure — the code encodes
+only year level and term, both of which the Registrar already owns — and it
+does not assign **advisers**, which remain Faculty Management's.
+
+So the split is by surface, not by field:
 
 | Surface | Treatment |
 |---|---|
-| Add Student modal | No section field. A dashed row reads *"Section — assigned by Class Scheduling"* and prints `N/A`. |
+| **Masterlist** | ✅ **In scope.** Auto-assign, Create Section, a Section column, a section filter, section chips on each block heading, and Section on the printed sheet and both exports. |
+| Add Student modal | No section field. A dashed row reads *"Section — assigned from the Masterlist"* and prints `N/A`. |
 | Student list | No section column, no section filter. |
-| View Student | Year level and Section are separate rows; Section reads `N/A`. |
-| Quality score | `section` removed from the weights; its 5 points went to `course`. |
+| Quality score | `section` stays out of the weights; its 5 points went to `course`. |
 
-The field is **shown as `N/A`, never hidden**, and that is deliberate. The
-print convention below already requires it on documents — "No section is
+The **Students roster is deliberately untouched.** Assigning a block is a
+Masterlist operation, and adding a per-student section field to a roster form
+is a different thing: it would invite a clerk to set a code one student at a
+time, which is the exact manual work auto-assign exists to remove.
+
+The field is still **shown as `N/A`, never hidden**, on the surfaces that do
+not own it. The print convention below already requires that — "No section is
 hidden and no 'no data' message is shown, so a registrar can distinguish a
 genuinely empty record from a rendering failure" — and a modal that silently
-dropped a column would read as data loss rather than as a boundary. Naming
-the owning department makes the absence a decision.
+dropped a column would read as data loss rather than as a boundary.
 
-`students.section` and the Masterlist "Auto-assign sections" feature still
-exist, and `shared/section_code.php` still computes section codes. They are
-**not** removed here: Masterlist generation remains Registrar-owned, and
-deciding whether the office may auto-assign blocks at all is a scheduling
-question that this document does not settle. Left as a known open question.
+**How the code works.** `[year][sem][###]`, five digits: `11001` is year 1,
+1st semester, section 1. Summer is the third semester digit, so `11003` is
+year 1, summer, section 3. Built by `shared/section_code.php`, which is
+free of database dependencies and unit tested in isolation.
+
+**Two scoping rules that are easy to get wrong**, both enforced in
+`api/masterlist.php`:
+
+- A code is scoped by **course + year level + term**, *not* by school year.
+  The code carries no S.Y. digit, so one program+year+term is one section
+  space however many intakes sit in it. Keying on S.Y. would number the same
+  space twice and hand one code to two different sets of students.
+- A student with **no year level cannot hold a section**, because the code is
+  derived from the year level. Auto-assign skips them and reports the count;
+  a manual assign names them and refuses. Defaulting a missing year to 1
+  would stamp a Year-1 code onto a student who has no year level at all.
+
+Auto-assign is **idempotent by design**: it fills the gaps in existing
+sections first and only opens a new code once every existing one is at the
+cap, so re-running it does not renumber anybody. Verified by
+`tests/section_e2e.php`.
 
 ### Note on "Document Requests (Form 137, Good Moral)"
 
@@ -107,7 +131,7 @@ or employer holding the certificate. Ownership is recorded here, in
 | Accreditation Management | #294 | None |
 | Payment Management | #295 | Counter payment replaces the online gateway |
 | Faculty Management | #296 | None |
-| Class Scheduling | #297 | **Owns `students.section`** |
+| Class Scheduling | #297 | Decides block **structure**; the Masterlist records the code it cuts from the list |
 | Co-curricular & Club Management | #298 | None |
 | Online Learning & LMS | #299 | None |
 | CRAD | #300 | None |

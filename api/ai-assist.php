@@ -189,6 +189,13 @@ switch ($action) {
         exit;
 
     // ─── SECTION SUGGESTION (deterministic) ─────────────────
+    // Same computation as api/masterlist.php's `next_section`, and it is
+    // the reason that action exists as a read: this endpoint is the older
+    // of the two and is still called by the AI tools surface. Where they
+    // could drift, `next_section` is the canonical one - it is what the
+    // Create Section modal calls. Kept in step deliberately rather than
+    // deleted, because removing an action other code depends on is a
+    // wider change than this comment.
     case 'suggest_section':
         $course = trim((string) ($input['course'] ?? ''));
         $year   = (int) ($input['year_level'] ?? 0);

@@ -1022,9 +1022,10 @@ $qDotClass = $qScore >= 85 ? 'good' : ($qScore >= 60 ? 'warn' : 'bad');
       // is never silently lost. ?>
 <td class="course-cell" title="<?= htmlspecialchars($s['course'] ?? 'N/A') ?>"><?= htmlspecialchars(courseAcronym($s['course'] ?? '') ?: '—') ?></td>
 <td class="num"><?= htmlspecialchars($s['year_level'] ?? 'N/A') ?></td>
-<?php // No Section cell. Section is Class Scheduling's (#297) to assign, not the
-        // Registrar's - see DEPARTMENTS.md. A column of values this office can
-        // neither fill nor correct is noise in a list used to find a student. ?>
+<?php // No Section cell. Section is assigned in batches from the Masterlist, not
+        // per student on this roster - see DEPARTMENTS.md. A column of values
+        // this page cannot fill or correct is noise in a list used to find a
+        // student; the Masterlist is where a block is actually cut. ?>
 <td class="num"><?= htmlspecialchars(($s['gender'] ?? '') ?: '—') ?></td>
 <td><a href="../registrar/rfid-cards.php?search=<?= urlencode($s['student_number']) ?>" class="rfid-chip <?= $rfidStatus ?>"><i class="fas fa-<?= $rfidStatus==='active'?'check-circle':'credit-card' ?>"></i> <?= $rfidStatus==='active'?($rfidMap[$s['id']]['card_uid']):($rfidStatus==='none'?'—':$rfidMap[$s['id']]['status']) ?></a></td>
 <?php // The quick-status menu. Reads studentStatuses(), so a row cannot offer a
@@ -1081,9 +1082,9 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <div class="form-group"><label>Status</label><select id="filterStatus" class="form-control"><option value="">All Status</option><?php foreach (studentStatuses() as $st): ?><option value="<?= $st ?>"><?= studentStatusLabel($st) ?></option><?php endforeach; ?></select></div>
 <div class="form-group"><label>Year Level</label><select id="filterYear" class="form-control"><option value="">All Year</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></div>
 <div class="form-group"><label>Course</label><select id="filterCourse" class="form-control"><option value="">All Courses</option><?php foreach($courses as $c): ?><option value="<?= htmlspecialchars($c['course']) ?>"><?= htmlspecialchars($c['course']) ?></option><?php endforeach; ?></select></div>
-<?php // No Section filter. Class Scheduling (#297) owns section; filtering the
-        // registrar's list by a field this office does not maintain would be
-        // filtering on another department's data. See DEPARTMENTS.md. ?>
+<?php // No Section filter. Section belongs to the Masterlist's batch assignment;
+        // filtering the registrar's roster by it would mean maintaining the same
+        // field in two places. See DEPARTMENTS.md. ?>
 </div>
 </div>
 <div class="modal-footer"><button class="btn btn-secondary" onclick="closeFilterModal()">Cancel</button><button class="btn btn-secondary" onclick="clearFilters()">Clear All</button><button class="btn btn-primary" onclick="applyFilters()"><i class="fas fa-check"></i> Apply</button></div>
@@ -1206,11 +1207,14 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
       <div class="view-item"><div class="lbl">Year level</div><div class="val" id="vYearLevel">—</div></div>
       <div class="view-item"><div class="lbl">School year / Sem</div><div class="val" id="vSchoolYearSem">—</div></div>
       <div class="view-item"><div class="lbl">Adviser</div><div class="val" id="vAdviser">—</div></div>
-      <!-- Section is Class Scheduling's (#297). Shown as N/A, never removed:
-           an absent row would read as lost data, and DEPARTMENTS.md is
-           explicit that nothing is hidden so an empty record stays
-           distinguishable from a rendering failure. -->
-      <div class="view-item"><div class="lbl">Section</div><div class="val vs-na" id="vSection">N/A <span>Class Scheduling</span></div></div>
+      <!-- Section is not editable here: it is assigned in batches from the
+           Masterlist, one block at a time, and a per-student field on this
+           form would invite a clerk to set codes one at a time - exactly the
+           work auto-assign exists to remove. Shown as N/A, never removed: an
+           absent row would read as lost data, and DEPARTMENTS.md is explicit
+           that nothing is hidden so an empty record stays distinguishable
+           from a rendering failure. -->
+      <div class="view-item"><div class="lbl">Section</div><div class="val vs-na" id="vSection">N/A <span>Set from the Masterlist</span></div></div>
     </div>
     <div id="vRfidSection" style="display:none;margin-top:12px;text-align:center;gap:8px;justify-content:center;flex-wrap:wrap;"><a id="vRfidLink" href="#" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;"><i class="fas fa-credit-card"></i> RFID Card</a> <a id="vScanLink" href="#" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;"><i class="fas fa-clock-rotate-left"></i> Scan Logs</a></div>
   </section>
@@ -1329,13 +1333,15 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
     </div>
 
     <!-- Section, deliberately present and deliberately not editable.
-         Class Scheduling (#297) assigns it. It is shown rather than removed so
-         that its absence reads as a decision rather than as lost data, which is
-         the same reason DEPARTMENTS.md forbids hiding a section on a printed
-         document. -->
+         It is assigned in batches from the Masterlist, so a per-student
+         field here would invite a clerk to set codes one at a time - the
+         exact work auto-assign exists to remove. It is shown rather than
+         removed so that its absence reads as a decision rather than as lost
+         data, which is the same reason DEPARTMENTS.md forbids hiding a
+         section on a printed document. -->
     <div class="rs-outscope">
       <i class="fas fa-building-columns"></i>
-      <span><b>Section</b> &mdash; assigned by Class Scheduling, not the Registrar.</span>
+      <span><b>Section</b> &mdash; assigned from the Masterlist, not per student.</span>
       <span class="rs-na">N/A</span>
     </div>
   </div>
@@ -1411,7 +1417,7 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-book"></i> Enrollment Details</div>
 <div class="form-row"><div class="form-group" style="flex:1 1 220px;min-width:150px;"><label>Course</label><div class="course-select-wrap"><select id="editCourse" class="form-control"><option value="">Select course</option><?php foreach ($offeredCourses as $cname => $majors): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select><div class="course-select-list" style="display:none;"></div></div></div><div class="form-group" style="flex:0 0 150px;"><label>Year Level <span style="color:#dc2626;">*</span></label><select id="editYearLevel" class="form-control" required><option value="">Select</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select></div><div class="form-group" id="editMajorGroup" style="display:none;flex:1 1 200px;"><label>Major</label><select id="editMajor" class="form-control"><option value="">Select major</option></select></div></div>
-<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="editSchoolYear" class="form-control" placeholder="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="editSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div><div class="form-group" style="flex:1 1 180px;"><label>Section</label><div class="form-control vs-na-input" style="display:flex;align-items:center;gap:6px;background:#f8fafc;cursor:not-allowed;" title="Assigned by Class Scheduling"><strong style="color:#94a3b8;letter-spacing:.04em;">N/A</strong><span style="font-size:11px;color:#cbd5e1;">Class Scheduling</span></div></div></div>
+<div class="form-row"><div class="form-group"><label>School Year</label><input type="text" id="editSchoolYear" class="form-control" placeholder="2026-2027"></div><div class="form-group"><label>Semester <span style="color:#dc2626;">*</span></label><select id="editSemester" class="form-control" required><option value="">—</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div><div class="form-group" style="flex:1 1 180px;"><label>Section</label><div class="form-control vs-na-input" style="display:flex;align-items:center;gap:6px;background:#f8fafc;cursor:not-allowed;" title="Assigned in batches from the Masterlist"><strong style="color:#94a3b8;letter-spacing:.04em;">N/A</strong><span style="font-size:11px;color:#cbd5e1;">From Masterlist</span></div></div></div>
 <hr style="border:none;border-top:1px solid #f1f5f9;margin:12px 0;">
 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:8px;"><i class="fas fa-users"></i> Guardian</div>
 <div class="form-row"><div class="form-group"><label>Full Name</label><input type="text" id="editGuardianName" class="form-control"></div><div class="form-group"><label>Relationship</label><select id="editGuardianRel" class="form-control"><option value="">Select</option><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option></select></div></div>
@@ -1578,10 +1584,10 @@ function viewStudent(id) {
             ? esc(s.course)
             : '—';
         // Year level and Section are separate fields now. Section is not rendered at
-// all: #vSection holds a fixed "N/A · Class Scheduling" in the markup, because
-// a section value can change under Class Scheduling's hand at any time and
-// this view would then assert a stale one. Writing a section here would also
-// have required the office to display a field it does not maintain.
+// all: #vSection holds a fixed "N/A - from the Masterlist" in the markup,
+// because a section is assigned in batches elsewhere and this view would then
+// assert a stale one. Writing a section here would also have meant displaying
+// a field this page cannot correct.
 document.getElementById('vYearLevel').textContent = s.year_level ? s.year_level + ' Year' : '—';
         document.getElementById('vSchoolYearSem').textContent = (s.school_year?s.school_year:'—')+(s.semester?' — '+s.semester:'');
         document.getElementById('vAdviser').textContent = (s.adviser_id && ADVISER_MAP[s.adviser_id]) ? ADVISER_MAP[s.adviser_id] : '—';
@@ -2015,7 +2021,7 @@ function refreshMajorOptions(prefix) {
 // "Required" is not a judgement call made in this file. It is exactly
 // what shared/student_quality.php already counts in
 // studentQualityScoreValue(), plus the two guardian fields the form has
-// always required - minus `section`, which Class Scheduling (#297) owns.
+// always required - minus `section`, which the Masterlist assigns.
 //
 // That shared definition is the whole point. Before, "required" here and
 // "complete" there were two lists written by two people, and they had
@@ -2177,11 +2183,11 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
                 year_level: document.getElementById('addYearLevel').value,
                 school_year: document.getElementById('addSchoolYear').value,
                 semester: document.getElementById('addSemester').value,
-                // No `section`. Class Scheduling (#297) assigns it - see
-                // DEPARTMENTS.md. Sending '' would also be wrong: the API
-                // treats an empty string as "clear this field", so a record
-                // whose section was set elsewhere would be wiped by enrolling
-                // an unrelated student through this form.
+                // No `section`. The Masterlist assigns it - see DEPARTMENTS.md.
+                // Sending '' would also be wrong: the API treats an empty string
+                // as "clear this field", so a record already placed in a section
+                // would be wiped by enrolling an unrelated student through this
+                // form.
                 email: document.getElementById('addEmail').value,
                 contact_number: document.getElementById('addContact').value,
                 address: document.getElementById('addAddress').value,
@@ -2407,9 +2413,10 @@ document.getElementById('addCourse').addEventListener('blur', standardizeCourse)
 // The Section helpers that lived here - the year-level lock and the AI
 // suggestion - are gone with the field. They guarded a code derived
 // from year level and semester, and offered an AI suggestion for it -
-// all of it Class Scheduling's decision to make. `aiPost('suggest_section')`
-// in api/ai-tools.php is left in place: it is deterministic and harmless,
-// and a future Class Scheduling module is the likely caller.
+// all of it belongs on the Masterlist now, where sections are assigned
+// in batches. `aiPost('suggest_section')` in api/ai-tools.php is left
+// in place: it is deterministic and harmless, and the Create Section
+// modal is the natural caller.
 //
 // One delegated listener rather than fourteen. Required fields can be
 // added to ADD_REQUIRED without anyone remembering to subscribe them, which

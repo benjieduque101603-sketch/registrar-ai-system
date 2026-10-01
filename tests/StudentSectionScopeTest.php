@@ -3,7 +3,8 @@
 use PHPUnit\Framework\TestCase;
 
 /**
- * Section is Class Scheduling's field, not the Registrar's (#297).
+ * Section is back on the Masterlist, and still Class Scheduling's field
+ * everywhere else.
  *
  * This test exists because "the form doesn't show it" is a property of the
  * markup, while "the office cannot write it" is a property of the server. The
@@ -12,9 +13,17 @@ use PHPUnit\Framework\TestCase;
  * enforced - the SQL allow-list and the create path - rather than in
  * JavaScript, because a browser check is a courtesy and an allow-list is a rule.
  *
- * Deliberately NOT asserted: that `students.section` stops existing. The column
- * is still written by Class Scheduling and read by the Masterlist, so removing
- * it would be a scheduling decision, not a registrar one.
+ * SCOPE, which has changed once. Sectioning was removed from the Masterlist
+ * and the open question "may the Registrar auto-assign blocks at all?" was
+ * parked in DEPARTMENTS.md. That question has been answered yes, and
+ * api/masterlist.php + registrar/masterlist.php now write and show the code.
+ * The Students roster is UNCHANGED by that decision: it still has no section
+ * input, because assigning a block is a Masterlist operation and putting a
+ * per-student field on a roster form is not the same thing.
+ *
+ * Deliberately NOT asserted: that `students.section` stops existing. The
+ * column is read and written by the Masterlist, so removing it would be a
+ * scheduling decision, not a registrar one.
  */
 final class StudentSectionScopeTest extends TestCase
 {
@@ -70,10 +79,19 @@ final class StudentSectionScopeTest extends TestCase
             preg_match("/vSection'\]\.textContent/", $page),
             'JavaScript must not write a section value into the view.'
         );
+        // The N/A row must still name where the section actually comes from.
+        // It used to say "Class Scheduling"; the Masterlist assigns it now, and
+        // a row that points a registrar at the wrong office sends them to ask
+        // the one department that cannot help.
         self::assertMatchesRegularExpression(
-            '/Section.*Class Scheduling/is',
+            '/Section.*Masterlist/is',
             $page,
-            'The N/A row should name the owning department.'
+            'The N/A row should name where the section is assigned.'
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '/Class Scheduling/is',
+            $page,
+            'The Students page still points at the old owning department.'
         );
     }
 
@@ -203,55 +221,65 @@ final class StudentSectionScopeTest extends TestCase
     }
 
     /**
-     * The Masterlist has no Section or Adviser column, and no note either.
+     * The Masterlist HAS a Section column, and still has no Adviser column.
      *
-     * The note was tried and rejected: it sat on every block heading, so a
-     * four-block list repeated the same sentence four times, and it described
-     * a boundary rather than telling the registrar anything about a student.
-     * The requirement behind it is that the list must not silently imply it
-     * holds section data, and the block heading naming only the cohort does
-     * that without a paragraph per block.
+     * This assertion used to require the opposite of the first half. Section
+     * was removed from the Masterlist on the grounds that it belonged to
+     * Class Scheduling, and DEPARTMENTS.md left "may the office auto-assign
+     * blocks at all" as an open scheduling question. That question has been
+     * answered: auto-assign is back, so the list carries the code it assigns
+     * and the registrar can see it.
      *
-     * What still matters is that neither field comes back as a column, and
-     * that the export does not start emitting one either.
+     * Adviser is a DIFFERENT field and a different owner - Faculty
+     * Management (#296) - and that half of the original test still stands
+     * untouched. Splitting the two matters: folding them back together would
+     * let a future change quietly reintroduce the adviser column under cover
+     * of "sections came back".
+     *
+     * The old "no scope note" assertions are kept. The note was rejected for
+     * repeating itself on every block heading, and that reason has not
+     * changed - the section chips in the heading now carry the information
+     * instead, which is what replaced it.
      */
-    public function testMasterlistHasNoSectionOrAdviserColumn(): void
+    public function testMasterlistHasSectionColumnButNoAdviserColumn(): void
     {
         $page = file_get_contents(__DIR__ . '/../registrar/masterlist.php');
 
-        // Neither field is a per-row column. Matched as markup, not as a word:
-        // the page discusses both at length in comments, so a text search
-        // would pass against prose saying the opposite.
+        // Section IS a per-row column now, and it is matched as markup rather
+        // than as a word so that prose about sections cannot satisfy it.
         self::assertSame(
-            0,
-            preg_match('/<(td|th)\b[^>]*data-field="section"/', $page),
-            'Section should not be a per-row column.'
+            1,
+            preg_match('/<th\b[^>]*data-field="section"/', $page),
+            'The Section column header is missing from the masterlist table.'
         );
+        self::assertSame(
+            1,
+            preg_match('/<td\b[^>]*data-field="section"/', $page),
+            'The Section column body cell is missing from the masterlist table.'
+        );
+        // A blank code must be worded, never an empty cell: a registrar has
+        // to be able to tell "not placed yet" from "the value failed to load".
+        self::assertStringContainsString('Unassigned', $page);
+
+        // Adviser is still not the Registrar's to record.
         self::assertSame(
             0,
             preg_match('/<(td|th)\b[^>]*data-field="adviser"/', $page),
             'Adviser should not be a per-row column.'
-        );
-        // Nor in the export, which reads its headers off the same table.
-        self::assertSame(
-            0,
-            preg_match("/\['section',\s*'Section Code'\]/", $page),
-            'The export fallback should not emit a Section Code column.'
         );
         self::assertSame(
             0,
             preg_match("/\['adviser',\s*'Adviser'\]/", $page),
             'The export fallback should not emit an Adviser column.'
         );
-
-        // The row no longer reads either value. `$student['section']` printed
-        // into a cell is the exact regression: the column looks right and the
-        // N/A is a lie. adviser_name is the same for the adviser.
         self::assertSame(
             0,
             preg_match('/adviser_name/', $page),
             'adviser_name is still resolved for the masterlist rows.'
         );
+
+        // The row no longer fabricates a section the way it used to, and the
+        // rejected "N/A" scaffolding stays rejected.
         self::assertStringNotContainsString('ml-section-slot', $page);
         self::assertStringNotContainsString('ml-na-head', $page);
 
