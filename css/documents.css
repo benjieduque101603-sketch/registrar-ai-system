@@ -6,13 +6,17 @@
    ============================================================ */
 
 /* ── Status pills (document_status vocabulary) ────────────────── */
-/* Walk-in lifecycle: Filed → Processing → Ready → Claimed.
-   Shipped and Awaiting_Payment are retired: there is no courier leg
-   and no pay-before-prepare step. */
+/* Online lifecycle, restored 2026-10-02:
+      Awaiting_Payment → Filed → Processing → Ready → [Shipped] → Claimed
+   Awaiting_Payment only appears for a request paid through the gateway;
+   Shipped only for a courier one. A counter-paid, pickup-only request
+   never enters either, so neither colour is seen on a walk-in row. */
 .pill.pending-clearance { background: #fee2e2; color: #b91c1c; }
+.pill.awaiting-payment  { background: #fef3c7; color: #b45309; }
 .pill.filed             { background: #fef3c7; color: #b45309; }
 .pill.processing        { background: #dbeafe; color: #2563eb; }
 .pill.ready             { background: #dcfce7; color: #15803d; }
+.pill.shipped           { background: #e0f2fe; color: #0369a1; }
 .pill.claimed           { background: #ccfbf1; color: #0f766e; }
 .pill.rejected          { background: #f1f5f9; color: #475569; }
 
