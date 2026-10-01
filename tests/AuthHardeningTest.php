@@ -158,9 +158,45 @@ final class AuthHardeningTest extends TestCase
         self::assertStringContainsString(
             '$emailIsPlaceholder === false',
             $src,
-            'the welcome mail must be skipped when the address is a sentinel'
+            'the welcome mail must be skipped when there is no address on file'
         );
-        self::assertStringContainsString('invalid.example', $src, 'sentinel must live on an unroutable domain');
+    }
+
+    /**
+     * THE ACTUAL ROOT CAUSE of the 550 bounces.
+     *
+     * users.email carried a UNIQUE index. A registrar entering a real address
+     * that another account already used caused the code to silently replace it
+     * with a fabricated mailbox (student_<id>_<ymd>@gmail.com) that never
+     * existed. Email is not a unique identity in a school, so the constraint
+     * must be gone.
+     */
+    public function testEmailIsNotForcedUniqueAnywhere(): void
+    {
+        $sql = $this->src('migrations/security_hardening_phase1.sql');
+
+        self::assertStringContainsString('DROP INDEX `email`', $sql, 'the UNIQUE index on users.email must be dropped');
+        self::assertStringContainsString('MODIFY COLUMN `email`', $sql, 'users.email must become nullable');
+
+        // The generator must not run when an address is merely SHARED.
+        $src = $this->src('shared/functions.php');
+        self::assertStringNotContainsString(
+            'SELECT id FROM users WHERE email = ?',
+            $src,
+            'the portal creator still discards a real address that another account uses'
+        );
+    }
+
+    /** A shared address must resolve deterministically, never to the wrong account. */
+    public function testSharedEmailLookupIsDeterministic(): void
+    {
+        $src = $this->src('shared/auth_security.php');
+
+        self::assertStringContainsString(
+            'ORDER BY u.id ASC',
+            $src,
+            'the email login branch must be deterministically ordered'
+        );
     }
 
     public function testFixBadEmailDomainsScriptIsInert(): void

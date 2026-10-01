@@ -54,3 +54,39 @@ ALTER TABLE `users`
 -- Distinguishes a real, deliverable address from one we had to invent.
 ALTER TABLE `students`
   ADD COLUMN `email_is_placeholder` tinyint(1) NOT NULL DEFAULT 0;
+
+-- ── 6. Email must NOT be unique ─────────────────────────────────────────────
+-- THE ACTUAL ROOT CAUSE of the "550 5.1.1 NoSuchUser" bounces.
+--
+-- Observed case: student #1660 (Cathy Tenco) was enrolled with the real
+-- address roldantiu89@gmail.com. That address was saved correctly on the
+-- students row. But user #3 (ADM-002, an admin) already held the same
+-- address, and users.email carried a UNIQUE index. When the portal account
+-- was auto-created, the uniqueness check failed and the code SILENTLY
+-- REPLACED the real address with a fabricated one:
+--
+--     student_1660_260929@gmail.com      <- _260929 = date('ymd') collision marker
+--
+-- That mailbox never existed, so every welcome email bounced, and the
+-- bounce went back to the sender (MAIL_FROM = the same address).
+--
+-- Email is not a unique identity in a school: families share addresses, a
+-- student may later become staff, a teacher may tutor several students. So
+-- users.email becomes a normal lookup index instead of a uniqueness
+-- constraint, and a nullable "no address on file" state is allowed.
+--
+-- Login is unaffected: the primary identifier is username / student ID.
+-- Email remains valid for password reset, and the reset flow now picks the
+-- most recently created active account when an address is shared.
+ALTER TABLE `users` DROP INDEX `email`;
+
+-- NULL means "no usable address on file" (replaces the
+-- no-email-<id>@invalid.example sentinel).
+ALTER TABLE `users`
+  MODIFY COLUMN `email` varchar(190) NULL DEFAULT NULL;
+
+-- Recovery index for the login/reset lookups that used the unique key.
+CREATE INDEX `idx_users_email` ON `users` (`email`);
+
+-- Full identity: length 190 keeps the index inside InnoDB's 767-byte
+-- limit under utf8mb4 (190 * 4 = 760).

@@ -1390,36 +1390,28 @@ function createStudentFromInput(array $input, $db): array
         $firstTwo = mb_strtolower(mb_substr($firstName, 0, 2));
         $password = '#' . $firstTwo . $birthYear;
 
-        // Fall back to the student's email. NEVER invent a mailbox.
+        // Email: use the real address the registrar entered.
         //
-        // This used to fabricate 'student_<id>_<ymd>@gmail.com' from
-        // MAIL_FROM's domain. Gmail rejected every one of them with
-        // "550 5.1.1 NoSuchUser", so the registrar got a bounce instead of
-        // a message, repeatedly, for every account created without a real
-        // address. Worse, fix_bad_email_domains.php had deliberately
-        // rewritten the domain to gmail.com to disguise the fabrication.
+        // HISTORY (the actual cause of "550 5.1.1 NoSuchUser"):
+        //   This used to fall back to fabricating 'student_<id>_<ymd>@gmail.com'
+        //   when the address was missing OR already taken by another user,
+        //   because users.email carried a UNIQUE index. In the observed case
+        //   the registrar entered roldantiu89@gmail.com, which their own admin
+        //   account already used, so the real address was silently discarded
+        //   and replaced with a mailbox that never existed. The bounce then
+        //   came straight back because MAIL_FROM is that same address.
         //
-        // Now: no address means no mail. The account is still created and
-        // the credentials are shown in the UI for manual hand-off.
+        // NOW: an address that is merely SHARED is kept as-is — email is not a
+        // unique identity in a school (families share addresses; a student may
+        // later become staff). users.email is no longer UNIQUE (see
+        // migrations/security_hardening_phase1.sql step 6).
+        //
+        // NULL is now representable and means "no usable address on file".
         $studentEmail = isset($data['email']) ? trim((string) $data['email']) : '';
-        $hasRealEmail = $studentEmail !== '' && isValidEmail($studentEmail);
-        if ($hasRealEmail) {
-            // users.email is UNIQUE: reuse an existing portal account's
-            // address only when it is genuinely available.
-            $emailCheck = $db->fetchOne("SELECT id FROM users WHERE email = ?", [strtolower($studentEmail)]);
-            if ($emailCheck) {
-                $hasRealEmail = false;
-            }
-        }
-        if (!$hasRealEmail) {
-            // users.email is NOT NULL with a UNIQUE key, so a deterministic
-            // non-deliverable sentinel is required. Deliberately on an
-            // unroutable domain (@invalid.example) so it can never receive
-            // mail and can never be confused for a real address.
-            $studentEmail = 'no-email-' . $newId . '@invalid.example';
+        $emailIsPlaceholder = false;
+        if ($studentEmail === '' || !isValidEmail($studentEmail)) {
+            $studentEmail = null;   // no address — do NOT invent one
             $emailIsPlaceholder = true;
-        } else {
-            $emailIsPlaceholder = false;
         }
 
         // Ensure username uniqueness — append a suffix if it already exists.
@@ -1430,7 +1422,10 @@ function createStudentFromInput(array $input, $db): array
 
         $db->insert('users', [
             'username'      => strtolower($username),
-            'email'         => strtolower($studentEmail),
+            // NULL is meaningful now: "no usable address on file". Do not
+            // substitute a sentinel — a fake domain can never receive mail,
+            // and a shared real address is perfectly legitimate.
+            'email'         => $studentEmail !== null ? strtolower($studentEmail) : null,
             'password_hash' => password_hash($password, PASSWORD_DEFAULT),
             'full_name'     => $fullName,
             'role'          => 'student',
@@ -1442,17 +1437,19 @@ function createStudentFromInput(array $input, $db): array
         logActivity($_SESSION['user_id'] ?? 0, 'student_portal_auto_create', null, 'users', $newId);
         $portalAccount = [
             'username' => $username,
-            'email'    => $studentEmail,
+            'email'    => $studentEmail ?? '',
             'password' => $password,
             'full_name'=> $fullName,
-            // The registrar UI must not offer to "resend" to a sentinel.
+            // The registrar UI must not offer to "resend" when there is
+            // nothing deliverable to send to.
             'email_deliverable' => !$emailIsPlaceholder,
         ];
 
         // ── Welcome email (opportunistic — never breaks enrollment) ──
-        // Never attempt delivery to the @invalid.example sentinel: there is
-        // no mailbox there, so the attempt can only ever produce a bounce.
-        // The registrar sees the credentials in the modal and shares them.
+        // Only attempted when there is a REAL address on file. There is no
+        // sentinel to worry about any more: a NULL email simply means
+        // nothing is sent, and the registrar sees the credentials in the
+        // modal and shares them manually.
         $mailResult = null;
         $autoload = dirname(__DIR__) . '/vendor/autoload.php';
         if (is_file($autoload) && $emailIsPlaceholder === false) {

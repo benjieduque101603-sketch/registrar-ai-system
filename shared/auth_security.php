@@ -46,22 +46,45 @@ if (!defined('OTP_SHOW_ONSCREEN')) {
  *   - students.student_number → the linked users.student_id
  *   - users.email         (backward compat / transitional)
  * Returns the full users row, or null when no match.
+ *
+ * NOTE on the email branch: users.email is no longer UNIQUE (email is not a
+ * unique identity in a school — families share addresses and a student may
+ * later become staff). A shared address therefore matches several rows, and
+ * an unqualified `LIMIT 1` could sign the wrong person in — potentially an
+ * admin — which would be a privilege-escalation path. The email branch is
+ * therefore ordered so a STUDENT account is never displaced by a staff
+ * account, and it is only reached when the credential is not a valid
+ * username or student number.
  */
 function resolveLoginUser($db, string $credential): ?array {
     $credential = trim($credential);
     if ($credential === '') {
         return null;
     }
-    return ($db->fetchOne(
+
+    // Primary identifiers first — these are unique and unambiguous.
+    $user = $db->fetchOne(
         "SELECT u.* FROM users u
          WHERE u.username = ?
-            OR u.email = ?
             OR u.id = (SELECT u2.id
                        FROM students s
                        JOIN users u2 ON u2.student_id = s.id
                        WHERE s.student_number = ? LIMIT 1)
          LIMIT 1",
-        [$credential, $credential, $credential]
+        [$credential, $credential]
+    );
+    if ($user) {
+        return $user;
+    }
+
+    // Transitional email login. Deterministic ordering: prefer the oldest
+    // account so the result cannot flip between requests.
+    return ($db->fetchOne(
+        "SELECT u.* FROM users u
+         WHERE u.email = ?
+         ORDER BY u.id ASC
+         LIMIT 1",
+        [$credential]
     ) ?: null);
 }
 

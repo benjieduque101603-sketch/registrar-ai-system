@@ -57,6 +57,11 @@ function looksFabricated(string $email): bool
     if ($email === '' || strpos($email, '@') === false) {
         return false;
     }
+    // @invalid.example is reserved and never routable, so any address on it
+    // is junk regardless of its local part.
+    if (strpos($email, '@invalid.example') !== false) {
+        return true;
+    }
     [$local] = explode('@', $email, 2);
     // no-email-<id>@invalid.example is the sentinel the fixed code writes.
     if (strpos($local, 'no-email-') === 0) {
@@ -82,14 +87,15 @@ if ($doUsers) {
         $newEmail = 'no-email-' . (int) $u['id'] . '@invalid.example';
         printf("  #%-5d %-22s %s\n", $u['id'], (string) $u['username'], $u['email']);
         if ($apply) {
-            // users.email is UNIQUE + NOT NULL, so the sentinel keeps the
-            // constraint satisfied while making the row unmailable.
+            // users.email is now nullable and no longer UNIQUE, so NULL is a
+            // valid, meaningful "no usable address on file" — better than
+            // the old sentinel, which could never receive mail.
             $db->update('users', [
-                'email'               => $newEmail,
+                'email'               => null,
                 'email_bounced_at'    => date('Y-m-d H:i:s'),
                 'email_bounce_reason' => 'Fabricated address removed by purge_fake_emails.php',
             ], 'id = ?', [(int) $u['id']]);
-            printf("      → %s\n", $newEmail);
+            printf("      → (cleared; add the real address)\n");
         }
     }
     if ($hits === 0) {

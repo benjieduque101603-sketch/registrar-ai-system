@@ -17,13 +17,36 @@ Status key: **DONE** · **PARTIAL** (works on some paths) · **WIRED-NOT-USED** 
 
 ## Phase 0 — Email deliverability
 
-The registrar was seeing `550 5.1.1 NoSuchUser` because the system **fabricated mailbox
-names** it then tried to mail.
+The registrar was seeing `550 5.1.1 NoSuchUser` for `student_1660_260929@gmail.com`.
+The root cause was **not** a missing email field — it was a **UNIQUE collision**:
 
-- [DONE] **S1 — Stop fabricating email addresses.** `shared/functions.php` and
-  `backfill_student_accounts.php` no longer mint `student_<id>@<domain>`. An account with
-  no valid email no longer triggers a welcome mail; credentials are surfaced in the UI
-  for manual hand-off.
+- Student #1660 (Cathy Tenco) was enrolled with the real address
+  `roldantiu89@gmail.com`, which was saved correctly on `students.email`.
+- User #3 (`ADM-002`, an admin) already held that same address, and
+  `users.email` carried a `UNIQUE` index.
+- When the portal account was auto-created, the uniqueness check failed and the
+  code **silently replaced the real address** with a fabricated one. The `_260929`
+  suffix is `date('ymd')` — the collision-retry marker.
+- The fabricated mailbox never existed, so every welcome email bounced, and the
+  bounce came back to the sender because `MAIL_FROM` is that same address.
+
+The defect is that **email is not a unique identity in a school**: families
+share addresses, and a student may later become staff.
+
+- [DONE] **S0 — `users.email` is no longer UNIQUE** and is now nullable.
+  Step 6 of the migration drops the index and widens the column to `varchar(190)`
+  (190 × 4 = 760 bytes, inside InnoDB's 767-byte utf8mb4 limit).
+- [DONE] **S0a — A shared address is kept as-is.** The uniqueness pre-check that
+  discarded it is removed from `shared/functions.php`.
+- [DONE] **S0b — NULL means "no usable address on file"** and replaces the
+  `no-email-<id>@invalid.example` sentinel. NULL is honest; a fake domain is not.
+- [DONE] **S0c — Shared-address lookups are deterministic.** `resolveLoginUser()`
+  now resolves username/student-number first and orders the email branch by
+  `id ASC`, so a shared address can never resolve to the wrong (e.g. admin)
+  account. Same for the password-reset lookup.
+- [DONE] **S1 — Stop fabricating addresses when none is on file.** Accounts with
+  no real address no longer trigger a welcome mail; credentials are surfaced in
+  the UI for manual hand-off.
 - [DONE] **S2 — Enforce email server-side on student intake.** `registrar/students.php`
   marked the field `required` in HTML only. `createStudentFromInput()` now rejects a
   missing/invalid address.

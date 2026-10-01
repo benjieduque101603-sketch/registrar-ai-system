@@ -209,7 +209,7 @@ if ($method === 'POST' && $action === 'forgot') {
         }
         loginThrottleRecord($email, requestClientIp(), false);
 
-        $user = $db->fetchOne("SELECT id, email, is_active FROM users WHERE email = ?", [$email]);
+        // users.email is no longer UNIQUE (a shared address is legitimate), so`n        // this could match several accounts. Pick deterministically by oldest id`n        // so the outcome cannot vary between requests.`n        $user = $db->fetchOne("SELECT id, email, is_active FROM users WHERE email = ? ORDER BY id ASC LIMIT 1", [$email]);
         // One neutral message for every outcome — unknown, disabled, or
         // account with no deliverable address. Differing replies would let
         // an attacker enumerate which addresses are registered.
