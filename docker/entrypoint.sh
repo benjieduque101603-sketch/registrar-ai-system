@@ -31,6 +31,29 @@ logs
 "
 
 echo "[entrypoint] preparing runtime directories…"
+
+# -- Secret sanity check (runtime, not build time) ----------------
+# Managed platforms inject environment variables at RUNTIME, so this is
+# the first point at which the real values exist. It WARNS rather than
+# exits: shared/config.php is the component that actually refuses to
+# serve requests with a missing or placeholder secret, and hard-failing
+# here would take down a dev container that has no secrets at all.
+#
+# Previously this check lived in the Dockerfile as a build-time RUN, which
+# was wrong on two counts: the value does not exist yet during
+# `docker build`, and failing there pushed people toward committing a real
+# secret into the Dockerfile.
+for pair in "JWT_SECRET:$JWT_SECRET" "KIOSK_ACCESS_TOKEN:$KIOSK_ACCESS_TOKEN"; do
+  key="${pair%%:*}"
+  val="${pair#*:}"
+  case "$val" in
+    ""|REPLACE_ME*|*placeholder*|change-me*|kiosk-tap*)
+      echo "[entrypoint] WARNING: ${key} is unset or still a placeholder." >&2
+      echo "[entrypoint]          The app will refuse to serve requests until it is set." >&2
+      ;;
+  esac
+done
+
 for d in $RUNTIME_DIRS; do
   target="$WWW/$d"
   mkdir -p "$target"

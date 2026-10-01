@@ -1,10 +1,10 @@
-# =============================================================================
-#  Registrar AI System — deployment image
+﻿# =============================================================================
+#  Registrar AI System â€” deployment image
 #
 #  The PHP extensions are NOT compiled here. They come prebuilt in
 #  ghcr.io/rekusissu/php-8.2-apache-ext (built by CI from
-#  docker/php-extensions.Dockerfile). That keeps the platform build fast —
-#  just COPY steps — which is essential on managed Docker hosts that kill
+#  docker/php-extensions.Dockerfile). That keeps the platform build fast â€”
+#  just COPY steps â€” which is essential on managed Docker hosts that kill
 #  long builds at their timeout.
 #
 #  Build:
@@ -17,7 +17,7 @@ ARG PHP_EXT_TAG=php-8.2
 FROM ghcr.io/rekusissu/php-8.2-apache-ext:${PHP_EXT_TAG} AS vendor
 
 # Composer needs the unzip binary to download dist archives.
-# We only install the minimal tool — all PHP extensions (pdo_mysql, mysqli,
+# We only install the minimal tool â€” all PHP extensions (pdo_mysql, mysqli,
 # mbstring, gd, curl, zip, opcache) are already compiled in the base image.
 # Cache mounts keep apt lists and Composer downloads across rebuilds.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -38,48 +38,38 @@ RUN --mount=type=cache,target=/root/.composer/cache \
         --prefer-dist \
         --optimize-autoloader
 
-# ── Runtime (final image) ──────────────────────────────────────────────────
+# â”€â”€ Runtime (final image) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FROM ghcr.io/rekusissu/php-8.2-apache-ext:${PHP_EXT_TAG}
 
-# Extensions are pre-compiled in the base image — no apt-get or
+# Extensions are pre-compiled in the base image â€” no apt-get or
 # docker-php-ext-install needed here. This keeps the build to COPY-only.
 
 ENV APP_ENV=production
 
-# Required production secrets. Hostinger Cloud builds this Dockerfile directly
-# (it ignores docker-compose.yml and any .env file on the host), so these must reach the
-# PHP process as env vars. Keep APP_ENV=production above — it is what activates the
-# fail-closed guard in shared/config.php that emits "JWT_SECRET is not set".
+# Production secrets.
 #
-# These ARG defaults are baked into the image so a fresh build boots out-of-the-box; a
-# real value supplied by the platform (build arg or env«, e.g. in a no-Dockerfile CI，
-# an environment variable override) will take precedence over these.
+# Declared as ARGs with a placeholder default so the image always BUILDS on any
+# platform. The placeholder is never a usable secret: shared/config.php refuses to
+# serve an HTTP request when APP_ENV=production and either of these is missing or
+# still a placeholder, and docker/entrypoint.sh warns loudly at boot.
 #
-# NOTE: these are committed/visible to anyone with image access. They are random and
-# unique per deployment so the app cannot boot with an empty secret; replace them with your
-# own values by setting secret build args on the platform for tighter hygiene.
+# A PREVIOUS VERSION failed the BUILD on a placeholder. That was wrong: managed
+# platforms (Hostinger Cloud, most CI builders) inject environment variables at
+# RUNTIME, not as build args, so the value does not exist yet during docker build.
+# Failing there made the image unbuildable on exactly the platform that needed it,
+# and pushed people toward committing a real secret back into this file - the very
+# thing the placeholder exists to prevent.
+#
+# Supply real values at runtime (hosting panel env vars, or -e flags):
+#     JWT_SECRET=$(openssl rand -hex 32)
+#     KIOSK_ACCESS_TOKEN=$(openssl rand -hex 32)
 ARG JWT_SECRET_ARG=REPLACE_ME_AT_BUILD_TIME
 ARG KIOSK_ACCESS_TOKEN_ARG=REPLACE_ME_AT_BUILD_TIME
 ENV JWT_SECRET=${JWT_SECRET:-${JWT_SECRET_ARG}}
 ENV KIOSK_ACCESS_TOKEN=${KIOSK_ACCESS_TOKEN:-${KIOSK_ACCESS_TOKEN_ARG}}
 
-# Reject a missing or placeholder secret at build time. This file used to
-# bake real-looking values (75b9c530..., 43f288fb...) into the image, where
-# anyone able to pull it could read them. A placeholder now fails the build
-# instead of shipping a known token.
-RUN set -e; \
-    case "$JWT_SECRET" in \
-      ""|REPLACE_ME*|*placeholder*|change-me*) \
-        echo "ERROR: JWT_SECRET is unset or a placeholder." >&2; \
-        echo "       Supply a real value (openssl rand -hex 32)." >&2; \
-        exit 1 ;; \
-    esac; \
-    case "$KIOSK_ACCESS_TOKEN" in \
-      ""|REPLACE_ME*|*placeholder*|change-me*|kiosk-tap*) \
-        echo "ERROR: KIOSK_ACCESS_TOKEN is unset or a placeholder." >&2; \
-        echo "       Supply a real value (openssl rand -hex 32)." >&2; \
-        exit 1 ;; \
-    esac
+# The runtime check lives in docker/entrypoint.sh, which runs after the platform
+# has injected the environment.
 
 # Apache vhost: serve the app from the web root and honor .htaccess
 # (the app depends on mod_rewrite for /verify/<hash> pretty URLs).
