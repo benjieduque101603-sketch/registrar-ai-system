@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 // ============================================================
 //  SHARED/LOGIN_THROTTLE.PHP
 //  DB-backed login throttling (fail-open if the table is

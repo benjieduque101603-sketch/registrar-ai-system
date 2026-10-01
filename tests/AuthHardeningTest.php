@@ -554,6 +554,65 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
+/**
+     * Every response must be parseable JSON, and it will not be if any
+     * included file emits bytes before its output.
+     *
+     * Two separate defects presented as one symptom - the browser showed
+     * "Request failed" and a stray "a-circumflex" in the page:
+     *
+     *   1. shared/session_config.php began with a mojibake em-dash
+     *      (c3 a2 c2 80 c2 94) ahead of <?php. PHP echoes those bytes
+     *      before the JSON.
+     *   2. shared/login_throttle.php began with a UTF-8 BOM (ef bb bf).
+     *
+     * Either one makes res.json() throw in the browser, so the entire
+     * login form fails with a generic message while the server logs
+     * nothing useful. Both were invisible to `php -l`.
+     */
+    public function testNoSourceFileEmitsBytesBeforePhp(): void
+    {
+        $files = [];
+        foreach (['shared', 'api', 'registrar', 'student', 'nurse', 'queue'] as $dir) {
+            $path = dirname(__DIR__) . '/' . $dir;
+            if (!is_dir($path)) {
+                continue;
+            }
+            foreach (glob($path . '/*.php') ?: [] as $f) {
+                $files[] = $f;
+            }
+        }
+
+        self::assertNotEmpty($files, 'no PHP files were discovered to scan');
+
+        foreach ($files as $file) {
+            $bytes = (string) file_get_contents($file);
+            $name  = basename($file);
+
+            // 1. A UTF-8 BOM. Both json_decode() and the browser's JSON
+            //    parser reject a payload that starts with ef bb bf.
+            self::assertFalse(
+                strncmp($bytes, "\xEF\xBB\xBF", 3) === 0,
+                $name . ' starts with a UTF-8 BOM; every JSON response that '
+                . 'includes it will fail to parse in the browser'
+            );
+
+            // 2. Stray bytes before the open tag. PHP prints anything
+            //    preceding <?php verbatim into the response.
+            $openTag = strpos($bytes, '<?php');
+            if ($openTag === false) {
+                continue;   // template-only file
+            }
+            $prefix = substr($bytes, 0, $openTag);
+            self::assertSame(
+                '',
+                $prefix,
+                $name . ' has ' . strlen($prefix) . ' byte(s) before <?php; PHP '
+                . 'will echo them into the response and break JSON parsing'
+            );
+        }
+    }
+
 //
     // Phase 4  defence in depth
     //

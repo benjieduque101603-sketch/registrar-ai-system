@@ -1,4 +1,4 @@
-â<?php
+<?php
 // shared/session_config.php
 
 if (defined('SESSION_CONFIG_LOADED')) {
