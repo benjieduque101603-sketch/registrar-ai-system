@@ -37,7 +37,7 @@ final class AuthHardeningTest extends TestCase
 
         // ORDER MATTERS: strip full-line comments FIRST, then block comments.
         //
-        // A line comment can legitimately contain the characters "/*" — for
+        // A line comment can legitimately contain the characters "/*"  for
         // example "the api/*.php endpoints did not". If block comments were
         // stripped first, that "/*" would be treated as an opening delimiter
         // and paired with the next real "*/" hundreds of lines later,
@@ -49,7 +49,7 @@ final class AuthHardeningTest extends TestCase
         return $src;
     }
 
-    // â”€â”€ C1 â€” reset must not trust a client-supplied user_id â”€â”€â”€â”€â”€â”€
+    //  C1  reset must not trust a client-supplied user_id
 
     /**
      * The reset_password handler must derive the user id from a verified,
@@ -102,7 +102,7 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-    // â”€â”€ C2 â€” the OTP must never appear in an API response â”€â”€â”€â”€â”€â”€â”€â”€
+    // -- C2 - the OTP must never appear in an API response --------------
 
     public function testOtpIsNeverReturnedInAResponse(): void
     {
@@ -115,7 +115,7 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-    // â”€â”€ C4 â€” brute-force controls must actually be called â”€â”€â”€â”€â”€â”€â”€â”€
+    //  C4  brute-force controls must actually be called
 
     public function testLoginEndpointsInvokeLockoutAndThrottle(): void
     {
@@ -142,7 +142,7 @@ final class AuthHardeningTest extends TestCase
         );
     }
 
-    // â”€â”€ C7 â€” no user enumeration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  C7  no user enumeration
 
     public function testLoginDoesNotRevealThatAnAccountIsDisabled(): void
     {
@@ -155,7 +155,7 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-    // â”€â”€ C8 â€” fail closed on environment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  C8  fail closed on environment
 
     public function testAppEnvDefaultsToProduction(): void
     {
@@ -165,7 +165,7 @@ final class AuthHardeningTest extends TestCase
             'APP_ENV must default to production so a misconfigured host is not permissive'
         );
     }
-    // â”€â”€ Phase 0 â€” the fabricated-mailbox bug â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Phase 0  the fabricated-mailbox bug
 
     public function testNoCodePathFabricatesAMailboxAddress(): void
     {
@@ -239,7 +239,7 @@ final class AuthHardeningTest extends TestCase
         );
     }
 
-    // â”€â”€ Secrets hygiene â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Secrets hygiene
 
     public function testNoCommittedCredentialRemains(): void
     {
@@ -260,7 +260,7 @@ final class AuthHardeningTest extends TestCase
         );
     }
 
-    // â”€â”€ C6 â€” password change must invalidate earlier sessions â”€â”€â”€
+    //  C6  password change must invalidate earlier sessions
 
     public function testSessionIsInvalidatedWhenPasswordChanges(): void
     {
@@ -285,7 +285,7 @@ final class AuthHardeningTest extends TestCase
         self::assertStringContainsString('email_bounced_at', $sql);
     }
 
-    // â”€â”€ Bounce webhook must not be an open write endpoint â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Bounce webhook must not be an open write endpoint
 
     public function testBounceEndpointFailsClosedWithoutAToken(): void
     {
@@ -297,9 +297,9 @@ final class AuthHardeningTest extends TestCase
         self::assertStringNotContainsString('csrf_guard', $src, 'this is a provider webhook, not a browser form');
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Phase 2 â€” authorization
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //
+    // Phase 2  authorization
+    //
 
     /**
      * A1 (IDOR, CWE-639): api/ai-tools.php is registrar analytics. It
@@ -395,9 +395,9 @@ final class AuthHardeningTest extends TestCase
         }
     }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Phase 3 â€” files and exports
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+    // Phase 3  files and exports
+    //
 
     /**
      * F1: uploaded files were served straight out of the web root by
@@ -495,9 +495,68 @@ final class AuthHardeningTest extends TestCase
             'the resolved path must be re-asserted immediately before unlink()');
     }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Phase 4 â€” defence in depth
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /**
+     * A PowerShell edit once collapsed a multi-line block into a single
+     * line containing the LITERAL two characters `n. The result still parsed,
+     * but it merged a comment with the statement after it, so `$user = ...`
+     * ended up inside the comment and $user stayed a string. That produced
+     * "Cannot access offset of type string on string" and a 404 on login.
+
+     * PHP has no line-comment continuation, so a literal `n in the MIDDLE of
+     * a line is always a corruption artefact, never legitimate.
+     */
+    public function testNoLiteralBacktickNArtefacts(): void
+    {
+        $files = [
+            'shared/auth_actions.php',
+            'api/auth.php',
+            'shared/auth_security.php',
+            'shared/session_config.php',
+            'shared/config.php',
+            'shared/functions.php',
+            'api/file-download.php',
+            'login.php',
+        ];
+
+        foreach ($files as $file) {
+            $srcLines = explode("\n", $this->src($file));
+            foreach ($srcLines as $n => $line) {
+                $pos = strpos($line, '`n');
+                if ($pos === false) {
+                    continue;
+                }
+
+                // Backticks in prose are fine, and a trailing `n is harmless.
+                $after = substr($line, $pos + 2);
+                if (trim($after) === '') {
+                    continue;
+                }
+
+                // PHP has no line-comment continuation, so a `n that is
+                // followed by real code means a multi-line block was collapsed
+                // by a shell rewrite: everything after the `n silently
+                // became part of the comment. That is how
+                //   $user = $db->fetchOne(...)
+                // ended up commented out, leaving $user a string and
+                // producing "Cannot access offset of type string on string".
+                $looksLikeCode = (bool) preg_match(
+                    '~^\s*(\$[a-zA-Z_]|[a-zA-Z_]+\s*=|return|echo|if\s*\(|foreach|require|while)~',
+                    $after
+                );
+
+                self::assertFalse(
+                    $looksLikeCode,
+                    "{$file} line " . ($n + 1) . ": collapsed block — a multi-line block "
+                    . 'was rewritten with a literal `n newline, so the code after it '
+                    . 'is now part of the comment'
+                );
+            }
+        }
+    }
+
+//
+    // Phase 4  defence in depth
+    //
 
     /**
      * D1: the session cookie flags must be set by session_config.php

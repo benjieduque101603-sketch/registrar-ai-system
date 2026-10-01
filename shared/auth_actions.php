@@ -248,7 +248,10 @@ if ($action === 'forgot') {
         }
         loginThrottleRecord($email, requestClientIp(), false);
 
-        // users.email is no longer UNIQUE (a shared address is legitimate), so`n        // this could match several accounts. Pick deterministically by oldest id`n        // so the outcome cannot vary between requests.`n        $user = $db->fetchOne("SELECT id, email, is_active FROM users WHERE email = ? ORDER BY id ASC LIMIT 1", [strtolower($email)]);
+        // users.email is no longer UNIQUE (a shared address is legitimate), so
+        // this could match several accounts. Pick deterministically by oldest id
+        // so the outcome cannot vary between requests.
+        $user = $db->fetchOne("SELECT id, email, is_active FROM users WHERE email = ? ORDER BY id ASC LIMIT 1", [strtolower($email)]);
         if (!$user) {
             // Don't reveal whether an account exists.
             sendResponse(false, 'If that email is registered, a reset code has been sent.');
