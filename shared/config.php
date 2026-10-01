@@ -355,19 +355,63 @@ define('PAYMONGO_API_BASE', rtrim((string) getenv('PAYMONGO_API_BASE') ?: 'https
 // env vars from getenv(). This helper checks getenv(), $_ENV, $_SERVER,
 // and apache_getenv() — whichever one the host exposes.
 function env(string $key, ?string $default = null): ?string {
+    // One helper so every lookup below is normalised identically.
+    //
+    // WHY NORMALISE: a hosting panel often stores the value the way it was
+    // typed, so a password containing spaces or a leading "#" may come back
+    // wrapped in quotes (e.g. "pa ss#word"). Without stripping them the DB
+    // password is silently wrong and the app fails with a confusing
+    // "Access denied" rather than a clear config error. Matching quotes are
+    // stripped; a value with an unbalanced quote is left untouched so
+    // nothing is truncated.
+    $norm = static function ($v) {
+        if (!is_string($v)) {
+            return $v;
+        }
+        $t = trim($v);
+        if (strlen($t) >= 2) {
+            $f = $t[0];
+            $l = $t[strlen($t) - 1];
+            if (($f === '"' && $l === '"') || ($f === "'" && $l === "'")) {
+                return substr($t, 1, -1);
+            }
+        }
+        return $t;
+    };
+
     // 1) getenv() (CGI / CLI / some FPM setups)
     if (function_exists('getenv')) {
         $v = getenv($key);
-        if ($v !== false && $v !== '') return $v;
+        if ($v !== false && $v !== '') {
+            $n = $norm($v);
+            if ($n !== '') {
+                return $n;
+            }
+        }
     }
     // 2) $_ENV (php.ini: variables_order must include 'E')
-    if (isset($_ENV[$key]) && $_ENV[$key] !== '') return (string) $_ENV[$key];
+    if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
+        $n = $norm((string) $_ENV[$key]);
+        if ($n !== '') {
+            return $n;
+        }
+    }
     // 3) $_SERVER (cPanel SetEnv, .htaccess SetEnv, some FPM fastcgi_param)
-    if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') return (string) $_SERVER[$key];
+    if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
+        $n = $norm((string) $_SERVER[$key]);
+        if ($n !== '') {
+            return $n;
+        }
+    }
     // 4) apache_getenv() (mod_php only)
     if (function_exists('apache_getenv')) {
         $v = apache_getenv($key, true);
-        if ($v !== false && $v !== '') return $v;
+        if ($v !== false && $v !== '') {
+            $n = $norm($v);
+            if ($n !== '') {
+                return $n;
+            }
+        }
     }
     return $default;
 }
