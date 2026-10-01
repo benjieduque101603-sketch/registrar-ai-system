@@ -68,16 +68,26 @@ GMAIL_SENDER_EMAIL=roldantiu89@gmail.com</div>
 <?php endif; ?>
 </div>
 <div class="card"><h2>Final email_secret.local</h2>
-<div class="pre">SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=roldantiu89@gmail.com
-SMTP_PASS=llli rgfv scyz xssx
-MAIL_FROM=roldantiu89@gmail.com
+<div class="pre"># Brevo (recommended - no SMTP password needed, better bounce handling)
+BREVO_API_KEY=xkeysib-your-brevo-key
+MAIL_FROM=no-reply@your-domain
 MAIL_FROM_NAME=BCP Registrar System
-GMAIL_API_CLIENT_ID=your-client-id
-GMAIL_API_CLIENT_SECRET=GOCSPX-your-secret
-GMAIL_REFRESH_TOKEN=1//0your-token
-GMAIL_SENDER_EMAIL=roldantiu89@gmail.com</div>
-<p class="sm">Old SMTP kept as fallback. Gmail API used first.</p>
+
+# SMTP fallback ONLY (Gmail requires an App Password, not your login password)
+# SMTP_HOST=smtp.gmail.com
+# SMTP_PORT=587
+# SMTP_USER=you@gmail.com
+# SMTP_PASS=xxxx xxxx xxxx xxxx
+
+# Gmail OAuth2 alternative
+# GMAIL_API_CLIENT_ID=your-client-id
+# GMAIL_API_CLIENT_SECRET=your-secret
+# GMAIL_REFRESH_TOKEN=your-refresh-token
+# GMAIL_SENDER_EMAIL=you@gmail.com</div>
+<p class="sm">Never commit real credentials. This file writes to
+shared/email_secret.local, which is gitignored.</p>
+<p class="sm"><b>Security:</b> if a real credential was ever pasted into this
+file, or into registrar/smtp-debug.php (now deleted), rotate it at the provider
+immediately &mdash; rotating is the only reliable remediation.</p>
 </div>
 </div></body></html>

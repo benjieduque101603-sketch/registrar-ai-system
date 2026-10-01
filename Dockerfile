@@ -58,10 +58,28 @@ ENV APP_ENV=production
 # NOTE: these are committed/visible to anyone with image access. They are random and
 # unique per deployment so the app cannot boot with an empty secret; replace them with your
 # own values by setting secret build args on the platform for tighter hygiene.
-ARG JWT_SECRET_ARG=75b9c530776f97aa3971f7a70f15f0d69a14734cfc8767e7cf619faf48a7ef19
-ARG KIOSK_ACCESS_TOKEN_ARG=43f288fbe5d9c3c99dff8cdff50b9e3c
+ARG JWT_SECRET_ARG=REPLACE_ME_AT_BUILD_TIME
+ARG KIOSK_ACCESS_TOKEN_ARG=REPLACE_ME_AT_BUILD_TIME
 ENV JWT_SECRET=${JWT_SECRET:-${JWT_SECRET_ARG}}
 ENV KIOSK_ACCESS_TOKEN=${KIOSK_ACCESS_TOKEN:-${KIOSK_ACCESS_TOKEN_ARG}}
+
+# Reject a missing or placeholder secret at build time. This file used to
+# bake real-looking values (75b9c530..., 43f288fb...) into the image, where
+# anyone able to pull it could read them. A placeholder now fails the build
+# instead of shipping a known token.
+RUN set -e; \
+    case "$JWT_SECRET" in \
+      ""|REPLACE_ME*|*placeholder*|change-me*) \
+        echo "ERROR: JWT_SECRET is unset or a placeholder." >&2; \
+        echo "       Supply a real value (openssl rand -hex 32)." >&2; \
+        exit 1 ;; \
+    esac; \
+    case "$KIOSK_ACCESS_TOKEN" in \
+      ""|REPLACE_ME*|*placeholder*|change-me*|kiosk-tap*) \
+        echo "ERROR: KIOSK_ACCESS_TOKEN is unset or a placeholder." >&2; \
+        echo "       Supply a real value (openssl rand -hex 32)." >&2; \
+        exit 1 ;; \
+    esac
 
 # Apache vhost: serve the app from the web root and honor .htaccess
 # (the app depends on mod_rewrite for /verify/<hash> pretty URLs).

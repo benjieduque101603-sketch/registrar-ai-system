@@ -56,6 +56,7 @@ echo str_repeat('-', 70) . "\n";
 $created    = 0;
 $skippedBd  = 0;
 $skippedDup = 0;
+$skippedNoEmail = 0;
 $emailed    = 0;
 
 foreach ($students as $s) {
@@ -68,30 +69,28 @@ foreach ($students as $s) {
 
     [$username, $password] = backfillDeriveCreds((string)$s['first_name'], (string)$s['student_number'], (string)$s['birth_date']);
 
-    // Email: use student email if valid, else generate
+    // Email: only ever use a real, valid address.
+    //
+    // This previously fell back to 'student_<number>@<MAIL_FROM domain>',
+    // inventing a mailbox that cannot receive mail. Sending to those produced
+    // a permanent "550 5.1.1 NoSuchUser" bounce from Gmail on every run.
+    // A backfill must never fabricate a deliverable-to-address.
     $email = trim((string)($s['email'] ?? ''));
     if (!isValidEmail($email)) {
-        $fallbackDomain = (defined('MAIL_FROM') && MAIL_FROM !== '')
-            ? substr(MAIL_FROM, strrpos(MAIL_FROM, '@') + 1)
-            : 'bestlink.edu.ph';
-        $email = 'student_' . $s['student_number'] . '@' . $fallbackDomain;
+        printf("  SKIP  #%d %-25s (no valid email - add one, then re-run)\n", $s['id'], $s['first_name'] . ' ' . $s['last_name']);
+        $skippedNoEmail++;
+        continue;
     }
+    $email = strtolower($email);
 
-    // Collision guards (username & email are UNIQUE)
-    if ($db->fetchOne("SELECT id FROM users WHERE username = ?", [$username]) !== false) {
-        printf("  SKIP  #%d %-25s (username %s already used)\n", $s['id'], $s['first_name'] . ' ' . $s['last_name'], $username);
+    // Collision guard: users.email is UNIQUE. Reuse is not an option here -
+    // two portal accounts cannot share an address, and silently rewriting it
+    // to a synthetic variant is the exact bug this script previously caused.
+    if ($db->fetchOne("SELECT id FROM users WHERE email = ?", [$email]) !== false) {
+        printf("  SKIP  #%d %-25s (%s already has a portal account)\n", $s['id'], $s['first_name'] . ' ' . $s['last_name'], $email);
         $skippedDup++;
         continue;
     }
-    $emailBase = $email;
-    $n = 0;
-    while (($db->fetchOne("SELECT id FROM users WHERE email = ?", [$email]) !== false) && $n < 5) {
-        $emailDomain = substr($email, strrpos($email, '@') + 1);
-        $email = 'student_' . $s['student_number'] . '_' . date('ymd') . ($n ? "_$n" : '') . '@' . $emailDomain;
-        $n++;
-        if ($n === 1) { $email = 'student_' . $s['student_number'] . '_' . date('ymd') . '@' . $emailDomain; }
-    }
-    unset($emailBase);
 
     $fullName = trim($s['first_name'] . ' ' . $s['last_name']);
 
@@ -152,5 +151,6 @@ echo "Done.\n";
 echo "  Created:       $created\n";
 echo "  Skipped (no birth date): $skippedBd\n";
 echo "  Skipped (dup username):  $skippedDup\n";
+echo "  Skipped (no valid email): $skippedNoEmail\n";
 if ($doEmail) echo "  Emails sent:   $emailed\n";
 if ($dryRun) echo "\nRe-run with --run to actually create the accounts (add --email to send welcome emails).\n";

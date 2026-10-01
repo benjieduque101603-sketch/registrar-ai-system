@@ -33,9 +33,12 @@ services:
       DB_USER: ${DB_USER:-registrar}
       DB_PASSWORD: ${DB_PASSWORD:-registrar}
       DB_PORT: ${DB_PORT:-3306}
-      # Secrets / integrations (all optional in dev):
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      KIOSK_ACCESS_TOKEN: ${KIOSK_ACCESS_TOKEN:-kiosk-tap-2024}
+      # Required secrets. No defaults on purpose: a committed default
+      # ("change-me-in-production", "kiosk-tap-2024") meant a deployment
+      # that forgot its .env booted with a token anyone could read in git.
+      # ${VAR:?message} makes Compose fail fast when a value is missing.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (openssl rand -hex 32)}
+      KIOSK_ACCESS_TOKEN: ${KIOSK_ACCESS_TOKEN:?set KIOSK_ACCESS_TOKEN in .env (openssl rand -hex 32)}
       # AI gateway (9Router / Antigravity). Leave NINEROUTER_URL empty to run
       # with AI features degraded gracefully (the app does not crash).
       NINEROUTER_URL: ${NINEROUTER_URL:-}

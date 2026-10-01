@@ -210,12 +210,18 @@ function issueOtp($db, int $userId, string $purpose = 'login', ?string $email = 
 /**
  * Verify + consume a one-time code. True ONLY for the newest,
  * unused, unexpired code matching user+purpose. Marks it used.
+ *
+ * Brute force: OTP_MAX_VERIFY_ATTEMPTS was defined here but never
+ * consulted, so a 6-digit code (900,000 combinations) could be guessed
+ * without limit — especially easy because resend_otp would mint a fresh
+ * code on demand. The attempt counter is now enforced and, once spent,
+ * the code is consumed so the attacker must wait for a new one.
  */
 function verifyOtpCode($db, int $userId, string $purpose, string $code): bool {
     $purpose = in_array($purpose, ['login', 'reset'], true) ? $purpose : 'login';
     $nowStr = date('Y-m-d H:i:s');
     $row = $db->fetchOne(
-        "SELECT id, otp_hash FROM otp_codes
+        "SELECT id, otp_hash, verify_attempts FROM otp_codes
          WHERE user_id = ? AND purpose = ?
            AND used_at IS NULL AND expires_at >= ?
          ORDER BY id DESC LIMIT 1",
@@ -224,13 +230,146 @@ function verifyOtpCode($db, int $userId, string $purpose, string $code): bool {
     if (!$row) {
         return false;
     }
-    if (!password_verify(trim($code), $row['otp_hash'])) {
+
+    // Already exhausted: burn the code so it cannot be retried.
+    if ((int) $row['verify_attempts'] >= OTP_MAX_VERIFY_ATTEMPTS) {
+        $db->query(
+            "UPDATE otp_codes SET used_at = NOW() WHERE id = ?", [(int) $row['id']]
+        );
+        error_log('[otp] verify attempt cap reached for user ' . $userId . ' (' . $purpose . ')');
         return false;
     }
+
+    if (!password_verify(trim($code), $row['otp_hash'])) {
+        $db->query(
+            "UPDATE otp_codes SET verify_attempts = verify_attempts + 1 WHERE id = ?",
+            [(int) $row['id']]
+        );
+        return false;
+    }
+
     $db->query(
         "UPDATE otp_codes SET used_at = NOW() WHERE id = ?", [(int) $row['id']]
     );
     return true;
+}
+
+// ============================================================
+//  PASSWORD RESET GRANTS
+//  ============================================================
+//
+//  Why this exists
+//  ---------------
+//  reset_password used to accept a bare `user_id` + `new_password` with
+//  no proof of anything:
+//
+//      POST action=reset_password&user_id=1&new_password=x
+//
+//  No OTP check, no token, no session. That was unauthenticated
+//  takeover of any account, including admin (CWE-620, Weak Password
+//  Recovery Mechanism).
+//
+//  Now a grant is minted ONLY after an OTP has been verified. The grant
+//  is stored hashed, expires, and is single-use — matching the OWASP
+//  Forgot Password guidance to create a limited session from the
+//  verified code that permits only the reset.
+//
+//  Table: migrations/security_hardening_phase1.sql
+// ---------------------------------------------------------------
+
+if (!defined('RESET_GRANT_TTL_SEC')) define('RESET_GRANT_TTL_SEC', 900); // 15 min
+
+/**
+ * Mint a reset grant after a reset OTP was verified.
+ * Returns the raw token ONCE — only its hash is stored.
+ */
+function issueResetGrant($db, int $userId): string {
+    $token = bin2hex(random_bytes(32));           // 256 bits of entropy
+    $nowStr = date('Y-m-d H:i:s');
+
+    // Only one live grant per user: invalidate any previous one.
+    $db->query(
+        "UPDATE password_reset_grants SET used_at = ?
+         WHERE user_id = ? AND used_at IS NULL",
+        [$nowStr, $userId]
+    );
+
+    $db->insert('password_reset_grants', [
+        'user_id'    => $userId,
+        'token_hash' => password_hash($token, PASSWORD_DEFAULT),
+        'expires_at' => date('Y-m-d H:i:s', time() + RESET_GRANT_TTL_SEC),
+    ]);
+
+    return $token;
+}
+
+/**
+ * Consume a reset grant. Returns the user id on success, or null when
+ * the token is unknown, already used, or expired.
+ *
+ * password_verify() is used rather than hash_equals() because the token
+ * is stored as a bcrypt hash: there is nothing to compare byte-wise.
+ */
+function consumeResetGrant($db, string $token): ?int {
+    $token = trim($token);
+    if ($token === '' || strlen($token) !== 64) {
+        return null;
+    }
+    $nowStr = date('Y-m-d H:i:s');
+
+    $rows = $db->fetchAll(
+        "SELECT id, user_id, token_hash FROM password_reset_grants
+         WHERE used_at IS NULL AND expires_at >= ?
+         ORDER BY id DESC LIMIT 10",
+        [$nowStr]
+    );
+
+    foreach ($rows as $row) {
+        if (password_verify($token, (string) $row['token_hash'])) {
+            // Single-use: mark consumed before the password is written so
+            // a concurrent replay cannot win a race.
+            $db->update('password_reset_grants', ['used_at' => $nowStr], 'id = ?', [(int) $row['id']]);
+            return (int) $row['user_id'];
+        }
+    }
+    return null;
+}
+
+/**
+ * Finalise a password change: stamp users.password_changed_at, drop any
+ * other live reset grants, and clear lockout state.
+ *
+ * Session invalidation is NOT done here. PHP stores sessions in files
+ * keyed by an opaque id, so there is no portable way to enumerate and
+ * delete another device's session. The mechanism used instead is the
+ * password_changed_at stamp: session_config.php compares it against
+ * $_SESSION['login_time'] on every request and destroys any session that
+ * predates the change. That achieves the same outcome — a stolen cookie
+ * stops working the moment the victim resets — without pretending we can
+ * reach into another browser's session store.
+ *
+ * Timestamp comparison is the only safe check, so it must be written in
+ * PHP's wall clock (Asia/Manila), not MySQL NOW() (UTC on this host) —
+ * see the same reasoning in handleFailedAttempt().
+ */
+function finalizePasswordChange($db, int $userId, string $newPasswordHash): void {
+    $nowStr = date('Y-m-d H:i:s');
+
+    // users.password_hash is NOT NULL, so the real hash is written here in
+    // the same statement rather than nulled as a placeholder.
+    $db->update('users', [
+        'password_hash'       => $newPasswordHash,
+        'password_changed_at' => $nowStr,
+        'login_attempts'      => 0,
+        'locked_until'        => null,
+        'updated_at'          => $nowStr,
+    ], 'id = ?', [$userId]);
+
+    // Any other outstanding reset grant is now void.
+    $db->query(
+        "UPDATE password_reset_grants SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+        [$nowStr, $userId]
+    );
 }
 
 /**

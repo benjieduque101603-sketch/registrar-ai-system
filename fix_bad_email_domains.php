@@ -1,14 +1,33 @@
 <?php
 // ============================================================
 //  fix_bad_email_domains.php
-//  One-time migration: replaces @bestlink.edu.ph emails with
-//  @gmail.com (derived from MAIL_FROM) in students + users.
+//  DEPRECATED / DISABLED - performs no change.
 //
-//  Usage:
-//    php fix_bad_email_domains.php            # dry-run (preview)
-//    php fix_bad_email_domains.php --run       # apply changes
-//    php fix_bad_email_domains.php --domain=X  # target domain to replace
+//  This script rewrote @bestlink.edu.ph addresses to @gmail.com. It was
+//  written so auto-generated addresses would "land on a domain that actually
+//  accepts mail" - but those addresses were never real mailboxes. Rewriting
+//  the domain only disguised the fabrication: the mail still had nowhere to
+//  go, and Gmail answered every message with
+//      550 5.1.1 The email account that you tried to reach does not exist
+//  which surfaced in the registrar's inbox as a failed delivery.
+//
+//  The real fix is in shared/functions.php: the system no longer invents
+//  mailbox names. An account with no real address gets a non-deliverable
+//  sentinel and no mail is attempted.
+//
+//  To clean up the damage this script caused, use instead:
+//      php scripts/purge_fake_emails.php          # preview
+//      php scripts/purge_fake_emails.php --run    # apply
 // ============================================================
+
+echo "fix_bad_email_domains.php is DEPRECATED and no longer performs any change.\n\n";
+echo "It rewrote addresses to @gmail.com to disguise synthetic mailboxes that\n";
+echo "could never receive mail, producing permanent 550 5.1.1 NoSuchUser bounces.\n\n";
+echo "Address fabrication is fixed in shared/functions.php.\n";
+echo "To clean up previously fabricated addresses:\n";
+echo "    php scripts/purge_fake_emails.php          # preview\n";
+echo "    php scripts/purge_fake_emails.php --run    # apply\n";
+exit(0);
 
 require_once __DIR__ . '/shared/config.php';
 require_once __DIR__ . '/shared/database.php';

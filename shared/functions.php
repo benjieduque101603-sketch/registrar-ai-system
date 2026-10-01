@@ -1390,22 +1390,38 @@ function createStudentFromInput(array $input, $db): array
         $firstTwo = mb_strtolower(mb_substr($firstName, 0, 2));
         $password = '#' . $firstTwo . $birthYear;
 
-        // Fall back to the student's email (or generate one) as the
-        // email field — kept separate from the username login.
-        // Derive domain from MAIL_FROM so auto-generated addresses
-        // land on a domain that actually accepts mail.
-        $studentEmail = $data['email'] ?? null;
-        if (!$studentEmail || !isValidEmail($studentEmail)) {
-            $fallbackDomain = (defined('MAIL_FROM') && MAIL_FROM !== '')
-                ? substr(MAIL_FROM, strrpos(MAIL_FROM, '@') + 1)
-                : 'bestlink.edu.ph';
-            $studentEmail = 'student_' . $newId . '@' . $fallbackDomain;
+        // Fall back to the student's email. NEVER invent a mailbox.
+        //
+        // This used to fabricate 'student_<id>_<ymd>@gmail.com' from
+        // MAIL_FROM's domain. Gmail rejected every one of them with
+        // "550 5.1.1 NoSuchUser", so the registrar got a bounce instead of
+        // a message, repeatedly, for every account created without a real
+        // address. Worse, fix_bad_email_domains.php had deliberately
+        // rewritten the domain to gmail.com to disguise the fabrication.
+        //
+        // Now: no address means no mail. The account is still created and
+        // the credentials are shown in the UI for manual hand-off.
+        $studentEmail = isset($data['email']) ? trim((string) $data['email']) : '';
+        $hasRealEmail = $studentEmail !== '' && isValidEmail($studentEmail);
+        if ($hasRealEmail) {
+            // users.email is UNIQUE: reuse an existing portal account's
+            // address only when it is genuinely available.
+            $emailCheck = $db->fetchOne("SELECT id FROM users WHERE email = ?", [strtolower($studentEmail)]);
+            if ($emailCheck) {
+                $hasRealEmail = false;
+            }
         }
-        // Ensure email uniqueness — append a suffix if it already exists.
-        $emailCheck = $db->fetchOne("SELECT id FROM users WHERE email = ?", [$studentEmail]);
-        if ($emailCheck) {
-            $studentEmail = 'student_' . $newId . '_' . date('ymd') . '@' . substr($studentEmail, strrpos($studentEmail, '@') + 1);
+        if (!$hasRealEmail) {
+            // users.email is NOT NULL with a UNIQUE key, so a deterministic
+            // non-deliverable sentinel is required. Deliberately on an
+            // unroutable domain (@invalid.example) so it can never receive
+            // mail and can never be confused for a real address.
+            $studentEmail = 'no-email-' . $newId . '@invalid.example';
+            $emailIsPlaceholder = true;
+        } else {
+            $emailIsPlaceholder = false;
         }
+
         // Ensure username uniqueness — append a suffix if it already exists.
         $userCheck = $db->fetchOne("SELECT id FROM users WHERE username = ?", [$username]);
         if ($userCheck) {
@@ -1429,15 +1445,17 @@ function createStudentFromInput(array $input, $db): array
             'email'    => $studentEmail,
             'password' => $password,
             'full_name'=> $fullName,
+            // The registrar UI must not offer to "resend" to a sentinel.
+            'email_deliverable' => !$emailIsPlaceholder,
         ];
 
         // ── Welcome email (opportunistic — never breaks enrollment) ──
-        // Send only when the mail library (PHPMailer via vendor/autoload)
-        // AND SMTP are actually configured. Otherwise the registrar just
-        // sees the credentials in the modal and shares them manually.
+        // Never attempt delivery to the @invalid.example sentinel: there is
+        // no mailbox there, so the attempt can only ever produce a bounce.
+        // The registrar sees the credentials in the modal and shares them.
         $mailResult = null;
         $autoload = dirname(__DIR__) . '/vendor/autoload.php';
-        if (is_file($autoload)) {
+        if (is_file($autoload) && $emailIsPlaceholder === false) {
             try {
                 require_once dirname(__DIR__) . '/shared/mail_client.php';
                 if (function_exists('sendStudentWelcomeEmail') && emailConfigured()) {
@@ -1451,6 +1469,8 @@ function createStudentFromInput(array $input, $db): array
                 // Mail layer must never crash enrollment.
                 error_log('[students.php] Welcome email skipped: ' . $e->getMessage());
             }
+        } elseif ($emailIsPlaceholder === true) {
+            $portalAccount['skip_reason'] = 'no_email_on_file';
         }
         $portalAccount['email_sent'] = $mailResult !== null && !empty($mailResult['sent']);
     } catch (Exception $e) {

@@ -49,6 +49,54 @@ if (!empty($_SESSION['user_id'])) {
     $_SESSION['last_activity'] = time();
 }
 
+// ─── Password-change invalidation ─────────────────────────────
+// A password change must end every session that predates it, so a
+// stolen cookie stops working the moment the victim resets.
+//
+// PHP sessions are files keyed by an opaque id with no portable way to
+// delete another device's session, so the check is a timestamp
+// comparison: if users.password_changed_at is newer than this
+// session's login_time, the session is dead.
+//
+// Both sides must be in the same clock. login_time is PHP's time()
+// (Asia/Manila, set in shared/config.php); password_changed_at is written
+// by finalizePasswordChange() using PHP's date() for the same reason
+// (MySQL NOW() would be UTC on this host and skew the comparison).
+if (!empty($_SESSION['user_id']) && !empty($_SESSION['login_time'])) {
+    $passwordChangedAt = null;
+    try {
+        $db = Database::getInstance();
+        $passwordChangedAt = $db->fetchColumn(
+            "SELECT password_changed_at FROM users WHERE id = ?",
+            [(int) $_SESSION['user_id']]
+        );
+    } catch (Throwable $e) {
+        // Migration not applied yet, or DB briefly unavailable. Fail OPEN
+        // rather than logging everyone out during an outage. The column is
+        // added by migrations/security_hardening_phase1.sql.
+        $passwordChangedAt = null;
+    }
+
+    if (!empty($passwordChangedAt) && strtotime((string) $passwordChangedAt) > (int) $_SESSION['login_time']) {
+        $_SESSION = array();
+        session_destroy();
+
+        if (basename(dirname($_SERVER['SCRIPT_NAME'] ?? '')) === 'api') {
+            http_response_code(401);
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'message' => 'Your password has changed. Please sign in again.',
+                'password_changed' => true,
+            ]);
+            exit;
+        }
+
+        header('Location: ' . app_url('login.php?timeout=password_changed'));
+        exit;
+    }
+}
+
 // Helper functions
 function isLoggedIn() {
     return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);

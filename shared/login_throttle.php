@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // ============================================================
 //  SHARED/LOGIN_THROTTLE.PHP
 //  DB-backed login throttling (fail-open if the table is
@@ -66,4 +66,39 @@ function loginThrottleClear(string $email, string $ip): void {
     } catch (Exception $e) {
         error_log('[login_throttle] clear failed: ' . $e->getMessage());
     }
+}
+/**
+ * Best-effort client IP for throttling and audit logging.
+ *
+ * X-Forwarded-For is client-controlled and therefore spoofable, so it is
+ * used ONLY as a throttling signal, never for authorisation or access
+ * decisions. A spoofed header can at worst throttle the attacker's own
+ * requests, which costs them nothing they were not already paying.
+ *
+ * Behind a proxy (Caddy, in docker-compose.prod.yml) the left-most entry
+ * is the original client.
+ */
+function requestClientIp(): string {
+    $candidates = [];
+
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        // May be "client, proxy1, proxy2".
+        foreach (explode(',', (string) $_SERVER['HTTP_X_FORWARDED_FOR']) as $part) {
+            $candidate = trim($part);
+            if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_IP)) {
+                $candidates[] = $candidate;
+            }
+        }
+    }
+    if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+        $candidate = trim((string) $_SERVER['HTTP_X_REAL_IP']);
+        if (filter_var($candidate, FILTER_VALIDATE_IP)) {
+            $candidates[] = $candidate;
+        }
+    }
+    if (!empty($_SERVER['REMOTE_ADDR']) && filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP)) {
+        $candidates[] = (string) $_SERVER['REMOTE_ADDR'];
+    }
+
+    return $candidates[0] ?? '0.0.0.0';
 }

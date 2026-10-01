@@ -46,9 +46,15 @@ if (extension_loaded('mysqli')) {
 // Application Configuration
 define('APP_NAME', 'BCP Registrar System');
 define('APP_VERSION', '1.0.0');
-// Environment: 'production' or 'development' (default: development)
-// Override with APP_ENV environment variable for deployment
-define('APP_ENV', getenv('APP_ENV') ?: 'development');
+// Environment: 'production' or 'development'.
+// DEFAULT IS PRODUCTION (fail closed). This default used to be
+// 'development', which meant a host that forgot to set APP_ENV silently
+// ran in the permissive mode — most visibly, it turned the on-screen OTP
+// fallback ON, handing a password-reset code straight back in the JSON
+// response. A security-relevant default must be the strict one.
+//
+// Override with APP_ENV in the environment for local development.
+define('APP_ENV', getenv('APP_ENV') ?: 'production');
 define('APP_ROOT', dirname(__DIR__) . '/');
 
 // app_base_path() and app_url() live in shared/app_path.php so that a public
@@ -154,11 +160,25 @@ function secretFromEnvOrLocal(string $env, string $defaultDev): string {
         }
     }
     if (APP_ENV === 'production') {
-        error_log("[config] FAILING CLOSED: $env is not set for production. Refusing to run with an insecure default.");
-        http_response_code(500);
-        header('Content-Type: text/plain');
-        echo "Server configuration error: $env is not set. Set it before going live.";
-        exit;
+        // Fail closed for anything that serves HTTP: a web request must
+        // never run on an insecure default. This guard is deliberate and
+        // stays.
+        //
+        // CLI invocations are exempt. Maintenance and test scripts
+        // (php scripts/purge_fake_emails.php, the PHPUnit suite, the
+        // migration dry-runs) boot this file in a terminal, where an
+        // exit(1) would abort the tool rather than expose a secret to a
+        // browser. They also legitimately run on a developer machine that
+        // has no production secrets configured.
+        $isWebRequest = PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg';
+        if ($isWebRequest) {
+            error_log("[config] FAILING CLOSED: $env is not set for production. Refusing to run with an insecure default.");
+            http_response_code(500);
+            header('Content-Type: text/plain');
+            echo "Server configuration error: $env is not set. Set it before going live.";
+            exit;
+        }
+        error_log("[config] WARNING: $env is unset; using the development default for this CLI run. Never serve HTTP in this state.");
     }
     return $defaultDev;
 }

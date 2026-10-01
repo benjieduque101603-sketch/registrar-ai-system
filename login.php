@@ -609,6 +609,10 @@ $('otpForm').addEventListener('submit', async function (e) {
         const data = await post('verify_otp', { user_id: session.user_id, otp, purpose: session.purpose });
         if (data.success && data.data && data.data.step === 'reset_password') {
             session.user_id = data.data.user_id;
+            // Carry the single-use reset grant to the final step. The
+            // server will not accept reset_password without it — that is
+            // what makes the flow safe rather than trusting the client.
+            session.reset_token = data.data.reset_token;
             session.status = 'reset_pending';
             showForm('reset');
             showSuccess('Code verified. Set your new password.');
@@ -633,8 +637,12 @@ $('resendOtp').addEventListener('click', async function (e) {
     try {
         const data = await post('resend_otp', { user_id: session.user_id, purpose: session.purpose });
         if (data.success) {
-            if (data.data?.otp) { session.otp = data.data.otp; $('otp').value = data.data.otp; }
-            $('otpResentMsg').textContent = (data.data?.otp ? '⚠ Dev mode: your code is ' + data.data.otp : 'A new code was sent.');
+            // The server never returns the code, not even in dev — see the
+            // resend_otp handlers. 'delivered' is safe to surface because
+            // it carries no secret.
+            $('otpResentMsg').textContent = data.data?.delivered === false
+                ? '⚠ We could not reach the mail server. Please contact the registrar.'
+                : 'A new code was sent. Check your inbox.';
             $('authError').style.display = 'none';
         } else {
             showError(data.message || 'Unable to resend.');
@@ -691,13 +699,15 @@ $('resetForm').addEventListener('submit', async function (e) {
     const cp = $('confirmPassword').value;
     const btn = $('btnReset');
 
-    if (np.length < 6) { showError('Password must be at least 6 characters.'); return; }
+    if (np.length < 8) { showError('Password must be at least 8 characters.'); return; }
     if (np !== cp) { showError('Passwords do not match.'); return; }
+    // The server is authoritative; this is only an early hint.
+    if (!session.reset_token) { showError('Your reset session expired. Please request a new code.'); return; }
 
     btn.disabled = true;
     btn.innerHTML = 'Saving… <i class="fa-solid fa-spinner fa-spin"></i>';
     try {
-        const data = await post('reset_password', { user_id: session.user_id, new_password: np, confirm_password: cp });
+        const data = await post('reset_password', { reset_token: session.reset_token, new_password: np, confirm_password: cp });
         if (data.success) {
             showSuccess('Password reset. You can now sign in.');
             setTimeout(() => { showForm('step1'); $('authSuccess').style.display = 'none'; }, 1800);

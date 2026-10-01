@@ -1,0 +1,236 @@
+<?php
+
+use PHPUnit\Framework\TestCase;
+
+/**
+ * Regression tests for the Phase 1 authentication hardening.
+ *
+ * Each test pins a specific defect that existed before 2026-10-01. They
+ * assert BEHAVIOUR (what the code accepts and returns) rather than the
+ * presence of a function, because the previous SECURITY_CHECKLIST.md
+ * marked every control as done while several of them (lockout, throttle,
+ * OTP cap) had zero call sites.
+ */
+
+final class AuthHardeningTest extends TestCase
+{
+    /** Read a source file as a string. */
+    private function src(string $relative): string
+    {
+        $path = dirname(__DIR__) . '/' . $relative;
+        self::assertFileExists($path, "missing source file: {$relative}");
+        return (string) file_get_contents($path);
+    }
+
+    // ── C1 — reset must not trust a client-supplied user_id ──────
+
+    /**
+     * The reset_password handler must derive the user id from a verified,
+     * single-use grant rather than from the request body.
+     *
+     * Only the reset_password block is inspected: resend_otp and
+     * verify_otp legitimately read user_id (they are bound to the
+     * session that started the flow), so a whole-file check would be
+     * both noisy and wrong.
+     */
+    public function testResetPasswordDoesNotAcceptABareUserId(): void
+    {
+        foreach (['api/auth.php', 'shared/auth_actions.php'] as $file) {
+            $src = $this->src($file);
+
+            $start = strpos($src, "action === 'reset_password'");
+            self::assertNotFalse($start, "{$file}: reset_password handler not found");
+
+            // End the block at the next top-level action handler.
+            $end = strpos($src, '// ─── LOGOUT ACTION', $start);
+            if ($end === false) {
+                $end = strpos($src, "// ─── LOGOUT", $start);
+            }
+            if ($end === false) {
+                $end = strlen($src);
+            }
+            $block = substr($src, $start, $end - $start);
+
+            self::assertStringNotContainsString(
+                "\$_POST['user_id']",
+                $block,
+                "{$file}: reset_password still trusts a user_id from the request"
+            );
+            self::assertStringNotContainsString(
+                "\$input['user_id']",
+                $block,
+                "{$file}: reset_password still trusts a user_id from the JSON body"
+            );
+        }
+    }
+
+    public function testResetPasswordRequiresAConsumedGrant(): void
+    {
+        foreach (['api/auth.php', 'shared/auth_actions.php'] as $file) {
+            self::assertStringContainsString(
+                'consumeResetGrant',
+                $this->src($file),
+                "{$file} must gate reset_password behind consumeResetGrant()"
+            );
+        }
+    }
+
+    // ── C2 — the OTP must never appear in an API response ────────
+
+    public function testOtpIsNeverReturnedInAResponse(): void
+    {
+        foreach (['api/auth.php', 'shared/auth_actions.php'] as $file) {
+            self::assertStringNotContainsString(
+                "\$otp['otp']",
+                $this->src($file),
+                "{$file} still echoes the plaintext OTP back to the client"
+            );
+        }
+    }
+
+    // ── C4 — brute-force controls must actually be called ────────
+
+    public function testLoginEndpointsInvokeLockoutAndThrottle(): void
+    {
+        foreach (['api/auth.php', 'shared/auth_actions.php'] as $file) {
+            $src = $this->src($file);
+
+            self::assertStringContainsString('handleFailedAttempt(', $src, "{$file}: lockout not wired");
+            self::assertStringContainsString('lockoutRemainingSeconds(', $src, "{$file}: lockout not checked");
+            self::assertStringContainsString('loginThrottleStatus(', $src, "{$file}: throttle not checked");
+            self::assertStringContainsString('loginThrottleRecord(', $src, "{$file}: attempts not recorded");
+        }
+    }
+
+    public function testOtpVerifyAttemptCapIsEnforced(): void
+    {
+        $src = $this->src('shared/auth_security.php');
+
+        self::assertStringContainsString('OTP_MAX_VERIFY_ATTEMPTS', $src);
+        // The counter must actually increment, or the cap is a no-op.
+        self::assertStringContainsString(
+            'verify_attempts = verify_attempts + 1',
+            $src,
+            'OTP attempts are never incremented, so the cap cannot fire'
+        );
+    }
+
+    // ── C7 — no user enumeration ─────────────────────────────────
+
+    public function testLoginDoesNotRevealThatAnAccountIsDisabled(): void
+    {
+        foreach (['api/auth.php', 'shared/auth_actions.php'] as $file) {
+            self::assertStringNotContainsString(
+                'Your account is disabled',
+                $this->src($file),
+                "{$file} still distinguishes a disabled account, enabling enumeration"
+            );
+        }
+    }
+
+    // ── C8 — fail closed on environment ──────────────────────────
+
+    public function testAppEnvDefaultsToProduction(): void
+    {
+        self::assertStringContainsString(
+            "define('APP_ENV', getenv('APP_ENV') ?: 'production')",
+            $this->src('shared/config.php'),
+            'APP_ENV must default to production so a misconfigured host is not permissive'
+        );
+    }
+    // ── Phase 0 — the fabricated-mailbox bug ─────────────────────
+
+    public function testNoCodePathFabricatesAMailboxAddress(): void
+    {
+        foreach (['shared/functions.php', 'backfill_student_accounts.php'] as $file) {
+            self::assertStringNotContainsString(
+                "'student_' .",
+                $this->src($file),
+                "{$file} still fabricates a student_<id> mailbox, which bounces as 550 NoSuchUser"
+            );
+        }
+    }
+
+    public function testPlaceholderAccountsAreNotMailed(): void
+    {
+        $src = $this->src('shared/functions.php');
+
+        self::assertStringContainsString(
+            '$emailIsPlaceholder === false',
+            $src,
+            'the welcome mail must be skipped when the address is a sentinel'
+        );
+        self::assertStringContainsString('invalid.example', $src, 'sentinel must live on an unroutable domain');
+    }
+
+    public function testFixBadEmailDomainsScriptIsInert(): void
+    {
+        $src = $this->src('fix_bad_email_domains.php');
+
+        self::assertStringContainsString('DEPRECATED', $src);
+        // exit(0) must come before any live database work.
+        self::assertLessThan(
+            (int) strpos($src, 'Database::getInstance'),
+            (int) strpos($src, 'exit(0)'),
+            'the deprecation notice must exit before touching the database'
+        );
+    }
+
+    // ── Secrets hygiene ──────────────────────────────────────────
+
+    public function testNoCommittedCredentialRemains(): void
+    {
+        foreach (['gmail-oauth-setup.php', 'Dockerfile', 'docker-compose.yml'] as $file) {
+            $src = $this->src($file);
+
+            self::assertStringNotContainsString('llli rgfv', $src, "{$file} still contains the leaked app password");
+            self::assertStringNotContainsString('75b9c530776f97aa', $src, "{$file} still bakes in the JWT secret");
+            self::assertStringNotContainsString('43f288fbe5d9c3c9', $src, "{$file} still bakes in the kiosk token");
+        }
+    }
+
+    public function testUnauthenticatedSecretDumperIsGone(): void
+    {
+        self::assertFileDoesNotExist(
+            dirname(__DIR__) . '/registrar/smtp-debug.php',
+            'smtp-debug.php printed every SMTP secret to anonymous visitors'
+        );
+    }
+
+    // ── C6 — password change must invalidate earlier sessions ───
+
+    public function testSessionIsInvalidatedWhenPasswordChanges(): void
+    {
+        self::assertStringContainsString(
+            'password_changed_at',
+            $this->src('shared/session_config.php'),
+            'session_config.php must compare password_changed_at to end stale sessions'
+        );
+        self::assertStringContainsString(
+            'password_changed_at',
+            $this->src('shared/auth_security.php'),
+            'the password change must stamp password_changed_at'
+        );
+    }
+
+    public function testMigrationCreatesTheSupportingSchema(): void
+    {
+        $sql = $this->src('migrations/security_hardening_phase1.sql');
+
+        self::assertStringContainsString('password_reset_grants', $sql);
+        self::assertStringContainsString('verify_attempts', $sql);
+        self::assertStringContainsString('email_bounced_at', $sql);
+    }
+
+    // ── Bounce webhook must not be an open write endpoint ────────
+
+    public function testBounceEndpointFailsClosedWithoutAToken(): void
+    {
+        $src = $this->src('api/mail-bounce.php');
+
+        self::assertStringContainsString('MAIL_BOUNCE_TOKEN', $src);
+        self::assertStringContainsString('hash_equals', $src, 'the shared secret must be compared in constant time');
+        self::assertStringContainsString('http_response_code(503)', $src, 'must refuse when no token is configured');
+        self::assertStringNotContainsString('csrf_guard', $src, 'this is a provider webhook, not a browser form');
+    }
+}
