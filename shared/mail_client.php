@@ -46,6 +46,22 @@ function emailConfigured(): bool {
 }
 
 /**
+ * Record why the last send failed, so the diagnostic page can show the real
+ * reason instead of "see the error log". The user has no shell access on
+ * shared hosting, so an error that only lives in the PHP log is invisible to
+ * them — which is exactly how a broken setup ends up looking "configured but
+ * silently failing" for hours.
+ */
+function mailSetLastError(string $transport, string $detail): void {
+    $GLOBALS['MAIL_LAST_ERROR'] = $transport . ' — ' . $detail;
+}
+
+/** The recorded failure reason for the most recent send attempt. */
+function mailLastError(): string {
+    return (string) ($GLOBALS['MAIL_LAST_ERROR'] ?? '');
+}
+
+/**
  * Low-level email send — prefers Brevo API, then Gmail API, then SMTP.
  * HTML body, UTF-8. One optional attachment: ['data' => string, 'name' => string, 'mime' => string|null].
  * Returns true on successful send; failure is error_logged.
@@ -57,25 +73,43 @@ function sendEmail(array $to, string $subject, string $htmlBody, ?array $attachm
     }
 
     // ── Brevo API path (preferred — reliable, no bounce issues) ──
+    // A failure here does NOT end the attempt. Previously any Brevo error
+    // (unverified sender, wrong key, transient 5xx) returned false straight
+    // away, so a perfectly good SMTP fallback underneath was never tried and
+    // the admin only saw "Test failed". We now remember why and keep going.
     if (BREVO_CONFIGURED) {
         $result = sendViaBrevo($to, $subject, $htmlBody, $attachment);
-        if ($result !== null) return $result;
-        error_log('mail: Brevo API failed, trying next transport');
+        if ($result === true) return true;
+        if ($result === null) {
+            error_log('mail: Brevo API not configured, trying next transport');
+        } else {
+            error_log('mail: Brevo API failed (' . mailLastError() . '), trying next transport');
+        }
     }
 
     // ── Gmail API path ──
     if (GMAIL_API_CONFIGURED) {
         $result = sendViaGmailApi($to, $subject, $htmlBody, $attachment);
-        if ($result !== null) return $result;
-        error_log('mail: Gmail API failed, falling back to SMTP');
+        if ($result === true) return true;
+        if ($result === null) {
+            error_log('mail: Gmail API not configured, falling back to SMTP');
+        } else {
+            error_log('mail: Gmail API failed (' . mailLastError() . '), falling back to SMTP');
+        }
     }
 
     // ── SMTP fallback (PHPMailer) ──
     // Only reachable if PHPMailer is actually installed. Without the
     // composer autoloader the class is undefined, so guard before
     // instantiating rather than fataling on a missing class.
+    if (!defined('SMTP_HOST') || SMTP_HOST === '' || SMTP_USER === '' || SMTP_PASS === '') {
+        mailSetLastError('Config', 'No usable transport. Brevo, Gmail API and SMTP_* are all unavailable.');
+        error_log('mail: ' . mailLastError());
+        return false;
+    }
     if (!class_exists(PHPMailer::class)) {
-        error_log('mail: SMTP fallback requested but PHPMailer is not installed (run composer install).');
+        mailSetLastError('Config', 'PHPMailer is not installed (vendor/autoload.php missing) — run composer install.');
+        error_log('mail: ' . mailLastError());
         return false;
     }
     $mail = new PHPMailer(true);
@@ -106,12 +140,19 @@ function sendEmail(array $to, string $subject, string $htmlBody, ?array $attachm
             );
         }
 
-        return $mail->send();
+        $sent = $mail->send();
+        if (!$sent) {
+            mailSetLastError('SMTP', ($mail->ErrorInfo ?: 'unknown SMTP error') . ' (host ' . SMTP_HOST . ':' . SMTP_PORT . ')');
+            error_log('mail: ' . mailLastError());
+        }
+        return $sent;
     } catch (PHPMailerException $e) {
-        error_log('mail: PHPMailer send failed → ' . $mail->ErrorInfo . ' | ' . $e->getMessage());
+        mailSetLastError('SMTP', trim(($mail->ErrorInfo ?: '') . ' | ' . $e->getMessage()));
+        error_log('mail: PHPMailer send failed → ' . mailLastError());
         return false;
     } catch (Throwable $e) {
-        error_log('mail: unexpected send failure → ' . $e->getMessage());
+        mailSetLastError('SMTP', $e->getMessage());
+        error_log('mail: unexpected send failure → ' . mailLastError());
         return false;
     }
 }
@@ -165,10 +206,23 @@ function sendViaBrevo(array $to, string $subject, string $htmlBody, ?array $atta
     $curlErr  = curl_error($ch);
     curl_close($ch);
 
-    if ($curlErr) { error_log('mail: Brevo API curl → ' . $curlErr); return false; }
+    // Brevo error bodies are terse ("unauthorized", "sender email is
+    // invalid"). Translated into an actionable hint, because "Test failed"
+    // plus a log line the admin cannot read is not a diagnosis.
+    if ($curlErr) { mailSetLastError('Brevo', 'Network error: ' . $curlErr); error_log('mail: ' . mailLastError()); return false; }
     if ($httpCode >= 400) {
-        $detail = json_decode($response, true);
-        error_log("mail: Brevo API HTTP {$httpCode} → " . ($detail['message'] ?? $response));
+        $detail = json_decode((string) $response, true);
+        $msg    = is_array($detail) ? (string) ($detail['message'] ?? $response) : (string) $response;
+        $hint   = match (true) {
+            $httpCode === 401 => 'The Brevo API key is invalid or was revoked. Regenerate it at app.brevo.com → SMTP & API → API Keys.',
+            $httpCode === 400 && stripos($msg, 'sender') !== false
+                          => 'Brevo rejected the sender address "' . $senderEmail . '". Verify it in Brevo under Senders & Domains and click the confirmation link for that address.',
+            $httpCode === 403 => 'This Brevo key cannot send transactional email (account not validated / sending paused).',
+            $httpCode >= 500  => 'Brevo server error — safe to retry shortly.',
+            default           => $msg,
+        };
+        mailSetLastError('Brevo', 'HTTP ' . $httpCode . ': ' . $msg . ' — ' . $hint);
+        error_log('mail: ' . mailLastError());
         return false;
     }
     return true;
@@ -228,10 +282,12 @@ function sendViaGmailApi(array $to, string $subject, string $htmlBody, ?array $a
     $curlErr  = curl_error($ch);
     curl_close($ch);
 
-    if ($curlErr) { error_log('mail: Gmail API curl → ' . $curlErr); return false; }
+    if ($curlErr) { mailSetLastError('Gmail API', 'Network error: ' . $curlErr); error_log('mail: ' . mailLastError()); return false; }
     if ($httpCode !== 200) {
-        $detail = json_decode($response, true);
-        error_log("mail: Gmail API HTTP {$httpCode} → " . ($detail['error']['message'] ?? $response));
+        $detail = json_decode((string) $response, true);
+        $msg    = is_array($detail) ? (string) ($detail['error']['message'] ?? $response) : (string) $response;
+        mailSetLastError('Gmail API', 'HTTP ' . $httpCode . ': ' . $msg);
+        error_log('mail: ' . mailLastError());
         return false;
     }
     return true;

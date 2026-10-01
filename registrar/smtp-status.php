@@ -103,12 +103,20 @@ function smtpRunSendTest(): array {
     }
     $ok = sendEmail(
         ['email' => $to, 'name' => defined('MAIL_FROM_NAME') ? MAIL_FROM_NAME : 'Registrar'],
-        'Registrar SMTP Test - ' . date('Y-m-d H:i'),
-        '<p>This is a test email from the Registrar system to verify SMTP delivery.</p>'
+        'Registrar Email Test - ' . date('Y-m-d H:i'),
+        '<p>This is a test email from the Registrar system to verify email delivery.</p>'
     );
-    return $ok
-        ? ['ok' => true, 'message' => 'Test email sent to ' . htmlspecialchars($to) . '. Check the inbox (and spam folder).']
-        : ['ok' => false, 'message' => 'Test email could not be sent. See the PHP error log for details (lines starting with "mail:").'];
+    if ($ok) {
+        return ['ok' => true, 'message' => 'Test email sent to ' . htmlspecialchars($to) . '. Check the inbox (and spam folder).'];
+    }
+    // Show the transport's own reason. Pointing at the PHP error log was
+    // useless on shared hosting, where the admin has no way to read it —
+    // the page said "test failed" and nothing else, so a simple Brevo
+    // sender-verification step looked like a server-side mystery.
+    $reason = trim(smtpRedact(function_exists('mailLastError') ? mailLastError() : ''));
+    return ['ok' => false, 'message' => 'Test email could not be sent. '
+        . ($reason !== '' ? 'Reason: ' . $reason . ' ' : '')
+        . 'Each transport is tried in turn (Brevo → Gmail API → SMTP), so this message is the last failure. See the "Check transport" button for the live configuration.'];
 }
 
 // ---- handle POST actions (CSRF enforced) ----
