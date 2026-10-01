@@ -178,7 +178,40 @@ Expected: `PASS: 19   FAIL: 0`.
 C:\xampp\php\php.exe vendor\phpunit\phpunit\phpunit --no-coverage tests\AuthHardeningTest.php
 ```
 
-Expected: `OK (15 tests, 71 assertions)`.
+Expected: `OK (17 tests, 77 assertions)`.
+
+### Step 2b — live attack simulation (recommended)
+
+Unit tests prove the logic. This proves the **running server** refuses the
+attacks, by actually attempting them over HTTP:
+
+```powershell
+C:\xampp\php\php.exe scripts\security_attack_sim.php
+```
+
+Apache and MySQL must be running. Expected: `BLOCKED: 9   VULNERABLE: 0`.
+
+It is read-only — no account is taken over and no password is changed. It
+attempts, and expects to fail:
+
+| # | Attack | Result it must get |
+|---|---|---|
+| 1 | Take over any account via `reset_password` + bare `user_id` | refused — no grant |
+| 1b | Same, with a forged 64-char `reset_token` | refused — invalid grant |
+| 2 | Read the OTP out of the `forgot` response | no `otp` field |
+| 3 | Mint/mail-bomb codes via `resend_otp` | refused — session-bound |
+| 4 | 8 wrong passwords | throttled at attempt 6 |
+| 4b | Compare a real vs fake account message | identical |
+| 5 | Cross-site POST with no CSRF token | refused |
+| 6 | Fetch `registrar/smtp-debug.php` | HTTP 404 |
+| 7 | Set a 6-character password via reset | policy refuses it |
+
+Because it deliberately trips the login throttle, reset the counters before
+re-running:
+
+```powershell
+C:\xampp\mysql\bin\mysql.exe -u root registrar_ai -e "UPDATE users SET login_attempts=0, locked_until=NULL; DELETE FROM login_attempts;"
+```
 
 ### Step 3 — manual browser tests
 
