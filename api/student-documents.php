@@ -84,18 +84,39 @@ if (mb_strlen($waitingOn) > 160) {
     echo json_encode(['success' => false, 'message' => 'The waiting-on note is too long (160 characters max).']);
     exit;
 }
-$address      = ''; // no courier — pick-up only
-// Payment method: Online (mock GCash/Maya gateway) or Cash on Delivery.
+// Fulfillment: Pickup at the counter, Delivery by courier, or a digital
+// copy. 'Courier' is the legacy spelling an older caller sent; it is mapped
+// to the enum's 'Delivery' so a stale client still files a valid request.
+if ($fulfillment === 'Courier') {
+    $fulfillment = 'Delivery';
+}
+$address = trim((string) ($input['delivery_address'] ?? ''));
+
+// Payment method: Online (GCash) or pay at the counter.
 // Keep the canonical DB casing ('Cash_on_Delivery') — do not uppercase, the
-// enum is case-sensitive.
-$paymentMethod = 'Online'; // pick-up only — paid online (GCash)
+// enum is case-sensitive. 'Counter' is accepted as a friendlier alias for the
+// student-facing label, then mapped to the value the column stores.
+$paymentMethod = trim((string) ($input['payment_method'] ?? 'Online'));
+if ($paymentMethod === 'Counter') {
+    $paymentMethod = 'Cash_on_Delivery';
+}
 
 if (!in_array($requestType, ['Express', 'Regular'], true)) {
     echo json_encode(['success' => false, 'message' => 'Invalid request type.']);
     exit;
 }
-if (!in_array($fulfillment, ['Pickup', 'Digital'], true)) {
+if (!in_array($fulfillment, ['Pickup', 'Delivery', 'Digital'], true)) {
     echo json_encode(['success' => false, 'message' => 'Invalid fulfillment type.']);
+    exit;
+}
+if ($paymentMethod !== 'Online' && $paymentMethod !== 'Cash_on_Delivery') {
+    echo json_encode(['success' => false, 'message' => 'Invalid payment method.']);
+    exit;
+}
+// A courier leg with nowhere to send it is a request the office cannot
+// fulfil, so the address is required rather than silently dropped.
+if ($fulfillment === 'Delivery' && $address === '') {
+    echo json_encode(['success' => false, 'message' => 'A delivery address is required for courier delivery.']);
     exit;
 }
 if ($purpose === '') {
@@ -123,7 +144,7 @@ try {
     // Courier delivery fee — quoted up-front and borne by the student.
     // Never trust the client's number: the server recomputes the same
     // deterministic quote the student saw in the fee preview.
-    $deliveryFee = null; // no courier — pick-up only
+    $deliveryFee = $fulfillment === 'Delivery' ? 150.00 : null;
 
     // Per-year sequence: DOC-2026-0001, DOC-2026-0002, …
     $year = date('Y');
@@ -135,17 +156,26 @@ try {
 
     $qrHash = hash('sha256', $requestId . '|' . random_bytes(16));
 
-    // ── Balance gate (spec: SELECT balance FROM finance WHERE student_id = …) ──
-    // A walk-in request is Filed. The fee is settled at the counter when
-    // the document is collected, so there is no "awaiting payment" stage
-    // to wait in — it blocked every request indefinitely.
+    // ── Starting stage ───────────────────────────────────────
+    // A request filed online enters the online lifecycle: it waits for
+    // its fee. Only a request the student chose to pay at the counter
+    // skips straight to Filed, because nothing is owed until they are
+    // standing there.
     //
-    // Pending_Clearance is reserved for a balance that genuinely blocks
-    // issue, and it is only a LABEL: the authoritative reason lives in
-    // blocked_reason and is re-derived on every desk load, so paying the
-    // balance releases the request instead of stranding it here.
+    // Pending_Clearance still outranks both. An outstanding balance
+    // blocks issue regardless of how the fee is being settled, and it is
+    // only a LABEL: the authoritative reason lives in blocked_reason and
+    // is re-derived on every desk load, so paying the balance releases
+    // the request instead of stranding it here.
     $balance = (float) ($db->fetchColumn('SELECT balance FROM finance WHERE student_id = ?', [$studentId]) ?? 0.00);
-    $status = $balance > 0 ? 'Pending_Clearance' : 'Filed';
+
+    if ($balance > 0) {
+        $status = 'Pending_Clearance';
+    } elseif ($paymentMethod === 'Online') {
+        $status = 'Awaiting_Payment';
+    } else {
+        $status = 'Filed';
+    }
 
     // Legacy document_type vocabulary, kept for the old column.
     $legacyTypeMap = [
@@ -216,19 +246,24 @@ try {
             'quantity'              => $quantity,
             'request_type'          => $requestType,
             'fulfillment_type'      => $fulfillment,
-            'delivery_address'      => $fulfillment === 'Courier' ? $address : null,
+            'delivery_address'      => $fulfillment === 'Delivery' ? $address : null,
             'payment_method'        => $paymentMethod,
             'delivery_fee'          => $deliveryFee,
             'document_status'       => $status,
             'qr_hash'               => $qrHash,
             'requirement_file_path' => $reqFilePath,
-            // The fee is taken at the counter when the request is filed, so
-            // this is the moment payment happens. It used to be stamped when
-            // the student claimed the document, which meant every revenue
-            // figure was really measuring how quickly people collected
-            // their paperwork. Stamping it here keeps "when were fees
-            // collected" meaning what the reports say it means.
-            'paid_at'               => $now,
+            // Filed online, not at a counter. The desk reads this to know
+            // which intake a request came through, which is the whole point
+            // of the column: an online filing has no walkin_at and no
+            // counter, and must not be recorded as though it did.
+            'source'                => 'online',
+            // paid_at is NOT stamped here. An online request enters
+            // Awaiting_Payment and is paid through the gateway, which sets
+            // paid_at when the money actually lands; a counter-paid request
+            // has it stamped at collection. Stamping it at filing made
+            // "when were fees collected" measure how quickly people picked
+            // up paperwork rather than when they paid.
+            'paid_at'               => null,
         ];
 
         $id = $db->insert('document_requests', $data);
@@ -284,8 +319,11 @@ try {
             'requirement'           => $catalog['requirement'],
             'requirement_file_path' => $reqFilePath,
         ]);
-        $filedNote = 'Request filed at the counter (' . $requestId . ') — fee ₱'
-            . number_format($fee, 2) . ', paid now';
+        $filedNote = $paymentMethod === 'Online'
+            ? 'Request submitted online (' . $requestId . ') — fee ₱'
+                . number_format($fee + (float) ($deliveryFee ?? 0), 2) . ', awaiting payment'
+            : 'Request filed at the counter (' . $requestId . ') — fee ₱'
+                . number_format($fee + (float) ($deliveryFee ?? 0), 2) . ', pay on pickup';
         if ($blockedReason) {
             // Distinguish the two in the log too. "held: <reason>" is
             // accurate for a balance, but for a registrar's own note it
@@ -330,11 +368,24 @@ try {
         }
     }
 
+    // The message is the student's only instruction about what happens
+    // next, so it names the actual next step rather than a flat
+    // "submitted". A request waiting on money has to say so, or the
+    // student waits for a document that is waiting for them.
+    if ($status === 'Pending_Clearance') {
+        $submitMessage = 'Request submitted, but you have an outstanding balance (₱'
+            . number_format($balance, 2) . ') pending clearance.';
+    } elseif ($status === 'Awaiting_Payment') {
+        $submitMessage = 'Request submitted. Pay ₱'
+            . number_format($fee + (float) ($deliveryFee ?? 0), 2)
+            . ' to start processing.';
+    } else {
+        $submitMessage = 'Document request submitted. Pay at the office when you collect it.';
+    }
+
     echo json_encode([
         'success' => true,
-        'message' => $status === 'Pending_Clearance'
-            ? 'Request submitted, but you have an outstanding balance (₱' . number_format($balance, 2) . ') pending clearance.'
-            : 'Document request submitted.',
+        'message' => $submitMessage,
         'data' => ['id' => $id, 'request_id' => $requestId, 'document_status' => $status,
                    'fee' => $fee, 'delivery_fee' => $deliveryFee, 'payment_method' => $paymentMethod],
     ]);

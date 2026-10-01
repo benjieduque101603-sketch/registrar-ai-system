@@ -49,17 +49,21 @@ if ($requests) {
 // ── Display maps
 $statusPill = [
     'Pending_Clearance' => ['pending-clearance', 'fa-triangle-exclamation'],
+    'Awaiting_Payment'  => ['awaiting-payment',  'fa-clock'],
     'Filed'             => ['filed',             'fa-folder-open'],
     'Processing'        => ['processing',        'fa-gear'],
     'Ready'             => ['ready',             'fa-circle-check'],
+    'Shipped'           => ['shipped',           'fa-truck-fast'],
     'Claimed'           => ['claimed',           'fa-box-check'],
     'Rejected'          => ['rejected',          'fa-xmark'],
 ];
 $statusLabel = [
     'Pending_Clearance' => 'Pending Clearance',
+    'Awaiting_Payment'  => 'Awaiting Payment',
     'Filed'             => 'Filed',
     'Processing'        => 'Being prepared',
     'Ready'             => 'Ready for collection',
+    'Shipped'           => 'On its way',
     'Claimed'           => 'Collected',
     'Rejected'          => 'Rejected',
 ];
@@ -78,7 +82,17 @@ function feeLabel($c) {
 }
 
 /**
- * The four steps a student watches, in order.
+ * The steps a student watches, in order.
+ *
+ * "Payment" leads for a request that is waiting on money. Without it a
+ * student in Awaiting_Payment matched no step, renderStepper returned an
+ * empty string, and the row showed no progress at all — the one stage
+ * where they personally have something to do was the one stage with
+ * nothing drawn.
+ *
+ * A request paid at the counter never enters Awaiting_Payment, so the
+ * step is never shown to a student who owes nothing. "On its way" is
+ * drawn only for a courier request; a pickup request skips it.
  *
  * There was once a fifth "Clearance" step prepended for exit-clearance
  * documents, so a student could see three offices signing off. Exit
@@ -88,16 +102,31 @@ function feeLabel($c) {
  * report on.
  */
 function renderStepper(string $status): string {
+    $awaitingPayment = $status === 'Awaiting_Payment';
+    $shipped         = $status === 'Shipped';
+
     $steps = [
-        ['key' => 'Filed',      'label' => 'Filed',      'icon' => 'fa-file-signature'],
-        ['key' => 'Processing', 'label' => 'In progress','icon' => 'fa-gear'],
-        ['key' => 'Ready',      'label' => 'Ready',      'icon' => 'fa-circle-check'],
-        ['key' => 'Claimed',    'label' => 'Collected',  'icon' => 'fa-box-check'],
+        ['key' => 'Awaiting_Payment', 'label' => 'Payment',   'icon' => 'fa-credit-card'],
+        ['key' => 'Filed',            'label' => 'Filed',     'icon' => 'fa-file-signature'],
+        ['key' => 'Processing',       'label' => 'In progress','icon' => 'fa-gear'],
+        ['key' => 'Ready',            'label' => 'Ready',     'icon' => 'fa-circle-check'],
+        ['key' => 'Shipped',          'label' => 'On its way','icon' => 'fa-truck-fast'],
+        ['key' => 'Claimed',          'label' => 'Collected', 'icon' => 'fa-box-check'],
     ];
-    $statusKey = $status === 'Shipped' ? 'Ready' : $status;
+
+    // Drop the steps that do not apply, so a pickup request is not shown a
+    // courier leg it will never take and a paid request is not shown a
+    // payment step it has already cleared.
+    if (!$awaitingPayment) {
+        $steps = array_values(array_filter($steps, fn($s) => $s['key'] !== 'Awaiting_Payment'));
+    }
+    if (!$shipped) {
+        $steps = array_values(array_filter($steps, fn($s) => $s['key'] !== 'Shipped'));
+    }
+
     $activeIdx = null;
     foreach ($steps as $i => $s) {
-        if ($s['key'] === $statusKey) { $activeIdx = $i; break; }
+        if ($s['key'] === $status) { $activeIdx = $i; break; }
     }
     if ($activeIdx === null) return '';
     $html = '<div class="flow-track">';
@@ -386,7 +415,22 @@ $claimed     = $counts['Claimed'];
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
                 <div class="form-group"><label>Request Type</label><input type="text" class="form-control" value="Regular" readonly style="background:#f1f5f9;cursor:not-allowed;"><small style="color:#94a3b8;">Students can only submit regular requests.</small></div>
-                <div class="form-group"><label>Fulfillment</label><input type="text" class="form-control" value="Pickup at Registrar" readonly style="background:#f1f5f9;cursor:not-allowed;"></div>
+                <div class="form-group">
+                    <label>Fulfillment <span class="required">*</span></label>
+                    <select id="reqFulfillment" class="form-control">
+                        <option value="Pickup" selected>Pickup at Registrar</option>
+                        <option value="Delivery">Courier delivery</option>
+                        <option value="Digital">Digital copy (email)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Courier needs somewhere to send it. Hidden until Delivery is
+                 chosen, so the form does not ask a question that has no
+                 bearing on a pickup or a digital copy. -->
+            <div class="form-group" id="addressGroup" style="display:none;">
+                <label>Delivery Address <span class="required">*</span></label>
+                <textarea id="reqAddress" class="form-control" rows="2" placeholder="House no., street, barangay, city, province"></textarea>
             </div>
 
             <div class="form-group">
@@ -497,6 +541,15 @@ function updateFeePreview() {
     else { fileGroup.style.display = 'none'; hint.classList.remove('visible'); }
 }
 document.getElementById('reqQty').addEventListener('input', updateFeePreview);
+// Courier is the only mode that needs an address, so the field appears
+// only for it and is cleared when switching away — a stale address left
+// in a hidden field would ship with a pickup request.
+document.getElementById('reqFulfillment')?.addEventListener('change', function () {
+    const isDelivery = this.value === 'Delivery';
+    document.getElementById('addressGroup').style.display = isDelivery ? 'block' : 'none';
+    if (!isDelivery) document.getElementById('reqAddress').value = '';
+    updateFeePreview();
+});
 document.querySelectorAll('.payment-option input[type=radio]').forEach(r => {
     r.addEventListener('change', function() {
         document.querySelectorAll('.payment-option').forEach(l => l.style.borderColor = '#e2e8f0');
@@ -512,13 +565,23 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { clo
 document.getElementById('requestForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     if (!selectedCatalogId) { showToast('Please select a document from the catalog.', 'error'); return; }
+    const fulfillment = document.getElementById('reqFulfillment').value;
+    if (fulfillment === 'Delivery' && !document.getElementById('reqAddress').value.trim()) {
+        showToast('Please enter a delivery address for courier delivery.', 'error'); return;
+    }
     const btn = document.getElementById('submitReqBtn');
     btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
     try {
         const fd = new FormData(this);
         fd.set('quantity', document.getElementById('reqQty').value || '1');
         fd.set('request_type', 'Regular');
-        fd.set('fulfillment_type', 'Pickup');
+        // Read what the student actually chose. This used to be pinned to
+        // 'Pickup' in JS, which silently discarded the payment radio they
+        // had just clicked — the request was filed as paid at the counter
+        // while the screen said GCash.
+        fd.set('fulfillment_type', fulfillment);
+        fd.set('delivery_address', document.getElementById('reqAddress').value.trim());
+        fd.set('payment_method', (document.querySelector('input[name="payment_method"]:checked') || {}).value || 'Online');
         const res = await fetch('../api/student-documents.php', { method: 'POST', body: fd });
         const d = await res.json();
         if (d.success) { showToast(d.message, d.data && d.data.document_status === 'Pending_Clearance' ? 'warning' : 'success'); setTimeout(() => location.reload(), 900); }
