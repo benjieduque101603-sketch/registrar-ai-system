@@ -63,9 +63,31 @@ $names = fn(string $db, string $t) => array_column($schema($db, $t), 'Field');
 
 $live  = $root->query('SHOW TABLES FROM `' . DB_NAME . '`')->fetchAll(PDO::FETCH_COLUMN);
 $fresh = $root->query("SHOW TABLES FROM `$tmp`")->fetchAll(PDO::FETCH_COLUMN);
+
+// retired_student_sections is excluded, and deliberately.
+//
+// It is a leftover archive table from drop_student_section.sql, the
+// migration that removed the students.section column and stashed the
+// values here before doing so. That file has since been deleted, so no
+// migration creates this table any more, and
+// migrations/restore_student_section.sql explicitly guards every one of
+// its UPDATEs on the table existing — precisely because it cannot assume
+// the table is there.
+//
+// So a fresh install not having it is correct, not drift. Listing it here
+// would mean adding a table that exists only to hold data from a migration
+// nobody can run, and re-creating the archive table would make
+// restore_student_section.sql run its UPDATEs against an empty table,
+// which is harmless but means the restore "succeeds" while restoring
+// nothing. Requiring it would be the wrong kind of correct.
+//
+// It remains in the LIVE database, which is why it shows up in the diff at
+// all. Nothing reads it: only dump_freshness.php mentions it.
+$knownAbsent = ['retired_student_sections'];
+$missing = array_diff($live, $fresh, $knownAbsent);
 t('every live table is defined in the dump',
-    count(array_diff($live, $fresh)) === 0,
-    'missing: ' . implode(', ', array_diff($live, $fresh)));
+    count($missing) === 0,
+    'missing: ' . implode(', ', $missing));
 // -- 1b. Every table the CODE reads is defined in the dump.
 //
 // The check above compares the dump against the live database, so a table
@@ -210,14 +232,100 @@ t('the bootstrap defaults to creating no catalog', strpos($boot, "'N'") !== fals
 
 // -- 6. The migrations must be no-ops here. If one of them still finds
 //       work to do, the dump is not the whole story and a single-file
-//       install would be a lie. If one of them still finds
-//       work to do, the dump is not the whole story and a single-file
 //       install would be a lie.
+//
+//       EXCEPT the two receive-student files, which are deliberately NOT
+//       no-ops and must never be treated as if they were:
+//
+//         seed_receive_students.sql   inserts demo enrollment rows. It is
+//           the substitute for the Enrollment System feed, which is a
+//           separate system that writes that table. A fresh install has no
+//           applicants, so this has real work to do by definition.
+//
+//         clear_receive_students.sql  reports what it would delete. Every
+//           DELETE is behind @execute, which is 0 by default, so it
+//           deletes nothing on a normal run — but it SELECTs to print the
+//           report, and that output is the whole point of running it.
+//
+//       Both "fail" this check for printing or inserting rather than for
+//       schema drift, which is why they were never counted as defects.
+//       Asserting they are silent would mean deleting the report or the
+//       demo data to satisfy a test, which is the wrong trade.
+$notNoOps = ['seed_receive_students.sql', 'clear_receive_students.sql'];
 foreach (glob(__DIR__ . '/../migrations/*.sql') as $m) {
     $out = shell_exec('"' . $cli . '" ' . $auth . ' ' . $pass . ' --default-character-set=utf8mb4 '
         . escapeshellarg($tmp) . ' < ' . escapeshellarg($m) . ' 2>&1');
-    t('migration is a no-op on a fresh import: ' . basename($m),
+    $name = basename($m);
+    if (in_array($name, $notNoOps, true)) {
+        // What matters for these two is that the schema is untouched and
+        // nothing ERRORs. Row output is expected.
+        $errors = preg_grep('/^ERROR/', array_filter(explode("\n", trim((string) $out))));
+        t('data migration runs without error on a fresh import: ' . $name,
+            count($errors) === 0, implode(' | ', $errors));
+        continue;
+    }
+    t('migration is a no-op on a fresh import: ' . $name,
         trim((string) $out) === '', trim((string) $out));
+}
+
+// -- 7. The guarded migrations must still ADD their columns to an old
+//       database. Guarding is only safe in one direction. The test above
+//       proves a migration does nothing where the column already exists;
+//       this one proves it still does the work where it does not.
+//
+//       This is the failure mode a guard introduces silently: wrap an
+//       ALTER in an existence check, and if the check is ever wrong the
+//       migration quietly becomes a no-op on the databases that actually
+//       needed it — the pre-existing ones — while every fresh-install test
+//       still passes. An upgrade path that silently stops upgrading is
+//       worse than one that errors.
+//
+//       So: drop each guarded column from the fresh database, replay the
+//       migration that owns it, and assert the column came back.
+$guarded = [
+    'security_hardening_phase1.sql' => [
+        // Each group is dropped SEPARATELY and the migration replayed
+        // between them. Dropping them all at once would never catch a
+        // guard that checks one column and adds two: with everything
+        // absent, that guard behaves correctly.
+        //
+        // The partial state is the one that breaks. A half-run migration,
+        // a manual fix or an interrupted deploy leaves SOME columns
+        // present, and the mysql client stops at the first error, so a
+        // failed statement silently skips every statement after it.
+        // That is how a migration ends up not installing the thing it
+        // exists to install, with no error anyone would read.
+        ['full', [['users', 'password_changed_at']]],
+        ['full', [['otp_codes', 'verify_attempts']]],
+        ['full', [['students', 'email_is_placeholder']]],
+        ['partial', [['students', 'email_bounced_at']]],
+        ['partial', [['users', 'email_bounced_at']]],
+    ],
+    'add_previous_school_fields.sql' => [
+        ['partial', [['students', 'previous_school']]],
+        ['partial', [['students', 'school_year_graduated']]],
+        ['partial', [['students', 'last_year_level_completed']]],
+        ['full', [['students', 'previous_school'], ['students', 'school_year_graduated'], ['students', 'last_year_level_completed']]],
+    ],
+];
+foreach ($guarded as $file => $groups) {
+    $path = __DIR__ . '/../migrations/' . $file;
+    if (!is_file($path)) { continue; }
+    foreach ($groups as [$kind, $columns]) {
+        foreach ($columns as [$tbl, $col]) {
+            try { $root->exec("ALTER TABLE `$tmp`.`$tbl` DROP COLUMN `$col`"); } catch (Throwable $e) {}
+        }
+        $out = (string) shell_exec('"' . $cli . '" ' . $auth . ' ' . $pass . ' --default-character-set=utf8mb4 '
+            . escapeshellarg($tmp) . ' < ' . escapeshellarg($path) . ' 2>&1');
+        t("migration runs clean with only some columns present: $file ($kind)",
+            trim($out) === '', trim($out));
+        foreach ($columns as [$tbl, $col]) {
+            $have = $root->query("SELECT COUNT(*) AS n FROM information_schema.COLUMNS"
+                . " WHERE TABLE_SCHEMA = '$tmp' AND TABLE_NAME = '$tbl' AND COLUMN_NAME = '$col'")
+                ->fetch(PDO::FETCH_ASSOC);
+            t("guard still adds $tbl.$col to an older database", (int) ($have['n'] ?? 0) === 1);
+        }
+    }
 }
 
 $root->exec('DROP DATABASE `' . $tmp . '`');

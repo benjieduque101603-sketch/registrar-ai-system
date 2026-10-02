@@ -1420,39 +1420,126 @@ function createStudentFromInput(array $input, $db): array
 
     $newId = $db->insert('students', $data);
 
-    // Insert guardian (optional explicit guardian section).
-    $guardianName = trim($input['guardian_name'] ?? '');
-    $guardianContact = trim((string) ($input['guardian_contact'] ?? ''));
-    if ($guardianContact !== '') {
-        $guardianContact = normalizePhone($guardianContact);
-        if (!isValidPhone($guardianContact)) {
-            throw new InvalidArgumentException('Guardian contact number must be an 11-digit mobile number (e.g. 09171234567).');
+    // ── Guardians → guardians ──────────────────────────────────
+    // Two input shapes reach this function and both must keep working.
+    //
+    //  a) `guardians` — a LIST, posted by the Enrol modal's repeater. One
+    //     entry per person on the form. This is the shape that lets a
+    //     student have a father AND a mother AND a guardian; the old flat
+    //     block could only ever record one of them.
+    //  b) guardian_name / guardian_contact / ... — the flat shape, still
+    //     sent by the enrollment intake (api/enrollments.php) and by the
+    //     row-1 half of the Enrol modal. Unchanged, because those callers
+    //     were not touched and silently dropping their guardian on a
+    //     refactor would lose data nobody would notice until a parent
+    //     phoned the school.
+    $guardianRows = [];
+    if (isset($input['guardians']) && is_array($input['guardians']) && count($input['guardians']) > 0) {
+        $guardianRows = $input['guardians'];
+    } else {
+        $guardianRows = [[
+            'full_name'      => $input['guardian_name'] ?? '',
+            'relationship'   => $input['guardian_relationship'] ?? 'guardian',
+            'contact_number' => $input['guardian_contact'] ?? '',
+            'email'          => $input['guardian_email'] ?? '',
+            'address'        => $input['guardian_address'] ?? '',
+        ]];
+    }
+
+    // Only the five values the ENUM allows. A free-text relationship from
+    // an emergency-contact-style field would be rejected by MySQL and abort
+    // the whole enrolment, so anything unrecognised becomes 'guardian'
+    // rather than throwing.
+    $allowedRelationships = ['father', 'mother', 'guardian', 'spouse', 'sibling'];
+
+    // De-duplicate across the list AND against the flat shape: the Enrol
+    // modal sends row 1 twice (once inside the array, once flat), so
+    // without this the primary guardian gets two identical rows and the
+    // Contacts page shows them side by side. Same relationship OR same
+    // name = same person — the rule syncFatherMotherGuardians() uses, so
+    // a father named in the form and the same father from father_name
+    // produce one row, not two.
+    $seenKeys = [];
+    $primaryInserted = false;
+    $firstGuardianForSync = null;
+
+    foreach ($guardianRows as $g) {
+        if (!is_array($g)) { continue; }
+
+        $gName = trim((string) ($g['full_name'] ?? ''));
+        $gContactRaw = trim((string) ($g['contact_number'] ?? ''));
+        $gContact = $gContactRaw !== '' ? normalizePhone($gContactRaw) : '';
+        $gEmail = trim((string) ($g['email'] ?? ''));
+        $gAddress = trim((string) ($g['address'] ?? ''));
+
+        // An entirely empty row is not a person. The repeater's "Add
+        // another" button leaves blanks behind often enough that this is
+        // the common case, not the exception.
+        if ($gName === '' && $gContact === '' && $gEmail === '' && $gAddress === '') { continue; }
+
+        if ($gContactRaw !== '' && !isValidPhone($gContact)) {
+            throw new InvalidArgumentException(
+                ($gName !== '' ? '"' . $gName . '"' : 'A guardian')
+                . "'s contact number must be an 11-digit mobile number (e.g. 09171234567)."
+            );
         }
-    }
-    if ($guardianName !== '' && $guardianContact === '') {
-            throw new InvalidArgumentException('Guardian contact number is required and must be an 11-digit mobile number (e.g. 09171234567).');
-    }
-    if ($guardianName !== '') {
+        // guardians.contact_number is NOT NULL. A named guardian with no
+        // number cannot be stored at all, so this is rejected rather than
+        // silently dropped — the clerk needs to know the row was not saved.
+        if ($gName !== '' && $gContact === '') {
+            throw new InvalidArgumentException(
+                '"' . $gName . '" needs a mobile number (11 digits starting 09, e.g. 09171234567).'
+            );
+        }
+
+        $gRel = (string) ($g['relationship'] ?? 'guardian');
+        if (!in_array($gRel, $allowedRelationships, true)) { $gRel = 'guardian'; }
+
+        $key = mb_strtolower($gRel . '|' . $gName);
+        if (isset($seenKeys[$key])) { continue; }
+        $seenKeys[$key] = true;
+
+        $isPrimary = !$primaryInserted ? 1 : 0;
+        if ($isPrimary) { $primaryInserted = true; }
+
         try {
             $db->insert('guardians', [
-                'student_id' => $newId,
-                'full_name' => $guardianName,
-                'relationship' => $input['guardian_relationship'] ?? 'guardian',
-                'contact_number' => $guardianContact,
-                'email' => $input['guardian_email'] ?? null,
+                'student_id'     => $newId,
+                'full_name'      => $gName,
+                'relationship'   => $gRel,
+                'contact_number' => $gContact,
+                'email'          => $gEmail !== '' ? $gEmail : null,
+                'address'        => $gAddress !== '' ? $gAddress : null,
+                'is_primary'     => $isPrimary,
+                'is_emergency'   => 0,
             ]);
+            if ($firstGuardianForSync === null) {
+                $firstGuardianForSync = [
+                    'relationship'   => $gRel,
+                    'contact_number' => $gContact,
+                    'email'          => $gEmail,
+                    'address'        => $gAddress,
+                ];
+            }
         } catch (Exception $e) {
+            // One bad guardian row must not abort the enrolment: the
+            // student row itself is already written at this point, and
+            // losing it would be far worse than losing one contact.
+            error_log('[createStudentFromInput] guardian row skipped: ' . $e->getMessage());
         }
     }
 
-    // Auto-sync Father/Mother Name → guardian rows so the parents
-    // entered in Personal Info always appear on the Contacts page.
+    // Auto-sync Father/Mother Name → guardian rows so the parents entered
+    // in Personal Info always appear on the Contacts page. It skips any
+    // parent already inserted above, so running it after the repeater
+    // cannot duplicate the rows the clerk just filled in.
     if (function_exists('syncFatherMotherGuardians')) {
-        syncFatherMotherGuardians($newId, $input['father_name'] ?? null, $input['mother_name'] ?? null, [
-            'relationship'   => $input['guardian_relationship'] ?? 'guardian',
-            'contact_number' => $guardianContact,
-            'email'          => $input['guardian_email'] ?? '',
-        ]);
+        syncFatherMotherGuardians(
+            $newId,
+            $input['father_name'] ?? null,
+            $input['mother_name'] ?? null,
+            $firstGuardianForSync ?? []
+        );
     }
 
     // ── Previous school → academic_history ─────────────────────
@@ -1470,27 +1557,41 @@ function createStudentFromInput(array $input, $db): array
     }
 
     // ── Emergency contact → emergency_contacts ─────────────────
-    $emergName = trim($input['emergency_name'] ?? '');
-    $emergencyContact = trim((string) ($input['emergency_contact'] ?? ''));
-    if ($emergencyContact !== '') {
-        $emergencyContact = normalizePhone($emergencyContact);
-        if (!isValidPhone($emergencyContact)) {
+    // The whole record is optional, but the name and the number travel
+    // together: a row with a name and no number is worse than no row at
+    // all, because on the emergency list it looks like somebody to ring
+    // and the office has nothing to dial. Rejecting both halves matches
+    // the rule the Enrol modal enforces before it posts.
+    $emergName = trim((string) ($input['emergency_name'] ?? ''));
+    $emergRel  = trim((string) ($input['emergency_relationship'] ?? ''));
+    $emergAddr = trim((string) ($input['emergency_address'] ?? ''));
+    $emergContact = trim((string) ($input['emergency_contact'] ?? ''));
+    if ($emergContact !== '') {
+        $emergContact = normalizePhone($emergContact);
+        if (!isValidPhone($emergContact)) {
             throw new InvalidArgumentException('Emergency contact number must be an 11-digit mobile number (e.g. 09171234567).');
         }
     }
-    if ($emergName !== '' && $emergencyContact === '') {
-            throw new InvalidArgumentException('Emergency contact number is required and must be an 11-digit mobile number (e.g. 09171234567).');
+    if ($emergName !== '' && $emergContact === '') {
+        throw new InvalidArgumentException('The emergency contact needs a mobile number, or clear the name.');
+    }
+    if ($emergName === '' && $emergContact !== '') {
+        throw new InvalidArgumentException('The emergency contact needs a name, or clear the mobile number.');
     }
     if ($emergName !== '') {
         try {
             $db->insert('emergency_contacts', [
                 'student_id'     => $newId,
                 'full_name'      => $emergName,
-                'relationship'   => $input['emergency_relationship'] ?? null,
-                'contact_number' => $emergencyContact,
+                'relationship'   => $emergRel !== '' ? $emergRel : null,
+                'contact_number' => $emergContact,
+                'address'        => $emergAddr !== '' ? $emergAddr : null,
                 'is_primary'     => 1,
             ]);
         } catch (Exception $e) {
+            // Same reasoning as the guardian rows: the student is already
+            // written, so a failure here must not unwind the enrolment.
+            error_log('[createStudentFromInput] emergency contact skipped: ' . $e->getMessage());
         }
     }
 

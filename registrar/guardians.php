@@ -116,9 +116,14 @@ include '../includes/sidebar.php';
                 <h1>Guardians &amp; Contacts</h1>
                 <p>Registrar-managed guardians, emergency contacts, and email recipients for every student</p>
             </div>
-            <div class="header-actions">
-                <button class="btn btn-primary" onclick="openManage()"><i class="fas fa-rotate"></i> Sync from student information</button>
-            </div>
+            <!-- The header used to carry a "Sync from student information"
+                 button here. It called openManage() with no arguments, so
+                 all it did was open this modal with the student picker
+                 showing - it never synced anything, and the row-level
+                 pencil button opens the same modal directly. Two buttons
+                 for one modal, one of them mislabelled. Contacts are now
+                 maintained per student from the list row, or from the
+                 Add Student form. -->
         </header>
 
         <!-- ── Metric strip ────────────────────────────────────
@@ -291,16 +296,14 @@ include '../includes/sidebar.php';
         <button class="modal-close" onclick="closeModal('manageModal')"><i class="fas fa-times"></i></button>
     </div>
     <div class="modal-body">
-        <!-- Student picker shown when opened from header button -->
-        <div id="mgPickerWrap" style="display:none;" class="form-group">
-            <label>Student</label>
-            <select id="mgPicker" class="form-control" data-searchable>
-                <option value="">Select a student...</option>
-                <?php foreach ($students as $st): ?>
-                    <option value="<?= (int)$st['id'] ?>"><?= htmlspecialchars($st['student_number'].' — '.$st['name']) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>
+        <!-- The student picker used to live here, shown only when the modal
+             was opened from the header button with no student in context.
+             That button is gone, so no code path can reach the picker state
+             any more; every remaining entry point (the list row's pencil,
+             and the Add Student form) opens this modal already bound to one
+             student. The markup is removed rather than left hidden so it
+             cannot drift back into use - a visible control that does
+             nothing is worse than no control. -->
         <input type="hidden" id="mgStudentId">
 
         <div class="mg-tabs">
@@ -935,38 +938,21 @@ function switchTab(tabId, btn) {
 
 // ─── OPEN MANAGE ────────────────────────────────────────────
 let currentStudentId = null;
+// Always called with a student id (the list row's pencil button). The
+// no-argument branch and the student picker it fed are gone with the
+// header button; a missing id now fails loudly rather than opening an
+// empty modal that cannot save anything.
 function openManage(id, name) {
-    if (id) {
-        currentStudentId = id;
-        document.getElementById('mgTitle').textContent = (name || 'Student') + ' — Manage Contacts';
-        document.getElementById('mgPickerWrap').style.display = 'none';
-        document.getElementById('mgStudentId').value = id;
-        loadStudentContacts(id);
-        openModal('manageModal');
-    } else {
-        currentStudentId = null;
-        document.getElementById('mgTitle').textContent = 'Manage Contacts';
-        document.getElementById('mgPickerWrap').style.display = '';
-        document.getElementById('mgPicker').value = '';
-        document.getElementById('mgGuardians').innerHTML = '';
-        document.getElementById('mgEmergency').innerHTML = '';
-        document.getElementById('mgEmail').innerHTML = '';
-        refreshCounts();
-        openModal('manageModal');
+    if (!id) {
+        showToast('No student selected.', 'warning');
+        return;
     }
+    currentStudentId = id;
+    document.getElementById('mgTitle').textContent = (name || 'Student') + ' — Manage Contacts';
+    document.getElementById('mgStudentId').value = id;
+    loadStudentContacts(id);
+    openModal('manageModal');
 }
-document.getElementById('mgPicker') && document.getElementById('mgPicker').addEventListener('change', function(e) {
-    if (e.target.value) {
-        currentStudentId = e.target.value;
-        loadStudentContacts(e.target.value);
-    } else {
-        currentStudentId = null;
-        document.getElementById('mgGuardians').innerHTML = '';
-        document.getElementById('mgEmergency').innerHTML = '';
-        document.getElementById('mgEmail').innerHTML = '';
-        refreshCounts();
-    }
-});
 
 function loadStudentContacts(id) {
     loadGuardians(id);

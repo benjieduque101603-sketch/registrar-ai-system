@@ -59,10 +59,20 @@ try {
                 " . db_optional_column('document_catalog', 'sla_days', 'c') . ",
                 CONCAT(s.first_name, ' ', s.last_name) AS student_name,
                 s.first_name, s.last_name, s.student_number, s.photo,
-                " . studentPhotoSelectSql() . " AS photo_path
+                " . studentPhotoSelectSql() . " AS photo_path,
+                -- Receipt sign-off names. dr.* gives the *_by ids only,
+                -- and the panel falls back to the bare id if these are
+                -- missing -- an audit line nobody can attribute to a
+                -- person is the one thing this column exists to avoid.
+                -- LEFT JOIN, not INNER: a receipt verified by a since
+                -- deleted account must still render the screenshot.
+                uv.full_name AS payment_receipt_verified_by_name,
+                uw.full_name AS payment_receipt_waived_by_name
            FROM document_requests dr
            LEFT JOIN document_catalog c ON c.id = dr.catalog_id
            LEFT JOIN students s ON dr.student_id = s.id
+           LEFT JOIN users uv ON uv.id = dr.payment_receipt_verified_by
+           LEFT JOIN users uw ON uw.id = dr.payment_receipt_waived_by
           ORDER BY dr.id DESC"
     );
 
@@ -625,6 +635,31 @@ body[data-page="documents"] .dq-empty span{font-size:12.5px;color:#94a3b8}
 .doc-detail .dq-log-head{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#64748b;margin-bottom:8px}
 .doc-detail .dq-log-row{display:flex;gap:10px;margin-bottom:5px;font-size:12px}
 .doc-detail .dq-log-row time{color:#94a3b8;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* -- GCash receipt panel --------------------------------------
+   The receipt is the evidence that the money moved, and it is
+   the only place a registrar can check it. It renders inline
+   rather than behind a link: a "View receipt" button beside a
+   one-pixel thumbnail is how screenshots get waved through
+   unchecked. submitted / verified / waived / missing are four
+   visibly different states, because "submitted" and "verified"
+   are the whole point of the distinction. */
+.doc-detail .dq-receipt{margin-top:14px;border:1px solid #e2e8f0;border-radius:11px;overflow:hidden}
+.doc-detail .dq-receipt-head{display:flex;flex-wrap:wrap;align-items:center;gap:9px;padding:11px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+.doc-detail .dq-receipt-head b{font-size:13px;color:#1e293b}
+.doc-detail .rq-pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:3px 9px;border-radius:999px}
+.doc-detail .rq-pill.is-submitted{background:#fef3c7;color:#92400e}
+.doc-detail .rq-pill.is-verified{background:#dcfce7;color:#15803d}
+.doc-detail .rq-pill.is-waived{background:#ede9fe;color:#6d28d9}
+.doc-detail .rq-pill.is-none{background:#fee2e2;color:#991b1b}
+.doc-detail .rq-pill.is-nr{background:#f1f5f9;color:#64748b}
+.doc-detail .rq-meta{font-size:12px;color:#64748b}
+.doc-detail .rq-meta span{color:#1e293b;font-weight:600}
+.doc-detail .dq-receipt-body{display:flex;flex-wrap:wrap;gap:14px;padding:14px}
+.doc-detail .rq-thumb{max-width:320px;max-height:260px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;object-fit:contain;cursor:zoom-in}
+.doc-detail .rq-side{flex:1 1 220px;min-width:200px}
+.doc-detail .rq-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.doc-detail .rq-waived-note{font-size:12px;color:#6d28d9;margin-top:8px}
+.doc-detail .rq-ask{font-size:13px;color:#991b1b;padding:14px}
 
 /* -- New Request modal --------------------------------- */
 /* registrar.css makes .modal-content the scroll box (max-height:90vh,
@@ -1366,6 +1401,110 @@ tr.is-blocked:hover{background:#fffbeb}
                                 </button>
                             </div>
                             <?php endif; ?>
+                            <?php // -- GCash receipt ---------------------------------
+                                  // The registrar has to be able to SEE the
+                                  // screenshot before releasing, so it renders
+                                  // inline and is clickable to enlarge: a GCash
+                                  // reference number is unreadable at thumbnail
+                                  // size, and the reference number is the thing
+                                  // actually being checked against the gateway
+                                  // callback. The src is the authorisation-gated
+                                  // endpoint, never the uploads path, so the file
+                                  // is not directly web-reachable. ?>
+                            <?php $rcpt = doc_receipt_state($r); $rq = doc_requires_receipt($r); ?>
+                            <?php if ($rq): ?>
+                            <div class="dq-receipt">
+                                <div class="dq-receipt-head">
+                                    <i class="fa-solid fa-receipt" aria-hidden="true"></i>
+                                    <b>GCash Receipt</b>
+                                    <span class="rq-pill is-<?= htmlspecialchars($rcpt) ?>">
+                                        <?= $rcpt === 'submitted' ? 'Awaiting check'
+                                          : ($rcpt === 'verified' ? 'Verified'
+                                          : ($rcpt === 'waived' ? 'Waived' : 'Missing')) ?>
+                                    </span>
+                                    <span class="rq-meta">
+                                        <?php if ($rcpt === 'verified'): ?>
+                                            Checked by <?= htmlspecialchars($r['payment_receipt_verified_by_name'] ?? 'staff') ?>
+                                            on <?= date('M d, Y', strtotime((string) $r['payment_receipt_verified_at'])) ?>
+                                        <?php elseif ($rcpt === 'waived'): ?>
+                                            Waived by <?= htmlspecialchars($r['payment_receipt_waived_by_name'] ?? 'staff') ?>
+                                            on <?= date('M d, Y', strtotime((string) $r['payment_receipt_waived_at'])) ?>
+                                        <?php elseif ($rcpt === 'submitted'): ?>
+                                            Uploaded <?= date('M d, Y h:i A', strtotime((string) $r['payment_receipt_uploaded_at'])) ?>
+                                        <?php else: ?>
+                                            Not attached yet
+                                        <?php endif; ?>
+                                    </span>
+                                </div>
+                                <?php if ($rcpt === 'none'): ?>
+                                    <div class="rq-ask">
+                                        No receipt on file. Ask the student to attach the GCash screenshot in
+                                        Document Requests, or waive it with a reason below.
+                                    </div>
+                                <?php else: ?>
+                                <div class="dq-receipt-body">
+                                    <?php // A waived receipt has no screenshot left to
+                                          // show, so the thumbnail is suppressed
+                                          // rather than rendered broken. ?>
+                                    <?php if ($rcpt !== 'waived'): ?>
+                                    <img class="rq-thumb" alt="GCash payment receipt"
+                                         src="api/file-download.php?type=payment_receipt&amp;request_id=<?= (int) $r['id'] ?>"
+                                         onclick="rqZoom(this)" title="Click to enlarge">
+                                    <?php endif; ?>
+                                    <div class="rq-side">
+                                        <div class="rq-meta">
+                                            <?php /* The stored column is payment_receipt_filename — there is no
+                                       payment_receipt_original_name and no alias
+                                       supplies one, so reading that key silently
+                                       yielded null and the filename never appeared
+                                       on the panel. */ ?>
+                                            <?php if (!empty($r['payment_receipt_filename'])): ?>
+                                                File: <span><?= htmlspecialchars($r['payment_receipt_filename']) ?></span><br>
+                                            <?php endif; ?>
+                                            Amount claimed: <span>₱<?= number_format((float) ($r['fee_amount'] ?? 0) + (float) ($r['delivery_fee'] ?? 0), 2) ?></span>
+                                        </div>
+                                        <?php if ($rcpt === 'waived'): ?>
+                                            <div class="rq-waived-note">
+                                                <?php /* payment_receipt_waived_reason is the real column name. The
+                                       panel was reading payment_receipt_waive_reason,
+                                       which nothing defines — so every waived receipt
+                                       rendered "No reason recorded." regardless of
+                                       what the registrar typed, which is the one
+                                       thing a waiver exists to capture. */ ?>
+                                                <?= htmlspecialchars($r['payment_receipt_waived_reason'] ?: 'No reason recorded.') ?>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php /* Buttons change with the state, because the
+                                                 action that makes sense is not the same one twice:
+                                                 submitted → check it or waive it; missing →
+                                                 only waive it; verified/waived → undo it, since
+                                                 a wrongly-verified receipt would otherwise be
+                                                 permanent and unchallengeable. */ ?>
+                                        <div class="rq-actions">
+                                            <?php if ($rcpt === 'submitted'): ?>
+                                                <button type="button" class="btn btn-success btn-sm"
+                                                        onclick="rqVerify(<?= (int) $r['id'] ?>)">
+                                                    <i class="fa-solid fa-circle-check" aria-hidden="true"></i> Confirm payment
+                                                </button>
+                                            <?php endif; ?>
+                                            <?php if ($rcpt !== 'verified' && $rcpt !== 'waived'): ?>
+                                                <button type="button" class="btn btn-outline btn-sm"
+                                                        onclick="rqWaive(<?= (int) $r['id'] ?>)">
+                                                    <i class="fa-solid fa-circle-minus" aria-hidden="true"></i> Waive receipt
+                                                </button>
+                                            <?php else: ?>
+                                                <button type="button" class="btn btn-outline btn-sm"
+                                                        onclick="rqReset(<?= (int) $r['id'] ?>)">
+                                                    <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+                                                    <?= $rcpt === 'verified' ? 'Undo confirmation' : 'Undo waiver' ?>
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                            <?php endif; ?>
                             <?php if (!empty($reqEvents)): ?>
                                 <div class="dq-log">
                                     <div class="dq-log-head">Activity Log</div>
@@ -1593,6 +1732,41 @@ tr.is-blocked:hover{background:#fffbeb}
     </div>
 </div>
 
+<!-- --- WAIVE RECEIPT MODAL -------------------------------------- -->
+<!-- A receipt can be waived, but only with a typed reason, because the
+     whole point of the gate is that "was the receipt seen, or was it
+     waived?" has to be answerable from the record months later. A
+     one-click waive with no reason turns the audit trail into "staff
+     clicked a button" and the two states become indistinguishable -
+     which is the failure the feature exists to prevent. The reason is
+     required, and the API rejects a blank one too; this is a
+     convenience, not the enforcement. -->
+<div class="modal-overlay" id="waiveModal">
+    <div class="modal-content" style="max-width:440px;">
+        <div class="modal-header">
+            <h3><i class="fa-solid fa-circle-minus"></i> Waive Receipt</h3>
+            <button class="modal-close" onclick="closeModal('waiveModal')"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="waiveId">
+            <p style="font-size:13px;color:#475569;margin-bottom:12px;">Waiving the receipt check for: <strong id="waiveLabel"></strong></p>
+            <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:9px;padding:10px 12px;font-size:12.5px;color:#92400e;margin-bottom:14px;">
+                <strong>Use this only when the payment is genuinely proven another way.</strong>
+                A waiver lets the request move forward without the GCash screenshot. Your name, the date
+                and this reason are stored permanently on the request.
+            </div>
+            <div class="form-group">
+                <label>Why is the receipt not needed? <span style="color:#dc2626;">*</span></label>
+                <textarea id="waiveReason" class="form-control" rows="3" placeholder="e.g. Student paid over the counter on Jan 12; confirmed by the cashier's OR number 4417."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer" style="border-top:1px solid #e2e8f0;">
+            <button class="btn btn-secondary" onclick="closeModal('waiveModal')">Cancel</button>
+            <button class="btn btn-primary" id="waiveSubmit" onclick="submitWaive()"><i class="fa-solid fa-circle-minus"></i> Waive receipt</button>
+        </div>
+    </div>
+</div>
+
 <!-- --- DOCUMENT PREVIEW ----------------------------------------- -->
 <!-- The document as the student will receive it, rendered by
      api/document-preview.php from shared/document_templates.php ? the
@@ -1649,6 +1823,105 @@ async function putDoc(id, action, extra) {
         body: JSON.stringify(body)
     });
     return res.json();
+}
+
+// -- Payment Receipt -----------------------------------------
+// The panel these drive is server-rendered from doc_receipt_state(),
+// and the API returns the new state in the response. The desk is
+// reloaded rather than patched in place because the button set is
+// derived from that state: "submitted" offers Confirm and Waive,
+// "verified"/"waived" offer Undo. Recomputing that in JS would mean
+// reimplementing the same branch on the client, and the two would
+// drift the first time a state was added.
+
+// A receipt thumbnail is usually small and is often a photo of a phone
+// screen, so it is shown inline and enlarged on click rather than
+// opened in a new tab. The download link behind the image is the
+// authoritative one; this is a look, not an edit.
+function rqZoom(img) {
+    const w = img.naturalWidth || 900;
+    const h = img.naturalHeight || 1400;
+    img.classList.toggle('rq-thumb-zoom');
+    // Guard the zoom with a class rather than inline width/height so the
+    // CSS owns the sizing and the thumbnail cannot be stretched past
+    // its natural resolution by a very wide image.
+    if (img.classList.contains('rq-thumb-zoom')) {
+        img.style.maxWidth = Math.min(w, window.innerWidth * 0.9) + 'px';
+    } else {
+        img.style.maxWidth = '';
+    }
+}
+
+async function rqVerify(id) {
+    // confirmAction() is promise-based: it resolves true/false and knows
+    // nothing about onConfirm, so the work goes in the continuation. An
+    // object with an onConfirm key opens the dialog and silently does
+    // nothing when it is dismissed - the button appears dead.
+    const ok = await confirmAction({
+        title: 'Confirm payment received?',
+        body: 'Confirm you have checked the GCash receipt against the amount owed. This is recorded against your name and can be withdrawn, but it should be right.',
+        confirmLabel: 'Confirm payment'
+    });
+    if (!ok) return;
+    const d = await putDoc(id, 'verify_receipt');
+    if (d.success) {
+        showToast(d.data && d.data.can_process
+            ? 'Receipt verified. This request can now be processed.'
+            : 'Receipt verified.', 'success');
+        setTimeout(() => location.reload(), 700);
+    } else {
+        showToast(d.message || 'Action failed.', 'error');
+    }
+}
+
+function rqWaive(id) {
+    document.getElementById('waiveId').value = id;
+    document.getElementById('waiveLabel').textContent = rowLabel(id);
+    document.getElementById('waiveReason').value = '';
+    openModal('waiveModal');
+}
+
+async function submitWaive() {
+    const id = document.getElementById('waiveId').value;
+    const reason = document.getElementById('waiveReason').value.trim();
+    // The API rejects a blank reason too; this is here so the clerk gets
+    // the message beside the field rather than as a toast after a
+    // round-trip.
+    if (!reason) { showToast('Please say why the receipt is not needed.', 'error'); return; }
+    const btn = document.getElementById('waiveSubmit');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving\u2026';
+    try {
+        const d = await putDoc(id, 'waive_receipt', { waive_reason: reason });
+        if (d.success) {
+            closeModal('waiveModal');
+            showToast('Receipt requirement waived.', 'success');
+            setTimeout(() => location.reload(), 600);
+        } else {
+            showToast(d.message || 'Action failed.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-circle-minus"></i> Waive receipt';
+    }
+}
+
+async function rqReset(id) {
+    const ok = await confirmAction({
+        title: 'Withdraw this sign-off?',
+        body: 'The request goes back to awaiting your decision. The uploaded receipt is kept &#8212; only the staff decision is cleared.',
+        confirmLabel: 'Withdraw'
+    });
+    if (!ok) return;
+    const d = await putDoc(id, 'reset_receipt');
+    if (d.success) {
+        showToast('Receipt sign-off withdrawn.', 'success');
+        setTimeout(() => location.reload(), 600);
+    } else {
+        showToast(d.message || 'Action failed.', 'error');
+    }
 }
 
 // -- New Request Modal ------------------------------------------
@@ -1831,8 +2104,17 @@ async function submitApproveRelease() {
         const d = await putDoc(id, 'ready', { approval_reason: 'Signed by registrar', release_date: releaseDate });
         if (d.success) {
             closeModal('approveReleaseModal');
-            showToast('Document signed and ready to claim.', 'success');
-            setTimeout(() => location.reload(), 600);
+            // The pickup notice is sent by the same call, and it can fail
+            // while the status change succeeds. Saying only "ready to
+            // claim" would leave the clerk believing the student was
+            // told, and the student waiting for an email that never went.
+            const pick = d.data && d.data.pickup_email;
+            if (pick && d.data && d.data.pickup_sent === 0) {
+                showToast('Document is ready, but no pickup email went out: ' + pick, 'warning');
+            } else {
+                showToast('Document signed and ready to claim. ' + (pick || ''), 'success');
+            }
+            setTimeout(() => location.reload(), 1400);
         } else {
             showToast(d.message || 'Action failed.', 'error');
         }

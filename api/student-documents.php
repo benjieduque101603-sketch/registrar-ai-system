@@ -49,6 +49,12 @@ $input = $_POST ?: (json_decode(file_get_contents('php://input'), true) ?: []);
 
 // Student is resolved from the session for portal users; a registrar/admin
 // filing on behalf of a walk-in may pass student_id explicitly.
+//
+// This sits ABOVE the receipt-upload branch below because that branch
+// compares the request's owner against it. Resolved further down it would
+// be undefined there, and the comparison would silently read as null —
+// which is not a permission error, it is every request looking like it
+// belongs to nobody.
 $studentId = (int) ($input['student_id'] ?? 0);
 if (in_array($role, ['admin', 'registrar'], true) && $studentId > 0) {
     $exists = Database::getInstance()->fetchOne('SELECT id FROM students WHERE id = ?', [$studentId]);
@@ -61,6 +67,148 @@ if (in_array($role, ['admin', 'registrar'], true) && $studentId > 0) {
 }
 if (!$studentId) {
     echo json_encode(['success' => false, 'message' => 'No student account is linked to this session. Contact the Registrar.']);
+    exit;
+}
+
+// ── Receipt upload ───────────────────────────────────────────
+// A SECOND endpoint rather than a field on the create payload. The
+// create path has already returned by the time a student has actually
+// paid and taken a screenshot, so the receipt almost always arrives
+// against a request that already exists. Folding it into `create`
+// would mean the receipt could only ever be attached to a request
+// filed and paid in the same breath.
+//
+// Branched before any of the catalog/purpose validation below: an
+// upload carries a request_id and a file, none of the create fields.
+if (($input['action'] ?? '') === 'upload_receipt') {
+    $requestPk = (int) ($input['request_id'] ?? 0);
+    $receipt   = doc_store_receipt($_FILES['payment_receipt'] ?? []);
+
+    // Ordered deliberately: the FILE is validated before anything is
+    // read from the database. A malformed upload is rejected on its own
+    // merits, so the response never depends on whether the request
+    // exists or who owns it — which would otherwise let a student map
+    // out other people's request ids by watching the error change.
+    if (!$receipt['ok']) {
+        echo json_encode(['success' => false, 'message' => $receipt['message']]);
+        exit;
+    }
+
+    // By this point a validated file is ON DISK. Every exit from here
+    // on must remove it, or the endpoint becomes a way to fill the
+    // disk: post a valid image against a request id you don't own,
+    // get an error, repeat. The file was never referenced by any row.
+    $dropStoredFile = static function () use ($receipt) {
+        @unlink(__DIR__ . '/../' . $receipt['path']);
+    };
+
+    // The GCash reference is validated after the file, for the same reason:
+    // one thing at a time, and each error is about the thing just checked.
+    $ref = doc_receipt_ref((string) ($input['gcash_ref'] ?? ''));
+    if (!$ref['ok']) {
+        // The file IS on disk by now — the check above ran first — so it
+        // has to go. An orphan is not just wasted space: nothing links to
+        // it, so it is also invisible to every cleanup path that works by
+        // following rows.
+        $dropStoredFile();
+        echo json_encode(['success' => false, 'message' => $ref['message']]);
+        exit;
+    }
+
+    try {
+        $db = Database::getInstance();
+        $row = $db->fetchOne('SELECT * FROM document_requests WHERE id = ?', [$requestPk]);
+        // "Missing" and "not yours" return the SAME message. Differing
+        // them turns this endpoint into an oracle: a student can post
+        // against a range of ids and learn which document requests in
+        // the whole school exist, without owning any of them. The cost
+        // is one vague message in the legitimate case where a student
+        // clicks Upload on a request that has since been closed, which
+        // is recoverable and worth far less than the leak.
+        if (!$row || (int) $row['student_id'] !== (int) $studentId) {
+            $dropStoredFile();
+            echo json_encode(['success' => false, 'message' => 'That document request is not available.']);
+            exit;
+        }
+        // Ownership above is checked against the resolved $studentId, which
+        // is the session's student — never a student_id from the body.
+        if (!doc_requires_receipt($row)) {
+            $dropStoredFile();
+            echo json_encode([
+                'success' => false,
+                'message' => 'This request is not paid online, so it does not need a receipt.',
+            ]);
+            exit;
+        }
+        if ($row['document_status'] === 'Rejected' || $row['document_status'] === 'Claimed') {
+            $dropStoredFile();
+            echo json_encode([
+                'success' => false,
+                'message' => 'This request is closed. Contact the Registrar if this is wrong.',
+            ]);
+            exit;
+        }
+
+        $now = date('Y-m-d H:i:s');
+
+        // Re-uploading replaces the receipt and RESETS verification. A
+        // verified receipt swapped out for a new file has not been
+        // verified, and leaving payment_receipt_verified_by in place
+        // would let a student attach a screenshot, pass the check, then
+        // quietly replace it with something else.
+        $db->update('document_requests', [
+            'payment_receipt_path'          => $receipt['path'],
+            'payment_receipt_filename'      => mb_substr((string) ($_FILES['payment_receipt']['name'] ?? 'receipt'), 0, 180),
+            'payment_receipt_sha256'        => $receipt['sha256'],
+            'payment_receipt_ref'           => $ref['value'],
+            'payment_receipt_uploaded_at'   => $now,
+            'payment_receipt_verified_at'   => null,
+            'payment_receipt_verified_by'   => null,
+            'payment_receipt_waived_at'     => null,
+            'payment_receipt_waived_by'     => null,
+            'payment_receipt_waived_reason' => null,
+        ], 'id = ?', [$requestPk]);
+
+        // The superseded file is deleted only after the row points at the
+        // new one. The reverse order would leave a row whose receipt had
+        // been unlinked but never replaced.
+        $old = (string) ($row['payment_receipt_path'] ?? '');
+        if ($old !== '' && $old !== $receipt['path']) {
+            // @ because the upload may have been written by a different
+            // host or already swept; failing to delete a superseded file
+            // must not fail an otherwise good upload.
+            @unlink(__DIR__ . '/../' . $old);
+        }
+
+        // Recorded as an event like every other change to this request,
+        // so the receipt history survives the file being replaced.
+        $db->insert('document_request_events', [
+            'request_id' => $requestPk,
+            'status'     => $row['document_status'],
+            'note'       => 'Payment receipt uploaded by the student'
+                . ($ref['value'] ? ' (GCash ref ' . $ref['value'] . ')' : '')
+                . '. Awaiting registrar verification.',
+            'created_by' => $_SESSION['user_id'] ?? null,
+            'created_at' => $now,
+        ]);
+
+        logActivity($_SESSION['user_id'], 'document_receipt_upload', null,
+            'document_requests', $requestPk, null,
+            ['request_id' => $row['request_id'], 'ref' => $ref['value'], 'sha256' => $receipt['sha256']]);
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Receipt uploaded. The Registrar will check it before releasing your document.',
+            'data'    => ['state' => doc_receipt_state(array_merge($row, [
+                'payment_receipt_path' => $receipt['path'],
+            ]))],
+        ]);
+    } catch (Throwable $e) {
+        // Unlink the stored file: the row was never updated, so leaving
+        // it would be an unreferenced upload nothing can ever reach.
+        @unlink(__DIR__ . '/../' . $receipt['path']);
+        json_error($e, 'Could not save the receipt.');
+    }
     exit;
 }
 

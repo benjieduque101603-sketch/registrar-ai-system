@@ -27,6 +27,7 @@
 //      can never execute in the app's origin (stored XSS)
 //
 //  Usage: GET api/file-download.php?id=<documents.id>
+//        GET api/file-download.php?kind=receipt&request=<document_requests.id>
 //
 //  Note: ?path= is deliberately NOT supported. Resolving straight from a
 //  caller-supplied path is what made the direct-directory exposure
@@ -57,23 +58,71 @@ if (!isLoggedIn()) {
 $role    = (string) getCurrentUserRole();
 $isStaff = in_array($role, ['admin', 'registrar', 'staff'], true);
 
-// ── 2. Resolve the requested row ──────────────────────────────
-// Only a documents.id is accepted, so ownership can always be checked
-// against the database before any byte is read.
-$docId = isset($_GET['id']) ? (int) $_GET['id'] : 0;
-if ($docId <= 0) {
-    jsonFail(400, 'Nothing requested.');
-}
+// ── 1b. Payment receipts ──────────────────────────────────────
+//
+// The GCash screenshot a student attaches lives in document_requests,
+// not in documents, so it needs its own resolution path here.
+//
+// STAFF ONLY, and that is a deliberate difference from the branch below
+// rather than an oversight. A document is the student's own paperwork:
+// the owner has a legitimate reason to see it. A receipt is a payment
+// artefact about money they paid a third party, and it is routinely
+// checked by whoever handles the money on the student's behalf — a
+// parent, a sibling, a housemate riding along to the counter. Letting
+// the record owner pull up the GCash screenshot means handing out
+// transaction references and masked-account detail that the registrar
+// never intended to give the account holder. The verification step is
+// the registrar's, so the receipt is theirs to open.
+//
+// Same id-not-path rule as documents: ownership and existence are read
+// from the row, never inferred from a supplied filename.
+$kind = (string) ($_GET['kind'] ?? '');
+if ($kind === 'receipt') {
+    if (!$isStaff) {
+        jsonFail(403, 'Forbidden.');
+    }
+    $reqId = isset($_GET['request']) ? (int) $_GET['request'] : 0;
+    if ($reqId <= 0) {
+        jsonFail(400, 'Nothing requested.');
+    }
+    $req = Database::getInstance()->fetchOne(
+        "SELECT payment_receipt_path, payment_receipt_filename
+           FROM document_requests WHERE id = ?",
+        [$reqId]
+    );
+    $stored = trim((string) ($req['payment_receipt_path'] ?? ''));
+    if ($stored === '') {
+        jsonFail(404, 'There is no receipt on this request.');
+    }
+    // Reuse the documents flow from here: same path confinement, same
+    // headers, same download-name scrubbing. One copy of the path
+    // traversal guard means a second endpoint cannot weaken it.
+    $docId  = $reqId;
+    $doc    = [
+        'student_id' => null,
+        'filename'   => (string) ($req['payment_receipt_filename'] ?? basename($stored)),
+        'file_path'  => $stored,
+    ];
+    $isReceipt = true;
+} else {
+    // ── 2. Resolve the requested row ──────────────────────────────
+    // Only a documents.id is accepted, so ownership can always be checked
+    // against the database before any byte is read.
+    $docId = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+    if ($docId <= 0) {
+        jsonFail(400, 'Nothing requested.');
+    }
 
-$db  = Database::getInstance();
-$doc = $db->fetchOne(
-    "SELECT d.id, d.student_id, d.filename, d.file_path
-     FROM documents d
-     WHERE d.id = ?",
-    [$docId]
-);
-if (!$doc) {
-    jsonFail(404, 'File not found.');
+    $doc  = Database::getInstance()->fetchOne(
+        "SELECT d.id, d.student_id, d.filename, d.file_path
+         FROM documents d
+         WHERE d.id = ?",
+        [$docId]
+    );
+    if (!$doc) {
+        jsonFail(404, 'File not found.');
+    }
+    $isReceipt = false;
 }
 
 $stored = (string) ($doc['file_path'] ?? '');
@@ -99,7 +148,7 @@ if ($realAbs === false || $realRoot === false || strpos($realAbs, $realRoot) !==
 }
 
 // ── 4. Authorisation ──────────────────────────────────────────
-if (!$isStaff) {
+if (!$isStaff && !$isReceipt) {
     if ($role !== 'student') {
         // nurse, teacher, or anything else: file storage is not theirs.
         jsonFail(403, 'Forbidden.');
@@ -138,6 +187,40 @@ header('X-Content-Type-Options: nosniff');
 header("Content-Security-Policy: default-src 'none'; sandbox");
 header('Cache-Control: private, no-store, max-age=0');
 header('Content-Length: ' . (string) filesize($realAbs));
+
+// A receipt is the one kind of upload that has to be INLINE.
+//
+// Verification means looking at a screenshot: as an attachment it lands in
+// the downloads folder, detached from the request the registrar is reading,
+// and the "Accept receipt" button ends up next to a thumbnail they have to
+// go and find. So receipts get an inline content type — but only for the
+// raster formats the upload validator accepts, which have no scripting
+// model and therefore cannot execute in this origin.
+//
+// The inline allow-list is NOT derived from the filename. doc_store_receipt()
+// already sniffed magic bytes on the way in, so anything in here is a real
+// PNG/JPEG, but deriving the type from the extension would let a stored
+// .svg — which IS executable in this origin — ride in on a forged name if
+// the validator were ever bypassed. Anything not on this list falls through
+// to the attachment headers set above, so the failure mode is "downloads
+// instead of displays", never "renders as script".
+$inlineImageTypes = [
+    'png'  => 'image/png',
+    'jpg'  => 'image/jpeg',
+    'jpeg' => 'image/jpeg',
+    'webp' => 'image/webp',
+];
+if ($isReceipt) {
+    $ext = strtolower(pathinfo($realAbs, PATHINFO_EXTENSION));
+    if (isset($inlineImageTypes[$ext])) {
+        header('Content-Type: ' . $inlineImageTypes[$ext]);
+        header('Content-Disposition: inline; filename="' . $downloadName . '"');
+        // The blanket sandbox above would block an <img> from rendering at
+        // all, so it is replaced here. 'none' still forbids script, plugins
+        // and forms; only the ability to be displayed as an image is kept.
+        header("Content-Security-Policy: default-src 'none'; img-src 'self' data:; sandbox");
+    }
+}
 
 if (strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
     exit;

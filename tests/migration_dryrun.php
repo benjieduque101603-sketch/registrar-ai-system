@@ -95,21 +95,107 @@ echo '  run 2: ' . ($e2 === '' ? 'clean' : "ERROR -> $e2") . "\n";
 // The columns the application reads with ?? must exist. The code is
 // written to tolerate the column being ABSENT (an un-migrated server), so
 // this failure is silent at runtime and has to be asserted here.
-$cols = array_column(
-    $root->query("SHOW COLUMNS FROM `$tmp`.document_requests")->fetchAll(PDO::FETCH_ASSOC),
-    'Type', 'Field'
-);
+//
+// The list is derived from the migration being rehearsed rather than
+// hardcoded to one file, because a hardcoded list is only ever right for
+// the migration it was written for: pointing this at a different file
+// (the default, document_walkin_only.sql, does have blocked_*) silently
+// stops testing anything.
 $fail = 0;
-foreach (['blocked_reason', 'blocked_since', 'blocked_source'] as $c) {
-    $ok = isset($cols[$c]);
-    printf("  document_requests.%-16s %s\n", $c, $ok ? $cols[$c] : '*** MISSING ***');
-    if (!$ok) $fail++;
+// Expected columns, parsed per (TABLE, COLUMN) pair.
+//
+// Scoping matters: a bare /COLUMN_NAME = 'x'/ picks up every guarded column
+// in the file regardless of which table it belongs to, and then asserts them
+// all on document_requests. Pointing this at document_walkin_only.sql then
+// "fails" on sla_days, graduation_date and file_sha256 - all real columns,
+// just not on that table. That is a broken test, not a broken migration.
+preg_match_all(
+    "/TABLE_NAME\s*=\s*'([a-z0-9_]+)'.*?COLUMN_NAME\s*=\s*'([a-z0-9_]+)'/is",
+    file_get_contents($file),
+    $mm,
+    PREG_SET_ORDER
+);
+$expected = [];
+foreach ($mm as $m) { $expected[$m[1]][$m[2]] = true; }
+$expectedCount = array_sum(array_map('count', $expected));
+echo '  asserting ' . $expectedCount . " column(s) across " . count($expected) . " table(s), declared by $file\n";
+if (!$expectedCount) { echo "  *** migration declares no guarded columns ***\n"; $fail++; }
+
+foreach ($expected as $tbl => $cols) {
+    $have = array_column(
+        $root->query("SHOW COLUMNS FROM `$tmp`.`$tbl`")->fetchAll(PDO::FETCH_ASSOC),
+        'Type', 'Field'
+    );
+    foreach (array_keys($cols) as $c) {
+        $ok = isset($have[$c]);
+        printf("  %-22s.%-28s %s\n", $tbl, $c, $ok ? $have[$c] : '*** MISSING ***');
+        if (!$ok) $fail++;
+    }
 }
+
+// Structure check: every guarded column block must actually be EXECUTEd.
+//
+// Each block reads information_schema into @has, builds an ALTER into @s, and
+// ends with PREPARE/EXECUTE/DEALLOCATE. Drop that last line and the migration
+// still reports "clean" - the ALTER is built into a variable, never run, and
+// the next block overwrites @s. The column is simply never created, with no
+// error anywhere. That is not hypothetical: payment_receipt_waived_by was
+// missing for exactly this reason.
+//
+// So count them. A guarded block that does not set @s, or a SET @s with no
+// following EXECUTE, is a silent no-op and has to fail the rehearsal.
+$sql = file_get_contents($file);
+$blocks = preg_split('/SET @has :=/i', $sql);
+array_shift($blocks);                       // preamble
+$noPrepare = 0;
+foreach ($blocks as $i => $b) {
+    if (!preg_match("/SET \@s\s*:=/i", $b)) { continue; }
+    if (!preg_match('/PREPARE\s+\w+\s+FROM\s+@s\s*;\s*EXECUTE/i', $b)) {
+        $noPrepare++;
+        $col = preg_match("/COLUMN_NAME = '([a-z0-9_]+)'/i", $b, $c) ? $c[1] : '(unknown)';
+        echo "  *** block for $col never executes (@s built, no EXECUTE) ***\n";
+    }
+}
+printf("  every guarded column is actually EXECUTEd: %s\n", $noPrepare === 0 ? 'yes' : "*** NO ($noPrepare) ***");
+if ($noPrepare) $fail++;
+
+// (The per-table column assertions above replaced an earlier block that
+// hard-coded document_requests and walked $expected as a flat list. Once
+// $expected became table-scoped, $c there was an array and
+// isset($cols[$c]) threw "Illegal offset type" — a fatal that killed the
+// run AFTER the columns had already printed, so it read as a pass with a
+// stray exit code and the enum checks below never ran.)
+
+// The enum-safety claim in the migration header, checked rather than
+// trusted. This migration deliberately does NOT redefine document_status,
+// so the rehearsal must leave the live enum byte-identical - including
+// 'Awaiting_Payment' and 'Shipped', which registrar_ai.sql no longer
+// lists. If someone later "fixes" this by adding a MODIFY COLUMN, this
+// is what catches them.
+$liveEnum = $root->query(
+    "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA='" . DB_NAME . "' AND TABLE_NAME='document_requests'
+        AND COLUMN_NAME='document_status'"
+)->fetchColumn();
+$testEnum = $root->query(
+    "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA='$tmp' AND TABLE_NAME='document_requests'
+        AND COLUMN_NAME='document_status'"
+)->fetchColumn();
+$enumKept = ($liveEnum === $testEnum);
+echo '  document_status enum unchanged: ' . ($enumKept ? 'yes' : "*** NO ($liveEnum -> $testEnum) ***") . "\n";
+if (!$enumKept) $fail++;
+foreach (['Awaiting_Payment', 'Shipped'] as $v) {
+    $has = $testEnum !== false && strpos($testEnum, "'" . $v . "'") !== false;
+    echo "  enum still contains $v: " . ($has ? 'yes' : '*** NO ***') . "\n";
+    if (!$has) $fail++;
+}
+
 $cat = array_column(
     $root->query("SHOW COLUMNS FROM `$tmp`.document_catalog")->fetchAll(PDO::FETCH_ASSOC),
     'Type', 'Field'
 );
-printf("  document_catalog.%-17s %s\n", 'sla_days', $cat['sla_days'] ?? '*** MISSING ***');
+printf("  document_catalog.%-30s %s\n", 'sla_days', $cat['sla_days'] ?? '*** MISSING ***');
 if (!isset($cat['sla_days'])) $fail++;
 
 // And the application must not fatal against the result.

@@ -1,0 +1,15 @@
+# ============================================================
+#  PAYMENT RECEIPTS — no direct web access
+#
+#  GCash/Maya screenshots attached to document requests. Same
+#  exposure the other upload directories already closed: Apache
+#  happily serves anything under htdocs, so a receipt was readable
+#  by anyone who guessed the 8-hex suffix — no login, no
+#  session, and no record of who looked. A receipt carries a
+#  transaction reference and a real name, so that is a payment
+#  detail and a personal detail leaking together.
+#
+#  Downloaded through api/file-download.php after an
+#  authorisation check (owner, or registrar desk).
+# ============================================================
+Require all denied

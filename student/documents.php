@@ -8,6 +8,11 @@
 require_once __DIR__ . '/../shared/security_headers.php';
 require_once __DIR__ . '/../shared/session_config.php';
 require_once __DIR__ . '/../shared/database.php';
+// For doc_requires_receipt() / doc_receipt_state(), which decide
+// whether this request needs a receipt and where it stands. Loaded
+// explicitly rather than relying on the chain: a page that silently
+// loses these renders every request as if no receipt were needed.
+require_once __DIR__ . '/../shared/document_process.php';
 
 $page_title = 'My Documents';
 $APP_ROOT = '../';
@@ -297,6 +302,12 @@ $claimed     = $counts['Claimed'];
                             && (float) $r['fee_amount'] > 0
                             && ($r['payment_method'] ?? 'Online') !== 'Cash_on_Delivery';
                         $isCod = ($r['payment_method'] ?? 'Online') === 'Cash_on_Delivery';
+                        // Receipt state, for requests that owe money and
+                        // were paid online. 'none' means the student still
+                        // has to attach one — that is the only state that
+                        // shows them the upload button.
+                        $needsReceipt = doc_requires_receipt($r);
+                        $receiptState = $needsReceipt ? doc_receipt_state($r) : null;
                     ?>
                         <tr data-doc="<?= (int) $r['id'] ?>" data-status="<?= htmlspecialchars((string) $r['document_status']) ?>" class="doc-row" onclick="toggleDetail(<?= (int) $r['id'] ?>)">
                             <td>
@@ -321,6 +332,17 @@ $claimed     = $counts['Claimed'];
                             <td style="text-align:right;white-space:nowrap;">
                                 <?php if ($payable): ?>
                                     <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openPaymentModal(<?= (int) $r['id'] ?>, '<?= htmlspecialchars($r['request_id']) ?>', <?= (float) $r['fee_amount'] ?>);"><i class="fa-solid fa-credit-card"></i> Pay Online</button>
+                                <?php elseif ($receiptState === 'none'): ?>
+                                    <!-- Paid, no receipt yet. This button IS the
+                                         next action, so it takes the primary
+                                         styling the Pay button would have used. -->
+                                    <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openReceiptModal(<?= (int) $r['id'] ?>, '<?= htmlspecialchars($r['request_id']) ?>');"><i class="fa-solid fa-receipt"></i> Attach Receipt</button>
+                                <?php elseif ($receiptState === 'submitted'): ?>
+                                    <span class="pill awaiting-payment" title="<?= htmlspecialchars($r['payment_receipt_filename'] ?? '') ?>"><i class="fa-solid fa-clock"></i> Receipt sent</span>
+                                <?php elseif ($receiptState === 'verified'): ?>
+                                    <span class="pill processing" title="Checked by the Registrar"><i class="fa-solid fa-circle-check"></i> Receipt OK</span>
+                                <?php elseif ($receiptState === 'waived'): ?>
+                                    <span class="pill processing" title="Not required &mdash; waived by the Registrar"><i class="fa-solid fa-circle-info"></i> Receipt waived</span>
                                 <?php elseif ($isRejected): ?>
                                     <span class="pill rejected"><i class="fa-solid fa-xmark"></i> Rejected</span>
                                 <?php else: ?>
@@ -358,6 +380,15 @@ $claimed     = $counts['Claimed'];
                                         <?php endif; ?>
                                         <?php if ($payable): ?>
                                             <div style="font-size:12.5px;color:#2563eb;"><i class="fa-solid fa-credit-card"></i> <b>Payment needed.</b> Click "Pay Online" to pay via GCash.</div>
+                                        <?php endif; ?>
+                                        <?php if ($receiptState === 'none'): ?>
+                                            <div style="font-size:12.5px;color:#b45309;"><i class="fa-solid fa-triangle-exclamation"></i> <b>Receipt needed.</b> Pay first, then attach your GCash receipt here so the Registrar can confirm the payment.</div>
+                                        <?php elseif ($receiptState === 'submitted'): ?>
+                                            <div style="font-size:12.5px;color:#475569;"><i class="fa-solid fa-receipt"></i> <b>Receipt received</b><?= !empty($r['payment_receipt_ref']) ? ' &middot; GCash ref ' . htmlspecialchars($r['payment_receipt_ref']) : '' ?> &mdash; waiting for the Registrar to check it.</div>
+                                        <?php elseif ($receiptState === 'verified'): ?>
+                                            <div style="font-size:12.5px;color:#16a34a;"><i class="fa-solid fa-circle-check"></i> <b>Receipt verified</b> by the Registrar<?= !empty($r['payment_receipt_verified_at']) ? ' on ' . date('M d, Y', strtotime($r['payment_receipt_verified_at'])) : '' ?>.</div>
+                                        <?php elseif ($receiptState === 'waived'): ?>
+                                            <div style="font-size:12.5px;color:#6d28d9;"><i class="fa-solid fa-circle-info"></i> <b>Receipt not required</b> &mdash; waived by the Registrar<?= !empty($r['payment_receipt_waive_reason']) ? ': ' . htmlspecialchars($r['payment_receipt_waive_reason']) : '' ?>.</div>
                                         <?php endif; ?>
                                         <?php if ($r['document_status'] === 'Processing'): ?>
                                             <div style="font-size:12.5px;color:#6d28d9;"><i class="fa-solid fa-gear"></i> Being prepared by the Registrar.</div>
@@ -497,6 +528,54 @@ $claimed     = $counts['Claimed'];
     </div>
 </div>
 
+<!-- Receipt Upload Modal
+     Reached from the "Attach Receipt" button on any paid-online row, so
+     the student can (a) send the screenshot and (b) send it AGAIN after
+     the registrar asks for a different one. Re-upload is allowed on
+     purpose — the server resets verification on replace, so a corrected
+     screenshot cannot ride in on the old one's approval. -->
+<div class="modal-overlay" id="receiptModal">
+    <div class="modal-content" style="max-width:520px;">
+        <div class="modal-header">
+            <h2><i class="fa-solid fa-receipt"></i> Attach GCash Receipt</h2>
+            <button class="modal-close" onclick="closeReceiptModal()"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <!-- targetPk / targetLabel are module-level, not form fields:
+                 the request is already created and paid by the time this
+                 runs, so the form carries only the receipt itself. -->
+            <input type="hidden" id="receiptRequestPk" value="">
+            <div id="receiptExisting"></div>
+            <div class="form-group" style="margin-top:12px;">
+                <label for="receiptFile">Receipt image or PDF <span style="color:#dc2626;">*</span></label>
+                <!-- accept mirrors the server allow-list in
+                     doc_store_receipt(): jpg/jpeg/png/webp/pdf. A
+                     mismatch would only surface as a confusing toast
+                     after the upload. -->
+                <input type="file" id="receiptFile" class="form-control" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf">
+                <div class="form-hint">A screenshot of the GCash confirmation, or the emailed receipt PDF. <?= strtoupper(implode(', ', DOC_RECEIPT_EXT)) ?>, up to <?= round(DOC_RECEIPT_MAX_BYTES / 1048576) ?> MB.</div>
+            </div>
+            <div class="form-group">
+                <label for="receiptRef">GCash reference number</label>
+                <input type="text" id="receiptRef" class="form-control" placeholder="e.g. 9A2B3C4D5E" autocomplete="off">
+                <div class="form-hint">Optional, but it is what Finance reconciles against — include it if your GCash app shows one.</div>
+            </div>
+            <div id="receiptPreview" style="display:none;margin-bottom:12px;">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Selected</div>
+                <div id="receiptPreviewBody" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;font-size:12.5px;">
+                    <i class="fa-solid fa-file-image" style="color:#2563eb;"></i>
+                    <span id="receiptPreviewName" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                    <span id="receiptPreviewSize" style="margin-left:auto;color:#64748b;white-space:nowrap;"></span>
+                </div>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px;">
+                <button type="button" class="btn btn-light" onclick="closeReceiptModal()">Cancel</button>
+                <button type="button" class="btn btn-primary" id="receiptSubmitBtn" onclick="submitReceipt()"><i class="fa-solid fa-paper-plane"></i> Send Receipt</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 const CATALOG = <?= json_encode(array_map(function ($c) {
     return ['id' => (int) $c['id'], 'name' => $c['name'], 'base_fee' => (float) $c['base_fee'],
@@ -558,7 +637,107 @@ document.querySelectorAll('.payment-option input[type=radio]').forEach(r => {
 });
 document.getElementById('requestModal').addEventListener('click', function(e) { if (e.target === this) closeRequestModal(); });
 document.getElementById('payModal').addEventListener('click', function(e) { if (e.target === this) closePayModal(); });
-document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { closeRequestModal(); closePayModal(); } });
+document.getElementById('receiptModal').addEventListener('click', function(e) { if (e.target === this) closeReceiptModal(); });
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { closeRequestModal(); closePayModal(); closeReceiptModal(); } });
+</script>
+
+<script>
+// ── RECEIPT UPLOAD ────────────────────────────────────────
+// Separate from the payment modal on purpose. Payment happens once, at
+// the start; the receipt happens after the student has actually paid
+// and found the screenshot in their GCash history — possibly minutes
+// later, possibly on a different day, possibly twice. Coupling them
+// would mean the upload UI only exists during the seconds the gateway
+// redirect is on screen.
+document.getElementById('receiptFile').addEventListener('change', function () {
+    var f = this.files && this.files[0];
+    var box = document.getElementById('receiptPreview');
+    if (!f) { box.style.display = 'none'; return; }
+    document.getElementById('receiptPreviewName').textContent = f.name;
+    document.getElementById('receiptPreviewSize').textContent = (f.size / 1024).toFixed(0) + ' KB';
+    box.style.display = 'block';
+});
+
+// Mirrors the server's limits so the student is told here rather than
+// after a 5 MB upload has already crossed the wire. The values are
+// rendered from DOC_RECEIPT_MAX_BYTES / DOC_RECEIPT_EXT rather than
+// retyped: a limit enforced in only one of the two places is a limit
+// that quietly stops being enforced.
+var RECEIPT_MAX_BYTES = <?= (int) DOC_RECEIPT_MAX_BYTES ?>;
+var RECEIPT_EXT = <?= json_encode(array_values(DOC_RECEIPT_EXT)) ?>;
+
+function openReceiptModal(requestPk, requestLabel, existingName) {
+    document.getElementById('receiptRequestPk').value = requestPk;
+    document.getElementById('receiptFile').value = '';
+    document.getElementById('receiptRef').value = '';
+    document.getElementById('receiptPreview').style.display = 'none';
+    // Say plainly that this replaces the old one. Silent replacement
+    // would let a student believe they were adding a second receipt.
+    document.getElementById('receiptExisting').innerHTML = existingName
+        ? '<div style="font-size:12.5px;color:#b45309;"><i class="fa-solid fa-triangle-exclamation"></i> <b>Replacing</b> the receipt already on file (' +
+          htmlEscape(existingName) + '). It will be checked again from scratch.</div>'
+        : '<div style="font-size:12.5px;color:#475569;">Request <b>' + htmlEscape(requestLabel) + '</b></div>';
+    document.getElementById('receiptModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+function closeReceiptModal() {
+    document.getElementById('receiptModal').classList.remove('active');
+    document.body.style.overflow = '';
+}
+function htmlEscape(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+}
+
+async function submitReceipt() {
+    var pk = document.getElementById('receiptRequestPk').value;
+    var input = document.getElementById('receiptFile');
+    var f = input.files && input.files[0];
+    if (!pk) { showToast('No document request selected.', 'error'); return; }
+    if (!f) { showToast('Please choose your GCash receipt image or PDF.', 'error'); return; }
+
+    // Same checks as the server, run first so the common mistake is a
+    // local toast rather than a round-trip that rejects the file.
+    var ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (RECEIPT_EXT.indexOf(ext) === -1) {
+        // Built from RECEIPT_EXT rather than typed out. A hand-written list
+        // is a second copy of the rule: when DOC_RECEIPT_EXT gained an
+        // extension, the message here would keep rejecting the files the
+        // server had started accepting.
+        showToast('The receipt must be a ' + RECEIPT_EXT.join(', ').toUpperCase() + ' file.', 'error'); return;
+    }
+    if (f.size > RECEIPT_MAX_BYTES) {
+        showToast('That file is ' + (f.size / 1024 / 1024).toFixed(1) + ' MB. The limit is ' + (RECEIPT_MAX_BYTES / 1048576) + ' MB.', 'error'); return;
+    }
+
+    var btn = document.getElementById('receiptSubmitBtn');
+    var orig = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+    try {
+        var fd = new FormData();
+        fd.set('action', 'upload_receipt');
+        fd.set('request_id', pk);
+        fd.set('gcash_ref', document.getElementById('receiptRef').value.trim());
+        fd.set('payment_receipt', f);
+        var res = await fetch('../api/student-documents.php', { method: 'POST', body: fd });
+        var d = await res.json();
+        if (d.success) {
+            closeReceiptModal();
+            showToast(d.message, 'success');
+            // Reload rather than patching the row: the button that was
+            // just clicked becomes a status pill, and which pill depends
+            // on server-side state the client cannot safely guess.
+            setTimeout(function () { location.reload(); }, 1200);
+        } else {
+            showToast(d.message || 'Could not upload the receipt.', 'error');
+            btn.disabled = false; btn.innerHTML = orig;
+        }
+    } catch (err) {
+        showToast('Network error — the receipt was not sent.', 'error');
+        btn.disabled = false; btn.innerHTML = orig;
+    }
+}
 </script>
 
 <script>

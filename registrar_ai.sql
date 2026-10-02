@@ -159,8 +159,15 @@ CREATE TABLE `audit_logs` (
   `action` varchar(100) NOT NULL,
   `table_name` varchar(50) DEFAULT NULL,
   `record_id` int(11) DEFAULT NULL,
-  `old_values` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`old_values`)),
-  `new_values` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`new_values`)),
+  -- Collation is utf8mb4_general_ci here, matching the live table, and the
+  -- seed previously said utf8mb4_bin. That difference is inert: these are
+  -- write-only JSON payloads, never compared in SQL (grepped to confirm),
+  -- and json_valid() is a parse check rather than a comparison. The seed is
+  -- aligned to the database that actually runs rather than the reverse.
+  -- Change it here and you would be changing what a rebuild produces for no
+  -- behavioural gain.
+  `old_values` longtext DEFAULT NULL CHECK (json_valid(`old_values`)),
+  `new_values` longtext DEFAULT NULL CHECK (json_valid(`new_values`)),
   `ip_address` varchar(45) DEFAULT NULL,
   `user_agent` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -386,7 +393,12 @@ CREATE TABLE `document_request_events` (
 CREATE TABLE `document_requests` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `request_id` varchar(24) DEFAULT NULL,
-  `source` enum('walk_in') NOT NULL DEFAULT 'walk_in' COMMENT 'All requests are counter walk-ins',
+  -- 'online' was added by migrations/document_online_lifecycle.sql. The seed
+  -- kept enum('walk_in') with the comment "All requests are counter
+  -- walk-ins", which is what makes this dangerous: rebuilding from the seed
+  -- produces a table that rejects every online request with a silent
+  -- truncation to '' in strict mode, and an outright error otherwise.
+  `source` enum('walk_in','online') NOT NULL DEFAULT 'walk_in' COMMENT 'walk_in = counter, online = filed by the student',
   `walkin_at` datetime DEFAULT NULL COMMENT 'Walked in at the counter',
   `walkin_by` int(11) DEFAULT NULL COMMENT 'Registrar who took the request',
   `counter` tinyint(3) NOT NULL DEFAULT 1 COMMENT 'Releasing counter (1-3)',
@@ -400,13 +412,22 @@ CREATE TABLE `document_requests` (
   `catalog_id` int(11) DEFAULT NULL,
   `quantity` int(11) NOT NULL DEFAULT 1,
   `request_type` enum('Express','Regular') NOT NULL DEFAULT 'Regular',
-  `fulfillment_type` enum('Pickup','Digital') NOT NULL DEFAULT 'Pickup',
+  `fulfillment_type` enum('Pickup','Delivery','Digital') NOT NULL DEFAULT 'Pickup',
   `delivery_address` text DEFAULT NULL,
   `payment_method` enum('Online','Cash_on_Delivery','Counter') NOT NULL DEFAULT 'Counter',
   `purpose` varchar(255) DEFAULT NULL,
   `recipient` varchar(255) DEFAULT NULL,
   `status` enum('pending','processing','approved','denied','completed','released') DEFAULT 'pending',
-  `document_status` enum('Filed','Pending_Clearance','Processing','Ready','Claimed','Rejected') NOT NULL DEFAULT 'Filed',
+  -- NOTE: this enum must stay byte-identical to the live table. Two values
+  -- were added by migrations and never made it back into the seed:
+  --   Awaiting_Payment — the online-payment hold
+  --   Shipped          — courier hand-off
+  -- A MODIFY COLUMN written from this (wrong) list REPLACES the enum
+  -- rather than extending it, so applying it drops both values and
+  -- rewrites every affected row to ''. That is silent and it only shows
+  -- up once payments stop flowing.
+  -- Verify with: php tests/document_receipt_migration_check.php
+  `document_status` enum('Filed','Pending_Clearance','Awaiting_Payment','Processing','Ready','Shipped','Claimed','Rejected') NOT NULL DEFAULT 'Filed',
   `blocked_reason` varchar(160) DEFAULT NULL COMMENT 'What this request is waiting on, if anything',
   `blocked_since` datetime DEFAULT NULL COMMENT 'When the current blockage began',
   `blocked_source` varchar(16) DEFAULT NULL,
@@ -432,6 +453,33 @@ CREATE TABLE `document_requests` (
   `delivery_fee` decimal(10,2) DEFAULT NULL,
   `official_receipt` varchar(40) DEFAULT NULL,
   `release_date` datetime DEFAULT NULL,
+  -- ── GCash payment receipt ────────────────────────────────────
+  -- Added by migrations/document_receipt_upload.sql. Previously these
+  -- existed only in that migration, so the seed described a table the
+  -- application cannot use: a database built from this file rejected
+  -- every receipt upload and every receipt sign-off.
+  --
+  -- The migration is guarded (it checks information_schema first), so
+  -- applying it on top of this seed is a no-op rather than a duplicate
+  -- column error. The seed and the migration are both correct here.
+  `payment_receipt_path` varchar(255) DEFAULT NULL COMMENT 'Relative path to the uploaded GCash receipt image/PDF',
+  `payment_receipt_sha256` char(64) DEFAULT NULL COMMENT 'SHA-256 of the receipt at upload; proves the file is unaltered',
+  `payment_receipt_filename` varchar(180) DEFAULT NULL COMMENT 'Original filename as uploaded, for display only',
+  `payment_receipt_uploaded_at` datetime DEFAULT NULL COMMENT 'When the student attached the receipt',
+  `payment_receipt_ref` varchar(40) DEFAULT NULL COMMENT 'GCash reference number as printed on the receipt',
+  `payment_receipt_verified_at` datetime DEFAULT NULL COMMENT 'When staff confirmed the receipt matches the request',
+  `payment_receipt_verified_by` int(11) DEFAULT NULL COMMENT 'users.id of the staff member who verified the receipt',
+  `payment_receipt_waived_at` datetime DEFAULT NULL COMMENT 'When staff accepted the request WITHOUT a receipt',
+  `payment_receipt_waived_by` int(11) DEFAULT NULL COMMENT 'users.id of the staff member who waived the receipt requirement',
+  `payment_receipt_waived_reason` varchar(255) DEFAULT NULL COMMENT 'Why the receipt requirement was waived — required, never blank',
+  -- ── Pickup notice ────────────────────────────────────────────
+  -- Sent when the request goes to Ready. Recorded so a registrar can
+  -- see afterwards whether the student was actually told — a Ready
+  -- document nobody was notified about is the failure that gets
+  -- discovered by the student standing at the counter.
+  `pickup_notified_at` datetime DEFAULT NULL COMMENT 'When the pickup/availability email was successfully sent',
+  `pickup_notified_to` varchar(255) DEFAULT NULL COMMENT 'Recipients the pickup email actually reached',
+  `pickup_notify_error` varchar(255) DEFAULT NULL COMMENT 'Why the pickup email could not be sent; NULL when it sent',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_request_id` (`request_id`),
   UNIQUE KEY `uq_qr_hash` (`qr_hash`),
@@ -685,7 +733,7 @@ CREATE TABLE `masterlist_cache` (
   `user_id` int(11) NOT NULL,
   `query_hash` varchar(64) NOT NULL,
   `query_text` text DEFAULT NULL,
-  `result_data` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`result_data`)),
+  `result_data` longtext DEFAULT NULL CHECK (json_valid(`result_data`)),
   `generated_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `expires_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -758,11 +806,43 @@ CREATE TABLE `otp_codes` (
   `expires_at` datetime NOT NULL,
   `used_at` datetime DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  -- Added by migrations/security_hardening_phase1.sql. NOT NULL DEFAULT 0,
+  -- so the seed has to declare it: without it a seeded database has an
+  -- OTP table with no attempt counter, and the brute-force lockout in
+  -- auth_security.php silently never triggers.
+  `verify_attempts` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `idx_otp_user` (`user_id`),
   KEY `idx_otp_purpose` (`user_id`,`purpose`),
   CONSTRAINT `fk_otp_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=11 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+-- Also created by migrations/security_hardening_phase1.sql; it was
+-- missing from the SEED only. That is still a real gap: the seed is what
+-- a fresh install is built from, so a seeded database had no
+-- password_reset_grants at all and every "forgot password" request would
+-- fail on a missing-table error unless that migration happened to be run
+-- afterwards. auth_security.php reads and writes it (11 references), so
+-- the feature looks implemented and simply cannot run.
+--
+-- Declared IF NOT EXISTS in the migration, so the two agree and running
+-- the migration over this seed is a no-op rather than a duplicate error.
+--
+-- Only the HASH of the reset token is stored, never the token itself: a
+-- read-only compromise of this table must not yield usable reset links.
+CREATE TABLE `password_reset_grants` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `token_hash` varchar(255) NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `used_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_grant_user` (`user_id`,`expires_at`),
+  CONSTRAINT `fk_grant_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -816,12 +896,20 @@ CREATE TABLE `queue_tickets` (
 -- api/rfid-scan.php branches on exactly these three values.
 CREATE TABLE `card_readers` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
-  `name` varchar(120) NOT NULL,
-  `location` varchar(160) NOT NULL,
+  -- Widths match the live table. The seed carried 120/160/64 and every
+  -- column NOT NULL, while production has 100/100/50 with name and
+  -- status still NOT NULL but location and reader_code nullable. That
+  -- combination is not cosmetic: seeding NOT NULL columns means a
+  -- reader cannot be created without a location and a code, so the
+  -- "add reader before enrolling anyone" step fails on a fresh install.
+  -- Added by migrations/security_hardening_phase1.sql.
+  `name` varchar(100) NOT NULL,
+  `location` varchar(100) DEFAULT NULL,
   `reader_type` enum('entrance','exit','both') NOT NULL DEFAULT 'both',
-  `reader_code` varchar(64) NOT NULL,
+  `reader_code` varchar(50) DEFAULT NULL,
   `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_reader_code` (`reader_code`),
   KEY `idx_status` (`status`),
@@ -974,6 +1062,22 @@ CREATE TABLE `students` (
   `father_name` varchar(100) DEFAULT NULL,
   `birth_country` varchar(60) DEFAULT NULL,
   `graduation_date` date DEFAULT NULL COMMENT 'Date the degree was conferred',
+  -- Transfer / prior-school history. Added by
+  -- migrations/add_previous_school_fields.sql. Without these in the seed a
+  -- fresh install fails the enrolment form's previous-school block on an
+  -- unknown column.
+  `previous_school` varchar(150) DEFAULT NULL COMMENT 'School last attended before this one',
+  `school_year_graduated` varchar(20) DEFAULT NULL,
+  `last_year_level_completed` varchar(30) DEFAULT NULL,
+  -- Bounce tracking + address quality, from
+  -- migrations/security_hardening_phase1.sql.
+  -- email_is_placeholder is the important one: without it a seeded database
+  -- has no way to tell a real address from the synthetic one enrolment
+  -- invents, so the pickup-notice sender would try to email placeholders
+  -- and every send would bounce.
+  `email_bounced_at` datetime DEFAULT NULL,
+  `email_bounce_reason` varchar(255) DEFAULT NULL,
+  `email_is_placeholder` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `idx_student_number` (`student_number`),
   KEY `idx_status` (`status`),
@@ -996,6 +1100,17 @@ CREATE TABLE `users` (
   `username` varchar(60) DEFAULT NULL,
   `login_attempts` int(11) NOT NULL DEFAULT 0,
   `locked_until` datetime DEFAULT NULL,
+  -- Session invalidation + bounce tracking, from
+  -- migrations/security_hardening_phase1.sql.
+  --
+  -- password_changed_at is load-bearing, not bookkeeping: session_config.php
+  -- compares it against $_SESSION['login_time'] and forces a re-login when
+  -- they disagree. That is what makes a password reset actually terminate
+  -- existing sessions. On a seeded database without the column, a stolen
+  -- cookie survives the victim changing their password.
+  `password_changed_at` datetime DEFAULT NULL,
+  `email_bounced_at` datetime DEFAULT NULL,
+  `email_bounce_reason` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `email` (`email`),
   UNIQUE KEY `uq_users_username` (`username`),

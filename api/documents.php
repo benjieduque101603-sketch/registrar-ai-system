@@ -503,6 +503,137 @@ try {
             ]);
             exit;
         }
+        // ── Verify / waive the GCash receipt ──────────────────────
+        // The two signals a registrar needs are kept apart on purpose.
+        // The gateway callback says money moved; the screenshot's GCash
+        // reference number is what finance reconciles on. "Verified"
+        // therefore means a human has SEEN the receipt, not that a
+        // webhook fired — those are different claims and the record
+        // should not blur them.
+        //
+        // Waiving is deliberately not the same as verifying: a waived
+        // request keeps the file it has, carries a typed reason and the
+        // name of whoever waived it, and is never presented as "receipt
+        // seen". That distinction is the whole point of having both.
+        if (in_array($v2Action, ['verify_receipt', 'waive_receipt', 'reset_receipt'], true)) {
+            $req = $db->fetchOne('SELECT * FROM document_requests WHERE id = ?', [$id]);
+            if (!$req) {
+                echo json_encode(['success' => false, 'message' => 'Document request not found.']);
+                exit;
+            }
+            $now     = date('Y-m-d H:i:s');
+            $userId  = $_SESSION['user_id'];
+            $cols    = array_column($db->fetchAll('SHOW COLUMNS FROM document_requests'), 'Field');
+
+            if ($v2Action === 'verify_receipt') {
+                if (empty($req['payment_receipt_path'])) {
+                    echo json_encode(['success' => false, 'message' => 'There is no receipt on this request to verify.']);
+                    exit;
+                }
+                $data = [
+                    'payment_receipt_verified_at' => $now,
+                    'payment_receipt_verified_by' => $userId,
+                ];
+                $note = 'GCash receipt checked and accepted';
+                // Verifying supersedes a previous waiver — the file is
+                // there, so the reason for waiving it no longer applies
+                // and leaving it set would show two contradictory answers
+                // on the same row.
+                $clearWaiver = ['payment_receipt_waived_at' => null,
+                                'payment_receipt_waived_by' => null,
+                                'payment_receipt_waived_reason' => null];
+            } elseif ($v2Action === 'waive_receipt') {
+                $reason = trim($input['waive_reason'] ?? '');
+                if ($reason === '') {
+                    echo json_encode(['success' => false, 'message' => 'A reason is required to waive the receipt requirement.']);
+                    exit;
+                }
+                $data = [
+                    'payment_receipt_waived_at'    => $now,
+                    'payment_receipt_waived_by'    => $userId,
+                    'payment_receipt_waived_reason' => $reason,
+                ];
+                $note = 'GCash receipt waived — ' . $reason;
+                $clearWaiver = [];
+            } elseif ($v2Action === 'reset_receipt') {
+                // Undo. Both sign-offs are cleared, and the uploaded FILE
+                // is deliberately left alone — the student did send it, and
+                // deleting it would destroy the evidence of what was
+                // actually paid. This only withdraws the staff decision.
+                // Guarded: with neither flag set there is nothing to undo,
+                // and writing an event row for a no-op would fill the
+                // activity log with noise.
+                if (empty($req['payment_receipt_verified_at']) && empty($req['payment_receipt_waived_at'])) {
+                    echo json_encode(['success' => false, 'message' => 'There is no receipt sign-off to undo.']);
+                    exit;
+                }
+                $what = !empty($req['payment_receipt_verified_at']) ? 'confirmation' : 'waiver';
+                $data = ['payment_receipt_verified_at' => null,
+                         'payment_receipt_verified_by' => null,
+                         'payment_receipt_waived_at'    => null,
+                         'payment_receipt_waived_by'    => null,
+                         'payment_receipt_waived_reason' => null];
+                $note = 'GCash receipt ' . $what . ' withdrawn';
+                $clearWaiver = [];
+            }
+
+            $data = array_intersect_key($data, array_flip($cols));
+            $db->update('document_requests', $data, 'id = ?', [$id]);
+            if ($clearWaiver) {
+                $db->update('document_requests',
+                    array_intersect_key($clearWaiver, array_flip($cols)),
+                    'id = ?', [$id]
+                );
+            }
+
+            // A hold that was set because the receipt was outstanding is
+            // now resolved. Re-running the blocker recomputes it from the
+            // row rather than clearing it blindly, so a request that is
+            // still held for a balance reason stays held.
+            if (in_array('blocked_reason', $cols, true)) {
+                doc_refresh_blocker((int) $id);
+            }
+
+            $db->insert('document_request_events', [
+                'request_id' => $id,
+                'status'     => $req['document_status'],
+                'note'       => $note,
+                'created_by' => $userId,
+                'created_at' => $now,
+            ]);
+            logActivity($userId, 'document_request_' . $v2Action, null, 'document_requests', $id);
+
+            // Re-read the row. $req is the snapshot taken BEFORE the
+            // update, so returning doc_receipt_state($req) would report
+            // the old state — the page would repaint "Awaiting check"
+            // immediately after a successful verify, and the clerk would
+            // click again. Wasted clicks on a receipt check are how
+            // double-verifications happen.
+            $fresh = $db->fetchOne('SELECT * FROM document_requests WHERE id = ?', [$id]);
+
+            echo json_encode([
+                'success' => true,
+                'message' => $v2Action === 'verify_receipt'
+                    ? 'Receipt verified.'
+                    : ($v2Action === 'reset_receipt'
+                        ? 'Receipt sign-off withdrawn.'
+                        : 'Receipt requirement waived.'),
+                'data'    => [
+                    'id'            => (int) $id,
+                    'receipt_state' => doc_receipt_state($fresh),
+                    // What the desk should do next, derived server-side so
+                    // the two gates cannot drift apart. If the receipt was
+                    // the only thing holding this back, the row is now
+                    // processable and the clerk should be told to reload.
+                    'can_process'   => doc_receipt_gate($fresh)['ok'],
+                    // The reason string when blocked, null when clear, so
+                    // the client can show it without re-deriving the rule.
+                    'blocker'       => doc_receipt_gate($fresh)['reason'],
+                ],
+            ]);
+            exit;
+        }
+
         if (in_array($v2Action, ['process', 'ready', 'reject', 'claim'], true)) {
             $req = $db->fetchOne(
                 "SELECT dr.*
@@ -527,6 +658,22 @@ try {
                     // cleared of its balance since it was filed.
                     if (!in_array($cur, ['Filed', 'Pending_Clearance', 'Processing'], true)) {
                         echo json_encode(['success' => false, 'message' => 'Only Filed or Pending Clearance requests can be started.']);
+                        exit;
+                    }
+                    // The receipt gate. Starting the work is the moment
+                    // the school commits to it, so it is where an
+                    // unsupported "already paid" claim has to stop.
+                    // $req is re-read so the gate sees what the student
+                    // uploaded after the desk list was last loaded.
+                    $gate = doc_receipt_gate($db->fetchOne(
+                        'SELECT * FROM document_requests WHERE id = ?', [$id]
+                    ));
+                    if (!$gate['ok']) {
+                        echo json_encode([
+                            'success' => false,
+                            'message' => $gate['reason'],
+                            'data'    => ['receipt_state' => $gate['state']],
+                        ]);
                         exit;
                     }
                     $newStatus = 'Processing'; $legacy = 'processing'; $note = 'Started preparing the document';
@@ -661,7 +808,74 @@ try {
                 }
             }
 
-            echo json_encode(['success' => true, 'message' => 'Request updated.', 'data' => ['id' => $id, 'document_status' => $newStatus]]);
+            // ── Pickup email ───────────────────────────────────────
+            // Marking a document Ready is the moment the student can
+            // actually act, so this is the only point a pickup notice is
+            // worth sending from. Deliberately AFTER the status write and
+            // the event row above: a mail transport that throws must not
+            // undo the Ready the registrar already committed. The outcome
+            // is recorded in pickup_notified_* so a failure is visible on
+            // the desk instead of vanishing.
+            // The guard is on $colNames, not on a function existing: the
+            // pickup_notified_* columns arrived in a migration, so on a
+            // database that has not been migrated this block must simply
+            // do nothing rather than fatal on an unknown column.
+            if ($v2Action === 'ready') {
+                require_once __DIR__ . '/../shared/mail_client.php';
+                $pickup = ['sent' => 0, 'failed' => 0, 'recipients' => [], 'errors' => [], 'message' => 'Mail module unavailable.'];
+                try {
+                    $pickup = sendDocumentPickupEmail((int) $id, $userId);
+                } catch (Throwable $e) {
+                    error_log('[documents.php] pickup email failed: ' . $e->getMessage());
+                    $pickup['errors'][] = $e->getMessage();
+                }
+                $pickupData = [];
+                if (in_array('pickup_notified_to', $colNames, true) && $pickup['sent'] > 0) {
+                    // Recipients actually reached, not the ones attempted.
+                    $pickupData['pickup_notified_to'] = mb_substr(implode(', ', $pickup['recipients']), 0, 255);
+                }
+                if (in_array('pickup_notified_at', $colNames, true) && $pickup['sent'] > 0) {
+                    $pickupData['pickup_notified_at'] = $now;
+                }
+                if (in_array('pickup_notify_error', $colNames, true) && $pickup['sent'] === 0) {
+                    // Only recorded when NOTHING was sent. A partial
+                    // success is a success, and writing "failed" over it
+                    // would send a registrar hunting a problem that is
+                    // already fixed for most of the recipients.
+                    $pickupData['pickup_notify_error'] = mb_substr(
+                        $pickup['errors'] !== [] ? implode('; ', $pickup['errors']) : $pickup['message'],
+                        0, 255
+                    );
+                }
+                if ($pickupData !== []) {
+                    $db->update('document_requests', $pickupData, 'id = ?', [$id]);
+                }
+                // The registrar needs to know the pickup notice did not
+                // go out, or will tell a parent by phone what the email
+                // was supposed to say.
+                if ($pickup['sent'] === 0) {
+                    logActivity(
+                        $userId,
+                        'document_pickup_email_failed',
+                        null,
+                        'document_requests',
+                        $id
+                    );
+                }
+            }
+
+            echo json_encode([
+                'success' => true,
+                'message' => 'Request updated.',
+                'data' => [
+                    'id'              => $id,
+                    'document_status' => $newStatus,
+                    // Surfaced so the desk can warn the clerk when no
+                    // pickup notice reached anybody.
+                    'pickup_email'    => $pickup['message'] ?? null,
+                    'pickup_sent'     => $pickup['sent'] ?? null,
+                ],
+            ]);
             exit;
         }
 

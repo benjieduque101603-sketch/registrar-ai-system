@@ -147,11 +147,18 @@ function sendEmail(array $to, string $subject, string $htmlBody, ?array $attachm
         }
         return $sent;
     } catch (PHPMailerException $e) {
-        mailSetLastError('SMTP', trim(($mail->ErrorInfo ?: '') . ' | ' . $e->getMessage()));
+        // The host is appended on BOTH failure paths, not just the
+        // non-throwing one below. PHPMailer's own message says only
+        // "Failed to connect to server", which is unactionable: with
+        // three transports configured, a registrar staring at
+        // pickup_notify_error cannot tell WHICH host was unreachable.
+        // (Caught by the test: the exception path was missing this.)
+        mailSetLastError('SMTP', trim(($mail->ErrorInfo ?: '') . ' | ' . $e->getMessage())
+            . ' (host ' . SMTP_HOST . ':' . SMTP_PORT . ')');
         error_log('mail: PHPMailer send failed → ' . mailLastError());
         return false;
     } catch (Throwable $e) {
-        mailSetLastError('SMTP', $e->getMessage());
+        mailSetLastError('SMTP', $e->getMessage() . ' (host ' . SMTP_HOST . ':' . SMTP_PORT . ')');
         error_log('mail: unexpected send failure → ' . mailLastError());
         return false;
     }
@@ -766,6 +773,187 @@ function contactAutoForwardInvoice(int $requestId, int $studentId): array {
             ? 'Invoice forwarded to ' . $sent . '/' . count($contacts) . ' billing contact(s).'
             : 'No verified billing contacts for this student.',
     ];
+}
+
+/**
+ * Document pickup / availability notice.
+ *
+ * Fired from api/documents.php the moment a request goes to Ready. The
+ * portal already showed the status change (notifyStudent), but a student
+ * who does not log in — or who lives with a parent who does — needs to
+ * be told in the one channel people actually read.
+ *
+ * Recipients, in order: the student's own address when it is usable,
+ * then every guardian with an address, so the person who usually
+ * physically collects the document is covered.
+ *
+ * Two reasons the student's own address is sometimes skipped:
+ *   - email_is_placeholder = 1. Portal accounts are auto-created at
+ *     enrolment and many carry a synthetic address. Sending a real
+ *     notice to one bounces, and a bounce here looks to the registrar
+ *     like "the student was told and ignored it".
+ *   - email_bounced_at is set, meaning we have already been told it is bad.
+ * Neither stops the send — each only drops that one recipient, so a
+ * placeholder student address still leaves the guardians covered.
+ *
+ * Each address is sent to individually rather than BCC'd: sendEmail()
+ * takes a single recipient, and a shared To: line would leak one
+ * parent's pickup details to the other.
+ *
+ * Never throws. A mail failure must not roll back a status change the
+ * registrar already committed — the caller writes the outcome into
+ * pickup_notified_* so a failure is visible rather than silent.
+ *
+ * @return array{sent:int, failed:int, recipients:array, errors:array, message:string}
+ */
+function sendDocumentPickupEmail(int $requestId, ?int $sentBy = null): array {
+    $db  = Database::getInstance();
+    $out = ['sent' => 0, 'failed' => 0, 'recipients' => [], 'errors' => [], 'message' => ''];
+
+    $request = $db->fetchOne(
+        "SELECT dr.*, c.name AS catalog_name
+           FROM document_requests dr
+           LEFT JOIN document_catalog c ON c.id = dr.catalog_id
+          WHERE dr.id = ?",
+        [$requestId]
+    );
+    if (!$request) {
+        $out['message'] = 'Request not found.';
+        return $out;
+    }
+    $student = $db->fetchOne('SELECT * FROM students WHERE id = ?', [(int) $request['student_id']]);
+    if (!$student) {
+        $out['message'] = 'Student record not found.';
+        return $out;
+    }
+
+    $ref   = (string) ($request['request_id'] ?? ('#' . $requestId));
+    $label = (string) ($request['catalog_name'] ?? documentTypeLabel((string) ($request['document_type'] ?? '')));
+    if ($label === '') { $label = 'Your requested document'; }
+    $name  = getStudentFullName($student);
+    // Recipients in the order the notice matters. Each entry is
+    // [address, display name, why] — the "why" goes into the log so a
+    // registrar can see afterwards why somebody was or was not told.
+    $recipients = [];
+    $skipReason = '';
+    $studentMail = trim((string) ($student['email'] ?? ''));
+    if ($studentMail === '') {
+        $skipReason = 'no email on the student record';
+    } elseif (!empty($student['email_is_placeholder'])) {
+        $skipReason = 'student address is an enrolment placeholder';
+    } elseif (!empty($student['email_bounced_at'])) {
+        $skipReason = 'student address previously bounced';
+    } else {
+        $recipients[] = [$studentMail, $name, 'student'];
+    }
+
+    // Guardians: primary first, so the money-relevant parent leads. No
+    // is_emergency filter — an emergency contact is exactly the person
+    // who may be standing at the counter on pickup day.
+    $guardians = $db->fetchAll(
+        "SELECT full_name, email FROM guardians
+          WHERE student_id = ? AND email IS NOT NULL AND email <> ''
+          ORDER BY is_primary DESC, id ASC",
+        [(int) $student['id']]
+    );
+    foreach ($guardians as $g) {
+        $recipients[] = [trim((string) $g['email']), trim((string) $g['full_name']), 'guardian'];
+    }
+
+    // De-duplicate on the lowercased address. The same parent is often
+    // both a guardian and a contact recipient, and sending twice makes a
+    // registrar think two people were reached.
+    $seen = [];
+    $unique = [];
+    foreach ($recipients as $r) {
+        $key = mb_strtolower($r[0]);
+        if (isset($seen[$key])) continue;
+        $seen[$key] = true;
+        $unique[] = $r;
+    }
+
+    if (!$unique) {
+        $out['message'] = $skipReason !== ''
+            ? 'No pickup email sent (' . $skipReason . '), and no guardian address on file.'
+            : 'No pickup email sent: no usable email address on file.';
+        return $out;
+    }
+
+    $subject = 'Your ' . $label . ' is ready for pickup (' . $ref . ')';
+
+    // Built once, with a %NAME% token rather than a fixed greeting. Each
+    // send replaces the token with THAT recipient's name; a shared body
+    // with the student's name in it would greet the parent by the
+    // student's name, which reads as the wrong letter entirely.
+    $htmlBase = '';
+    if (emailConfigured()) {
+        // release_date is set by the registrar on the Ready action and is
+        // a datetime, so only the date part is shown — "available
+        // 2026-02-10 00:00:00" would read as nonsense to a student.
+        $releaseRaw  = trim((string) ($request['release_date'] ?? ''));
+        $releaseText = '';
+        if ($releaseRaw !== '') {
+            $ts = strtotime($releaseRaw);
+            $releaseText = $ts !== false ? date('M j, Y', $ts) : $releaseRaw;
+        }
+        $htmlBase =
+            '<p>Hello %NAME%,</p>'
+            . '<p>Good news — <strong>' . e_($label) . '</strong> for <strong>' . e_($name) . '</strong>'
+            . ' (Student No. ' . e_($student['student_number'] ?? '—') . ') is signed and ready.</p>'
+            . '<ul>'
+            . '<li>Document: <strong>' . e_($label) . '</strong></li>'
+            . '<li>Request No.: ' . e_($ref) . '</li>'
+            . ($releaseText !== '' ? '<li>Available from: <strong>' . e_($releaseText) . '</strong></li>' : '')
+            . '</ul>'
+            . '<p>You may collect it at the Registrar’s Office during office hours. '
+            . 'Please bring a valid ID and your Student Number. If somebody is coming on your behalf, '
+            . 'send them a signed authorisation letter with a copy of your ID — the office cannot '
+            . 'release a document to an unverified third party.</p>'
+            . '<p>You can also see the current status and the release date here: '
+            . '<a href="' . e_(emailAppUrl('student/documents.php')) . '">your document requests</a>.</p>'
+            . '<p>If you think this is wrong — for example you are no longer enrolled — please '
+            . 'reply to this message or tell the Registrar’s Office.</p>';
+    }
+    foreach ($unique as $rr) {
+        $body = str_replace('%NAME%', e_($rr[1] !== '' ? $rr[1] : $name), $htmlBase);
+        $ok   = false;
+        $err  = '';
+        try {
+            $ok = sendEmail(['email' => $rr[0], 'name' => $rr[1]], $subject, $body);
+            if (!$ok) { $err = mailLastError(); }
+        } catch (Throwable $e) {
+            // One address throwing must not stop the rest being tried — a
+            // single bad record would otherwise silently cost every
+            // guardian below it their pickup notice.
+            $err = $e->getMessage();
+        }
+        $out['recipients'][] = $rr[0];
+        if ($ok) {
+            $out['sent']++;
+        } else {
+            $out['failed']++;
+            if ($err !== '') { $out['errors'][] = $rr[0] . ': ' . $err; }
+        }
+        contactLog([
+            'student_id'      => (int) $student['id'],
+            'recipient_email' => $rr[0],
+            'recipient_name'  => $rr[1],
+            'message_type'    => 'pickup',
+            'subject'         => $subject,
+            'status'          => $ok ? 'sent' : 'failed',
+            'ref'             => $ref,
+            'detail'          => $ok
+                ? 'Pickup notice sent (' . $rr[2] . ').'
+                : 'Pickup notice failed (' . $rr[2] . '): '
+                  . ($err !== '' ? $err : 'unknown transport error'),
+            'sent_by'         => $sentBy,
+        ]);
+    }
+
+    $out['message'] = $out['failed'] === 0
+        ? 'Pickup notice emailed to ' . $out['sent'] . ' recipient(s).'
+        : 'Pickup notice emailed to ' . $out['sent'] . ' recipient(s); ' . $out['failed'] . ' failed.';
+    return $out;
 }
 
 /** HTML-escape helper (short alias used in the senders above). */

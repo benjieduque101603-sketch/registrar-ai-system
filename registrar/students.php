@@ -125,6 +125,27 @@ include '../includes/sidebar.php';
 .rs-block-body{padding:16px}
 .rs-block-body .form-row{gap:14px 16px}
 
+/* ── Guardian & parent repeater ──────────────────────────────────
+   A student has more than one person responsible for them, and the
+   old flat block could only ever name one. Repeating the row is
+   cheaper than a sub-table: the clerk never has to leave the form,
+   and every row posts the same four keys, so the backend reads one
+   shape rather than "one guardian, or maybe several". */
+.rs-subhint{font-size:11.5px;color:#64748b;margin:-4px 0 12px;line-height:1.45}
+.gd-row{position:relative;border:1px solid #e2e8f0;border-radius:12px;background:#fcfdff;padding:14px 14px 12px;margin-bottom:12px}
+.gd-row:last-of-type{margin-bottom:0}
+.gd-row .form-row{margin-bottom:0}
+.gd-row-head{display:flex;align-items:center;gap:8px;margin:-2px 0 10px}
+.gd-row-head b{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
+.gd-row-head .gd-badge{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#2563eb;background:#eff6ff;border:1px solid #dbeafe;border-radius:999px;padding:2px 8px}
+.gd-del{margin-left:auto;width:26px;height:26px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e2e8f0;border-radius:8px;background:#fff;color:#94a3b8;cursor:pointer;font-size:11px;transition:all .15s}
+.gd-del:hover{border-color:#fecaca;background:#fef2f2;color:#dc2626}
+.gd-del[disabled]{opacity:.4;cursor:not-allowed}
+.gd-del:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.gd-add{width:100%;justify-content:center;border-style:dashed!important;color:#2563eb!important;background:#f8fbff!important}
+.gd-add:hover{background:#eff6ff!important}
+@media (prefers-reduced-motion:reduce){.gd-del{transition:none}}
+
 /* The one out-of-scope field, shown rather than hidden.
    DEPARTMENTS.md's print convention: "No section is hidden and no
    'no data' message is shown, so a registrar can distinguish a
@@ -1346,17 +1367,58 @@ $qTitle = 'Quality ' . $qScore . '%' . (!empty($qAnoms) ? ' — ' . implode('; '
     </div>
   </div>
 </div>
-<!-- ── GUARDIAN ────────────────────────────────────────────── -->
+<!-- ── GUARDIANS & PARENTS ──────────────────────────────────── -->
+<!-- Repeated rows, not one flat block. A student routinely has a
+     father, a mother and a guardian, and the old single set of four
+     inputs could only ever record the first of them - the other two
+     existed in the DB (guardians is one row per person) but had no
+     way in from this form. The first row keeps the ORIGINAL ids
+     (addGuardianName / addGuardianRel / addGuardianContact /
+     addGuardianEmail) so the completeness ledger, Paste-to-Fill and
+     the surname auto-fill all keep working untouched; added rows use
+     gd-* classes and are read by index instead. -->
 <div class="rs-block">
-  <div class="rs-block-head"><i class="fas fa-user-shield"></i><h3>Guardian or parent</h3><span>Registrar #292</span></div>
+  <div class="rs-block-head"><i class="fas fa-user-shield"></i><h3>Guardians &amp; parents</h3><span>Registrar #292</span></div>
   <div class="rs-block-body">
-    <div class="form-row form-row-3">
-      <div class="form-group"><label for="addGuardianName">Full name <span class="required">*</span></label><input type="text" id="addGuardianName" class="form-control" required></div>
-      <div class="form-group"><label for="addGuardianRel">Relationship</label><select id="addGuardianRel" class="form-control"><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option></select></div>
-      <div class="form-group"><label for="addGuardianContact">Mobile number <span class="required">*</span></label><input type="text" id="addGuardianContact" class="form-control" placeholder="0917 123 4567" inputmode="tel" required pattern="09[0-9]{9}" title="11-digit mobile number starting 09"></div>
+    <p class="rs-subhint">Everyone responsible for this student. The first entry is treated as the primary contact; add a second row for a mother, guardian, or spouse.</p>
+    <div id="gdRows">
+      <div class="gd-row" data-gd-row>
+        <div class="gd-row-head"><b>Guardian 1</b><span class="gd-badge">Primary</span><button type="button" class="gd-del" title="Remove this guardian" aria-label="Remove guardian 1" onclick="removeGuardianRow(this)" disabled><i class="fas fa-trash"></i></button></div>
+        <div class="form-row form-row-3">
+          <div class="form-group"><label for="addGuardianRel">Relationship</label><select id="addGuardianRel" class="form-control gd-rel"><option value="father">Father</option><option value="mother">Mother</option><option value="guardian">Guardian</option><option value="spouse">Spouse</option><option value="sibling">Sibling</option></select></div>
+          <div class="form-group"><label for="addGuardianName">Full name <span class="required">*</span></label><input type="text" id="addGuardianName" class="form-control gd-name" autocomplete="name" required></div>
+          <div class="form-group"><label for="addGuardianContact">Mobile number <span class="required">*</span></label><input type="text" id="addGuardianContact" class="form-control gd-contact" placeholder="0917 123 4567" inputmode="tel" required pattern="09[0-9]{9}" title="11-digit mobile number starting 09"></div>
+        </div>
+        <div class="form-row form-row-3">
+          <div class="form-group"><label for="addGuardianEmail">Email</label><input type="email" id="addGuardianEmail" class="form-control gd-email"><div class="form-hint">Optional. Used for record notices only.</div></div>
+          <div class="form-group"><label for="addGuardianAddress">Address</label><input type="text" id="addGuardianAddress" class="form-control gd-address" placeholder="House no., street, barangay, city" autocomplete="street-address"><div class="form-hint">Optional. Where this person can be reached.</div></div>
+        </div>
+      </div>
     </div>
+    <button type="button" class="btn btn-secondary gd-add" onclick="addGuardianRow()"><i class="fas fa-plus"></i> Add another guardian or parent</button>
+  </div>
+</div>
+
+<!-- ── EMERGENCY CONTACT ────────────────────────────────────── -->
+<!-- Deliberately a separate record from the guardians above. A
+     guardian is who the student lives with; the emergency contact is
+     who to ring at 3am, and that is very often somebody who is not
+     on the guardianship at all - a grandmother, a neighbour, an aunt
+     abroad. Storing it as another `guardians` row with a flag would
+     make the two indistinguishable on the Contacts page and in the
+     notification list, so it gets its own table (emergency_contacts)
+     and its own block here. -->
+<div class="rs-block">
+  <div class="rs-block-head"><i class="fas fa-life-ring"></i><h3>Emergency contact</h3><span>Registrar #292</span></div>
+  <div class="rs-block-body">
+    <p class="rs-subhint">The person to call if the student cannot be reached. May be a guardian above, but does not have to be.</p>
     <div class="form-row form-row-3">
-      <div class="form-group"><label for="addGuardianEmail">Email</label><input type="email" id="addGuardianEmail" class="form-control"><div class="form-hint">Optional. Used for record notices only.</div></div>
+      <div class="form-group"><label for="addEmergencyName">Full name</label><input type="text" id="addEmergencyName" class="form-control" autocomplete="name"><div class="form-hint">Optional, but strongly recommended.</div></div>
+      <div class="form-group"><label for="addEmergencyRel">Relationship to student</label><input type="text" id="addEmergencyRel" class="form-control" list="addEmergencyRelList" placeholder="Mother, aunt, neighbour…" autocomplete="off"><datalist id="addEmergencyRelList"><option value="Mother"><option value="Father"><option value="Guardian"><option value="Grandparent"><option value="Sibling"><option value="Spouse"><option value="Aunt"><option value="Uncle"><option value="Neighbour"><option value="Friend"></datalist><div class="form-hint">Free text - the emergency list is not limited to the guardian types.</div></div>
+      <div class="form-group"><label for="addEmergencyContact">Mobile number</label><input type="text" id="addEmergencyContact" class="form-control" placeholder="0917 123 4567" inputmode="tel" pattern="09[0-9]{9}" title="11-digit mobile number starting 09"><div class="form-hint">Required once a name is given.</div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label for="addEmergencyAddress">Address</label><textarea id="addEmergencyAddress" class="form-control" rows="2" autocomplete="street-address" placeholder="House no., street, barangay, city"></textarea></div>
     </div>
   </div>
 </div>
@@ -2104,6 +2166,16 @@ function openAddModal() {
     document.getElementById('addModal').classList.add('active');
     document.body.style.overflow = 'hidden';
     document.getElementById('addForm').reset();
+    // form.reset() clears VALUES but leaves the DOM alone, so any
+    // guardian rows added last time are still there - empty, but
+    // still there. Reopening the modal then shows a blank second
+    // guardian the clerk did not ask for. Drop every row past the
+    // first and renumber.
+    const gdWrap = document.getElementById('gdRows');
+    if (gdWrap) {
+        Array.from(gdWrap.querySelectorAll('[data-gd-row]')).slice(1).forEach(r => r.remove());
+        gdRenumberRows();
+    }
     refreshMajorOptions('add');
     updateAddLedger();
 }
@@ -2151,8 +2223,23 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
 
     const ac = document.getElementById('addContact').value;
     if (!ph11(ac)) { showToast('Student contact number is required and must be an 11-digit mobile number (e.g. 09171234567).', 'warning'); return; }
-    const agn = document.getElementById('addGuardianName').value.trim();
-    if (agn !== '' && !ph11(document.getElementById('addGuardianContact').value)) { showToast('Guardian contact number is required and must be an 11-digit mobile number (e.g. 09171234567).', 'warning'); return; }
+    // Every guardian row, not just the first. The old flat block had a
+    // single pair of inputs and a single pair of checks; with rows the
+    // check has to walk them, or a half-typed second guardian silently
+    // posts and becomes a guardians row with no contact number.
+    const gdErr = guardianRowsError();
+    if (gdErr) { showToast(gdErr, 'warning'); return; }
+    // The emergency contact is optional as a whole but the name and the
+    // number travel together: an emergency contact with a name and no
+    // number is the one record that is worse than having none, because
+    // it looks like somebody to ring.
+    const emName = document.getElementById('addEmergencyName').value.trim();
+    const emRel  = document.getElementById('addEmergencyRel').value.trim();
+    const emNo   = document.getElementById('addEmergencyContact').value.trim();
+    const emAddr = document.getElementById('addEmergencyAddress').value.trim();
+    if (emName && !emNo) { showToast('The emergency contact needs a mobile number, or clear the name.', 'warning'); document.getElementById('addEmergencyContact').focus(); return; }
+    if (!emName && emNo) { showToast('The emergency contact needs a name, or clear the mobile number.', 'warning'); document.getElementById('addEmergencyName').focus(); return; }
+    if (emNo && !ph11(emNo)) { showToast('The emergency contact number must be 11 digits and start with 09 (e.g. 09171234567).', 'warning'); return; }
     const ae = document.getElementById('addEmail').value.trim();
     if (!ae || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ae)) { showToast('Email is required and must be a valid address.', 'warning'); return; }
     // A section code is built from year level + semester, so both are required.
@@ -2191,10 +2278,24 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
                 email: document.getElementById('addEmail').value,
                 contact_number: document.getElementById('addContact').value,
                 address: document.getElementById('addAddress').value,
+                // Guardians travel as an ARRAY now, one entry per row.
+                // guardian_name / guardian_relationship / guardian_contact
+                // / guardian_email are still sent from row 1 because the
+                // API, the enrollment intake and the Receive-Student flow
+                // all read the flat shape, and changing that shape in one
+                // screen would break the other two.
+                guardians: collectGuardians(),
                 guardian_name: document.getElementById('addGuardianName').value,
                 guardian_relationship: document.getElementById('addGuardianRel').value,
                 guardian_contact: document.getElementById('addGuardianContact').value,
-                guardian_email: document.getElementById('addGuardianEmail').value
+                guardian_email: document.getElementById('addGuardianEmail').value,
+                guardian_address: document.getElementById('addGuardianAddress').value,
+                // Emergency contact → emergency_contacts, a separate table
+                // from guardians on purpose. See the block comment above.
+                emergency_name: emName,
+                emergency_relationship: emRel,
+                emergency_contact: emNo,
+                emergency_address: emAddr
             })
         });
         const d = await res.json();
@@ -2426,6 +2527,9 @@ document.getElementById('addForm').addEventListener('change', updateAddLedger);
 document.getElementById('addForm').addEventListener('reset', updateAddLedger);
 
 // ─── GUARDIAN AUTO-FILL ─────────────────────────────────────
+// Only the first row: it is the primary contact and the one the
+// surname convention applies to. Filling every added row would put
+// the student's own surname on a grandmother and a neighbour.
 function guardianAutoFill() {
     const ln = document.getElementById('addLastName').value.trim();
     const g = document.getElementById('addGuardianName');
@@ -2434,6 +2538,157 @@ function guardianAutoFill() {
     g.value = ln;
 }
 document.getElementById('addLastName').addEventListener('blur', guardianAutoFill);
+
+// ─── GUARDIAN REPEATER ──────────────────────────────────────
+//
+// The markup for row 1 is written in the PHP block, so the modal is
+// complete and submittable with JavaScript disabled or before this
+// file's script runs. addGuardianRow() CLONES that first row rather
+// than building one from a template string, which is the only way the
+// two can be guaranteed to post the same keys - a template drifts the
+// first time someone adds a field to one and not the other.
+//
+// Cloning therefore also clones the ids and the `required` attributes,
+// both of which have to be dealt with:
+//   - duplicate ids: label[for] would point at row 1 from every row.
+//     Ids are stripped; the form is read by .gd-* class instead.
+//   - `required`: a partially filled second row would be blocked by
+//     the browser with a message naming a field the clerk cannot see.
+//     Rows 2+ are validated by the submit handler instead, which can
+//     say WHICH row is at fault - see guardianRowsError().
+const GD_MAX_ROWS = 5;
+
+function gdRowEls(row) {
+    return {
+        rel:     row.querySelector('.gd-rel'),
+        name:    row.querySelector('.gd-name'),
+        contact: row.querySelector('.gd-contact'),
+        email:   row.querySelector('.gd-email'),
+        address: row.querySelector('.gd-address')
+    };
+}
+
+function gdRenumberRows() {
+    const rows = Array.from(document.querySelectorAll('#gdRows [data-gd-row]'));
+    rows.forEach((row, i) => {
+        const n = i + 1;
+        const head = row.querySelector('.gd-row-head b');
+        const badge = row.querySelector('.gd-row-head .gd-badge');
+        const del = row.querySelector('.gd-del');
+        if (head) head.textContent = 'Guardian ' + n;
+        // Only the first row is primary: is_primary is a single flag on
+        // the guardians row, and claiming two primaries would make
+        // "ORDER BY is_primary DESC" in the API meaningless.
+        if (badge) badge.style.display = i === 0 ? '' : 'none';
+        if (del) {
+            del.disabled = rows.length === 1;
+            del.setAttribute('aria-label', 'Remove guardian ' + n);
+        }
+    });
+    const add = document.querySelector('#gdRows ~ .gd-add');
+    if (add) add.style.display = rows.length >= GD_MAX_ROWS ? 'none' : '';
+}
+
+function addGuardianRow(seed) {
+    const wrap = document.getElementById('gdRows');
+    if (!wrap) return null;
+    const rows = wrap.querySelectorAll('[data-gd-row]');
+    if (rows.length >= GD_MAX_ROWS) {
+        showToast('A student can have at most ' + GD_MAX_ROWS + ' guardians on file.', 'warning');
+        return null;
+    }
+    // Clone the FIRST row, not the last one: cloning the last would
+    // inherit whatever the clerk just typed into it.
+    const row = rows[0].cloneNode(true);
+    const els = gdRowEls(row);
+    Object.values(els).forEach(el => {
+        if (!el) return;
+        el.removeAttribute('id');
+        el.value = '';
+        el.removeAttribute('required');
+    });
+    if (els.rel) els.rel.value = 'guardian';
+    const del = row.querySelector('.gd-del');
+    if (del) del.disabled = false;
+    wrap.appendChild(row);
+    if (seed) {
+        if (els.rel && seed.relationship) els.rel.value = seed.relationship;
+        if (els.name && seed.full_name) els.name.value = seed.full_name;
+        if (els.contact && seed.contact_number) els.contact.value = seed.contact_number;
+        if (els.email && seed.email) els.email.value = seed.email;
+        if (els.address && seed.address) els.address.value = seed.address;
+    }
+    gdRenumberRows();
+    updateAddLedger();
+    if (els.name) els.name.focus();
+    return row;
+}
+
+function removeGuardianRow(btn) {
+    const row = btn && btn.closest('[data-gd-row]');
+    const wrap = document.getElementById('gdRows');
+    if (!row || !wrap) return;
+    // Never leave zero rows: row 1 carries the primary contact, which
+    // the ledger and the submit gate both treat as required. Removing
+    // the last row would leave a form that cannot be submitted for a
+    // reason the clerk cannot see.
+    if (wrap.querySelectorAll('[data-gd-row]').length <= 1) return;
+    row.remove();
+    gdRenumberRows();
+    updateAddLedger();
+}
+
+/**
+ * Read every guardian row off the form into the shape the API posts.
+ * A row with nothing in it is skipped rather than sent as an empty
+ * person - the "Add another" button leaves a blank row behind often
+ * enough, and a guardians row with an empty name is not a record.
+ */
+function collectGuardians() {
+    const rows = document.querySelectorAll('#gdRows [data-gd-row]');
+    const out = [];
+    rows.forEach((row, i) => {
+        const els = gdRowEls(row);
+        const name = els.name ? els.name.value.trim() : '';
+        const contact = els.contact ? els.contact.value.trim() : '';
+        const email = els.email ? els.email.value.trim() : '';
+        const address = els.address ? els.address.value.trim() : '';
+        if (!name && !contact && !email && !address) return;
+        out.push({
+            index: i,
+            relationship: els.rel ? els.rel.value : 'guardian',
+            full_name: name,
+            contact_number: contact,
+            email: email,
+            address: address,
+            is_primary: i === 0 ? 1 : 0
+        });
+    });
+    return out;
+}
+
+// Row-level validation for the whole repeater, row 1 included. The
+// browser's own `required` already covers row 1 in the common case,
+// but it reports one field at a time in DOM order and this names the
+// ROW, which is what the clerk needs once there are three of them.
+// Returns a message, or '' when everything is sound.
+function guardianRowsError() {
+    const rows = Array.from(document.querySelectorAll('#gdRows [data-gd-row]'));
+    for (let i = 0; i < rows.length; i++) {
+        const els = gdRowEls(rows[i]);
+        const name = els.name ? els.name.value.trim() : '';
+        const contact = els.contact ? els.contact.value.trim() : '';
+        const email = els.email ? els.email.value.trim() : '';
+        const address = els.address ? els.address.value.trim() : '';
+        if (!name && !contact && !email && !address) continue;      // untouched row
+        const who = 'Guardian ' + (i + 1);
+        if (!name) return who + ' needs a full name.';
+        if (!contact) return who + ' needs a mobile number.';
+        if (!ph11(contact)) return who + "'s mobile number must be 11 digits starting with 09 (e.g. 09171234567).";
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return who + "'s email address is not valid.";
+    }
+    return '';
+}
 
 // ─── QUICK STATUS ────────────────────────────────────────────
 function toggleQuickMenu(id) { document.getElementById('qsm_'+id).classList.toggle('show'); }

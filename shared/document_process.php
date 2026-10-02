@@ -482,5 +482,195 @@ function doc_set_registrar_hold(int $requestId, string $reason, ?int $userId = n
     ]);
     return true;
 }
+// ============================================================
+//  PAYMENT RECEIPTS
+//
+//  Why the receipt is required rather than optional
+//  -----------------------------------------------
+//  An optional upload is an upload nobody sends. And the students who
+//  would NOT send it are precisely the ones a registrar needs to see the
+//  receipt for — so the friction is the feature.
+//
+//  Why it is a gate rather than a hard block
+//  ------------------------------------------
+//  Hard-blocking strands the students who genuinely paid and lost the
+//  screenshot. That queue gets cleared informally anyway: a registrar
+//  processes the request and moves on. The result is the worst of both —
+//  the receipt is nominally mandatory but in practice isn't, and nobody
+//  knows which is which. So staff can waive it, but only with a typed
+//  reason, and the waiver lands in document_request_events beside every
+//  other status change. The record then reads truthfully: was the
+//  receipt seen, or was it waived, and by whom.
+//
+//  The two signals are independent and both are kept: the gateway
+//  callback says money moved; the receipt's GCash reference number is
+//  what finance reconciles on. When they disagree, that is exactly the
+//  request a registrar should be looking at.
+// ============================================================
+
+/**
+ * Does this request owe money at all? A receipt is demanded only when
+ * there is something to pay for.
+ *
+ * The check is on the AMOUNT, not on payment_method. base_fee defaults
+ * to 0.00, so an admin can add a free document tomorrow — and gating on
+ * "paid Online" alone would then demand a GCash receipt for a ₱0
+ * document. That is a bug waiting for whoever files the first free SKU.
+ */
+function doc_requires_receipt(array $row): bool
+{
+    $fee  = (float) ($row['fee_amount'] ?? 0);
+    $ship = (float) ($row['delivery_fee'] ?? 0);
+    if ($fee + $ship <= 0.0) return false;
+    // Only money that actually moved online leaves a GCash reference
+    // behind. Cash on delivery is counted in person, at the counter,
+    // where the cashier's book is the record.
+    return ($row['payment_method'] ?? '') === 'Online';
+}
+
+/** Allowed receipt extensions. Shared by the validator and the student UI. */
+const DOC_RECEIPT_EXT = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
+
+/**
+ * Ceiling on a receipt file, in bytes.
+ *
+ * This lives here, not in the browser, because the browser's copy is a
+ * courtesy: post_max_size here is 40M, so a 30 MB "screenshot" posted
+ * straight at the endpoint would otherwise be written to disk and would
+ * never be openable by the registrar it exists for. The page renders
+ * this constant into its JS so the student is stopped before the upload
+ * rather than after it — one number, two enforcement points, no drift.
+ */
+const DOC_RECEIPT_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Has the receipt requirement been satisfied?
+ *
+ * Three ways to be satisfied, all of them recorded: the file is on
+ * disk, staff verified it, or staff waived it with a reason. Anything
+ * else is outstanding — including a verified-by that points at nobody,
+ * which would otherwise read as verified.
+ */
+function doc_receipt_state(array $row): string
+{
+    if (!empty($row['payment_receipt_waived_at']))      return 'waived';
+    if (!empty($row['payment_receipt_path'])
+        && !empty($row['payment_receipt_verified_at'])) return 'verified';
+    if (!empty($row['payment_receipt_path']))            return 'submitted';
+    return 'none';
+}
+
+/**
+ * May this request move to Processing yet?
+ *
+ * True when no receipt is owed, or when one was submitted, verified, or
+ * waived. A submitted-but-unverified receipt passes: the money moved,
+ * and the registrar still gets to inspect the screenshot before they
+ * release the document. What is refused is a request claiming to be
+ * paid with nothing at all to show for it.
+ *
+ * @return array{ok:bool, state:string, reason:?string}
+ */
+function doc_receipt_gate(array $row): array
+{
+    if (!doc_requires_receipt($row)) {
+        return ['ok' => true, 'state' => 'not_required', 'reason' => null];
+    }
+    $state = doc_receipt_state($row);
+    return [
+        'ok'     => $state !== 'none',
+        'state'  => $state,
+        'reason' => $state === 'none'
+            ? 'Waiting on the GCash receipt. Ask the student to attach it in Document Requests.'
+            : null,
+    ];
+}
+
+/**
+ * Validate and store an uploaded payment receipt.
+ *
+ * Shared by intake and by the later "attach it once you have paid"
+ * upload, because a receipt validated one way at filing and another way
+ * afterwards would be a hole straight through the gate above.
+ *
+ * The extension check is not enough on its own: a .pdf is not
+ * necessarily a PDF. validateUploadSignature() reads the actual magic
+ * bytes, so a script renamed receipt.pdf is rejected here rather than
+ * sitting on disk inside a directory a registrar will click through.
+ *
+ * @return array{ok:bool, path?:string, sha256?:string, message?:string}
+ */
+function doc_store_receipt(array $file): array
+{
+    if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return ['ok' => false, 'message' => 'No receipt file was received.'];
+    }
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        return ['ok' => false, 'message' => 'Receipt upload failed (error code ' . $file['error'] . ').'];
+    }
+    // Receipts are a screenshot or a PDF from a phone. DOC/XLS/PPT are
+    // allowed by the global ALLOWED_FILE_EXTENSIONS list used elsewhere,
+    // and none of them are plausible here — a narrower allow-list means
+    // one less thing for a registrar to reason about when a download
+    // turns out to be a Word document.
+    $ext = strtolower(pathinfo((string) $file['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, DOC_RECEIPT_EXT, true)) {
+        return ['ok' => false, 'message' => 'The receipt must be a JPG, PNG, WEBP or PDF file.'];
+    }
+    // Checked server-side, not just in the page: this endpoint is
+    // reachable without the browser's size check.
+    $size = (int) ($file['size'] ?? 0);
+    if ($size > DOC_RECEIPT_MAX_BYTES) {
+        return ['ok' => false, 'message' => 'The receipt is too large — the maximum is '
+            . round(DOC_RECEIPT_MAX_BYTES / 1048576) . ' MB. Please send a smaller screenshot.'];
+    }
+    if (!is_uploaded_file($file['tmp_name'])) {
+        return ['ok' => false, 'message' => 'Receipt upload failed validation.'];
+    }
+
+    $sig = validateUploadSignature($file['tmp_name'], (string) $file['name']);
+    if (!$sig['ok']) {
+        // Logged with the DETECTED type: when this rejects in production
+        // the log line is the only evidence of what the file really was.
+        error_log('[doc_receipt] rejected: ' . $sig['reason'] . ' (detected ' . $sig['detected'] . ')');
+        return ['ok' => false, 'message' => 'Receipt rejected: ' . $sig['reason'] . '.'];
+    }
+
+    $dir = __DIR__ . '/../uploads/payment_receipts/';
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return ['ok' => false, 'message' => 'Could not create the receipt folder.'];
+    }
+    $name = generateFilename($file['name']);
+    if (!move_uploaded_file($file['tmp_name'], $dir . $name)) {
+        return ['ok' => false, 'message' => 'Could not save the receipt file.'];
+    }
+
+    // Hashed at upload, not at read. The point of the hash is to prove
+    // the bytes are still the ones the student submitted; recomputing it
+    // later would prove only that the file on disk still matches itself.
+    return [
+        'ok'     => true,
+        'path'   => 'uploads/payment_receipts/' . $name,
+        'sha256' => hash_file('sha256', $dir . $name),
+    ];
+}
+
+/**
+ * Validate a GCash reference number typed by the student.
+ *
+ * Optional. GCash refs are long and the printed format varies, so the
+ * rule is deliberately loose — it exists to catch a student typing a
+ * phone number or a name into the field, not to police the format.
+ */
+function doc_receipt_ref(string $ref): array
+{
+    $ref = trim($ref);
+    if ($ref === '') return ['ok' => true, 'value' => null];
+    if (!preg_match('/^[A-Za-z0-9\-]{6,40}$/', $ref)) {
+        return ['ok' => false, 'value' => null,
+                'message' => 'The GCash reference number looks wrong — it should be 6–40 letters, digits or dashes.'];
+    }
+    return ['ok' => true, 'value' => $ref];
+}
 
 
