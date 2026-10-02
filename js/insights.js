@@ -732,6 +732,56 @@
         return html;
     }
 
+    /**
+     * The printable rendering of the report: plain headings, paragraphs and
+     * bullets, with no card, badge or border wrappers.
+     *
+     * markdownToHtml() cannot be reused here. It is shared with the on-screen
+     * view, where the boxed .report-section cards are wanted, and its output
+     * is <div>-wrapped. Stripping the wrappers by regex here would be brittle
+     * — it would depend on the exact class strings the other function emits,
+     * so an unrelated restyle of the screen view could quietly corrupt the
+     * printout. Parsing the same small Markdown subset directly keeps the two
+     * renderings independent.
+     */
+    function reportBodyHtml(report) {
+        var lines = String(report).split('\n');
+        var html = '';
+        var inList = false;
+
+        function closeList() {
+            if (inList) { html += '</ul>'; inList = false; }
+        }
+
+        lines.forEach(function (line) {
+            // "## 1. Title" keeps its number: the model contract guarantees
+            // three numbered sections, and a formal report cites them by
+            // number. "## Title" (no number) is used as-is.
+            var numbered = /^##\s+(\d+)\.\s*(.+)$/.exec(line);
+            var heading  = /^##\s+(.+)$/.exec(line);
+            var bullet   = /^\s*[-*]\s+(.+)$/.exec(line);
+
+            if (numbered) {
+                closeList();
+                html += '<h2 class="doc-h">' + numbered[1] + '. '
+                    + inlineFormat(escapeHtml(numbered[2].trim())) + '</h2>';
+            } else if (heading) {
+                closeList();
+                html += '<h2 class="doc-h">' + inlineFormat(escapeHtml(heading[1].trim())) + '</h2>';
+            } else if (bullet) {
+                if (!inList) { html += '<ul>'; inList = true; }
+                html += '<li>' + inlineFormat(escapeHtml(bullet[1])) + '</li>';
+            } else if (line.trim() === '') {
+                closeList();
+            } else {
+                closeList();
+                html += '<p>' + inlineFormat(escapeHtml(line.trim())) + '</p>';
+            }
+        });
+        closeList();
+        return html;
+    }
+
     function showLoading() {
         el.reportEmpty.style.display = 'none';
         el.reportOutput.style.display = 'none';
@@ -837,116 +887,57 @@
 
 
     // ─── Printable executive report ─────────────────────────────
-    var CHART_PRINT = [
-        { id: 'statusChart',    title: 'Student Status Distribution' },
-        { id: 'programChart',   title: 'Student Program Distribution' },
-        { id: 'docChart',       title: 'Document Transaction Overview' },
-        { id: 'rfidChart',      title: 'RFID Cards by Status' },
-        { id: 'rfidTrendChart', title: 'RFID Activity — Last 12 Months' }
-    ];
-
-    function chartImages() {
-        var out = [];
-        CHART_PRINT.forEach(function (entry) {
-            var canvas = document.getElementById(entry.id);
-            if (!canvas) return;
-            try {
-                out.push({ title: entry.title, data: canvas.toDataURL('image/png') });
-            } catch (e) {
-                // A tainted canvas would throw; skip that chart rather than fail the print.
-            }
-        });
-        return out;
-    }
-
-    function kpiTiles() {
-        return (state.cards || []).map(function (card) {
-            return '<div class="kpi">'
-                + '<div class="kpi-label">' + escapeHtml(card.label) + '</div>'
-                + '<div class="kpi-value">' + num(card.value) + '</div>'
-                + '<div class="kpi-foot">' + escapeHtml(card.footer.text) + '</div>'
-                + '</div>';
-        }).join('');
-    }
-
     /**
-     * Opens the printable executive report: BCP letterhead, KPI tiles,
-     * chart snapshots, the three AI sections and the signature block.
-     * "Export PDF" reuses this view (print → save as PDF) — the same
-     * convention as registrar/masterlist.php, and it needs no GD on the
-     * server because the charts are rasterised in the browser.
+     * Prints the report: BCP letterhead, the AI analysis as plain prose,
+     * and the signature block. "Export PDF" reuses this (print → save as PDF).
+     *
+     * The report is written into a hidden <iframe> rather than a pop-up
+     * window. window.open() is the convention elsewhere in this project
+     * (registrar/masterlist.php), but it spawns a new tab the user has to
+     * dismiss, which is jarring when the only thing wanted is a sheet of
+     * paper. An iframe prints from the current tab and the page the user is
+     * already on is never disturbed.
+     *
+     * The charts and KPI tiles were removed on purpose: this is a formal
+     * document, and the analysis is the content. The figures behind the
+     * analysis stay available in the data endpoint and on screen.
      */
     function openPrintView() {
         if (!state.report) return;
 
-        var w = window.open('', '_blank');
-        if (!w) {
-            showReportError('Allow pop-ups for this site to print or export the report.');
-            return;
-        }
-
         var logo = new URL('../assets/images/BCP_LOGO.png', window.location.href).href;
         var periodLabel = state.period.label || '';
         var generated = new Date().toLocaleString();
-        var images = chartImages();
 
-        var chartsHtml = images.map(function (img) {
-            return '<div class="chart-block"><div class="chart-title">' + escapeHtml(img.title) + '</div>'
-                + '<img src="' + img.data + '" alt="' + escapeHtml(img.title) + '"></div>';
-        }).join('');
+        // The gateway note is deliberately NOT printed. "rule-based summary
+        // (AI gateway unavailable)" is an operational detail for whoever is
+        // operating the screen, and it made the printout look like an error
+        // on an official document. The source badge on screen still reports
+        // it, so nothing is hidden from the user who needs to know.
+        var body = ''
+            + BCPPrint.headerHtml({
+                logoUrl: logo,
+                title: 'AI INSIGHT REPORT — ' + String(periodLabel).toUpperCase()
+            })
+            + '<div class="meta">Reporting period: ' + escapeHtml(periodLabel)
+            + ' (compared with ' + escapeHtml(state.period.prev_label || '—')
+            + ') · Generated: ' + escapeHtml(generated)
+            + '</div>'
+            // The report is the document. No KPI tiles and no chart
+            // snapshots — those are a screen view; the printout is the
+            // written analysis.
+            + '<div class="doc-body">' + reportBodyHtml(state.report) + '</div>'
+            + '<div class="sig"><div class="box"><div class="line">Prepared by:<br>Registrar</div></div>'
+            + '<div class="box"><div class="line">Noted by:<br>School Head / President</div></div></div>'
+            + '<div class="foot-note">Generated by: Registrar Information System<br>'
+            + 'AI-generated information is provided for administrative reference.</div>';
 
-        var d = w.document;
-        d.write('<!DOCTYPE html><html><head><meta charset="utf-8">');
-        d.write('<title>AI Insight Report — ' + escapeHtml(periodLabel) + '</title><style>');
-        d.write('@page { size: A4 portrait; margin: 14mm; }');
-        d.write('body { font-family: Inter, Arial, sans-serif; font-size: 11px; color: #0f172a; margin: 0; -webkit-print-color-adjust: exact; }');
-        d.write('.letterhead { display:flex; align-items:center; gap:12px; border-bottom:3px double #1a2d4a; padding-bottom:8px; margin-bottom:12px; }');
-        d.write('.letterhead img { width:54px; height:54px; object-fit:contain; }');
-        d.write('.lh-text { flex:1; text-align:center; }');
-        d.write('.lh-text .school { font-size:15px; font-weight:700; letter-spacing:.3px; }');
-        d.write('.lh-text .sub { font-size:10px; color:#475569; margin-top:2px; }');
-        d.write('.lh-text .title { font-size:12px; font-weight:700; margin-top:6px; letter-spacing:.6px; }');
-        d.write('.meta { font-size:10px; color:#64748b; margin-bottom:12px; }');
-        d.write('.kpis { display:flex; gap:8px; margin-bottom:14px; }');
-        d.write('.kpi { flex:1; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; }');
-        d.write('.kpi-label { font-size:9px; text-transform:uppercase; letter-spacing:.4px; color:#64748b; font-weight:700; }');
-        d.write('.kpi-value { font-size:19px; font-weight:700; margin:2px 0; }');
-        d.write('.kpi-foot { font-size:9px; color:#64748b; }');
-        d.write('.charts { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }');
-        d.write('.chart-block { width:48%; border:1px solid #e2e8f0; border-radius:8px; padding:8px; page-break-inside:avoid; }');
-        d.write('.chart-block img { width:100%; height:auto; }');
-        d.write('.chart-title { font-size:10px; font-weight:700; color:#475569; margin-bottom:6px; }');
-        d.write('h2.section { font-size:12px; background:#1a2d4a; color:#fff; padding:5px 8px; border-radius:3px; margin:14px 0 8px; page-break-after:avoid; }');
-        d.write('.report-section { border:1px solid #cbd5e1; border-radius:6px; padding:8px 10px; margin-bottom:8px; page-break-inside:avoid; }');
-        d.write('.report-section-head { display:flex; align-items:center; gap:8px; margin-bottom:3px; }');
-        d.write('.report-section-num { width:18px; height:18px; border-radius:4px; background:#2563eb; color:#fff; font-size:10px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }');
-        d.write('.report-section h2 { font-size:11px; margin:0; text-transform:uppercase; letter-spacing:.3px; }');
-        d.write('ul { margin:4px 0; padding-left:16px; } li { margin-bottom:3px; } p { margin:4px 0; }');
-
-        d.write('<div class="letterhead"><img src="' + logo + '" alt="BCP" onerror="this.style.display=\'none\'">'
-            + '<div class="lh-text"><div class="school">BESTLINK COLLEGE OF THE PHILIPPINES</div>'
-            + '<div class="sub">812 A. Luna St., Barangay Tatalon, Quezon City · registrar@bestlink.edu.ph</div>'
-            + '<div class="title">AI ANALYSIS REPORT — ' + escapeHtml(String(periodLabel).toUpperCase()) + '</div></div></div>');
-
-        d.write('<div class="meta">Reporting period: ' + escapeHtml(periodLabel)
-            + ' (compared with ' + escapeHtml(state.period.prev_label || '—') + ') · Generated: ' + escapeHtml(generated)
-            + (state.source === 'fallback' ? ' · rule-based summary (AI gateway unavailable)' : '')
-            + '</div>');
-        d.write('<div class="kpis">' + kpiTiles() + '</div>');
-        d.write('<div class="charts">' + chartsHtml + '</div>');
-        d.write('<h2 class="section">AI ANALYSIS REPORT</h2>');
-        d.write(markdownToHtml(state.report));
-        d.write('<div class="sig"><div class="box"><div class="line">Prepared by:<br>Registrar</div></div>'
-            + '<div class="box"><div class="line">Noted by:<br>School Head / President</div></div></div>');
-        d.write('<div class="foot-note">Generated by: Registrar Information System<br>'
-            + 'AI-generated information is provided for administrative reference.</div>');
-        d.write('</body></html>');
-        d.close();
-        w.focus();
-        w.print();
+        if (!BCPPrint.printDocument({ title: periodLabel, body: body })) {
+            showReportError('Unable to prepare the report for printing.');
+        }
     }
 
-    // ─── Export ─────────────────────────────────────────────────
+    // ─── Export ───────────────────────────────────────────────────────────────────────────────────────────────
     function periodSlug() {
         return el.year.value + '-' + ('0' + el.month.value).slice(-2);
     }

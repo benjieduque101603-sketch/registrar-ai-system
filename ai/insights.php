@@ -48,7 +48,10 @@ $APP_ROOT   = '../';
 $ACTIVE_NAV = 'insights';
 // Footer wiring: Chart.js CDN + this page's frontend logic.
 $use_chart = true;
-$page_scripts = ['insights.js'];
+// bcp-letterhead.js first: insights.js calls BCPPrint.printDocument() at
+// click time, but load order still matters for clarity and for any future
+// top-level call. footer.php cache-busts each by mtime.
+$page_scripts = ['bcp-letterhead.js', 'insights.js'];
 
 include '../includes/header.php';
 include '../includes/sidebar.php';
