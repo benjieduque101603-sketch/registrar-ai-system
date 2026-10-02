@@ -255,7 +255,7 @@ include '../includes/sidebar.php';
                     <div class="fs-toolbar-right">
                         <div class="fs-search">
                             <i class="fas fa-magnifying-glass"></i>
-                            <input type="text" id="stuSearch" placeholder="Search name, enrollment…" autocomplete="off">
+                            <input type="text" id="stuSearch" placeholder="Search name, student ID…" autocomplete="off">
                             <button type="button" class="clear-btn" id="stuSearchClear"><i class="fas fa-xmark"></i></button>
                         </div>
                         <select id="docTypeFilter" class="fs-filter">
@@ -275,7 +275,7 @@ include '../includes/sidebar.php';
             <div class="table-responsive">
             <table class="table">
                 <thead><tr>
-                    <th>Enrollment #</th><th>Student Name</th><th>Files</th><th>Status</th><th>Actions</th>
+                    <th>Student ID</th><th>Student Name</th><th>Files</th><th>Status</th><th>Actions</th>
                 </tr></thead>
                 <tbody id="studentTableBody">
                 <?php if (empty($sortedStudents)): ?>

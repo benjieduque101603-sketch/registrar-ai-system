@@ -59,6 +59,31 @@ $filterStatus = isset($_GET['status']) ? trim($_GET['status']) : '';
 $search       = isset($_GET['q']) ? trim($_GET['q']) : '';
 $pageNum      = max(1, (int) ($_GET['page'] ?? 1));
 
+// ── Year level and program filters ─────────────────────────────
+//
+// Both are URL parameters beside status and q, on the same reasoning
+// (see the directory note below): a client-side filter cannot survive
+// server-side paging, and a URL makes the view shareable and the back
+// button meaningful.
+//
+// year_level is validated as 1..4 before it reaches SQL. It is bound as
+// a parameter, so this is not an injection guard — it is there so a
+// nonsense value filters to nothing silently instead of showing an
+// empty directory that looks like lost records.
+$filterYear = isset($_GET['year']) ? trim((string) $_GET['year']) : '';
+if ($filterYear !== '' && (!ctype_digit($filterYear) || (int) $filterYear < 1 || (int) $filterYear > 4)) {
+    $filterYear = '';
+}
+$filterYear = $filterYear === '' ? '' : (string) (int) $filterYear;
+
+$filterProgram = isset($_GET['program']) ? trim((string) $_GET['program']) : '';
+// Longest program name in the roster, so the bound length below cannot
+// reject a real one.
+$MAX_PROGRAM = (int) $db->fetchColumn("SELECT COALESCE(MAX(CHAR_LENGTH(course)), 0) FROM students");
+if (mb_strlen($filterProgram) > $MAX_PROGRAM) {
+    $filterProgram = '';
+}
+
 $counts = [];
 foreach ($STATUSES as $s) {
     // Every status here is a value the column accepts, so the count is a plain
@@ -95,6 +120,14 @@ $where = []; $params = [];
 if ($filterStatus !== '' && in_array($filterStatus, $STATUSES, true)) {
     $where[] = 's.status = ?';
     $params[] = $filterStatus;
+}
+if ($filterYear !== '') {
+    $where[] = 's.year_level = ?';
+    $params[] = (int) $filterYear;
+}
+if ($filterProgram !== '') {
+    $where[] = 's.course = ?';
+    $params[] = $filterProgram;
 }
 if ($search !== '') {
     $where[] = '(s.student_number LIKE ? OR s.first_name LIKE ? OR s.last_name LIKE ? OR CONCAT(s.first_name," ",s.last_name) LIKE ?)';
@@ -147,6 +180,27 @@ $sql = "SELECT s.id, s.student_number, s.first_name, s.middle_name, s.last_name,
         LIMIT $PER_PAGE OFFSET $offset";
 $students = $db->fetchAll($sql, $orderParams);
 
+// Counts for the two new filters. Read from the data rather than a fixed
+// 1..4 list, because a year level with nobody in it must still be offered
+// (a registrar filtering by year needs to see that year 4 is empty) while
+// a level the column has never held must not be invented.
+$yearCounts = [];
+foreach ($db->fetchAll(
+    "SELECT year_level, COUNT(*) AS c FROM students
+     WHERE year_level IS NOT NULL GROUP BY year_level ORDER BY year_level"
+) as $r) {
+    $yearCounts[(int) $r['year_level']] = (int) $r['c'];
+}
+
+$programCounts = [];
+foreach ($db->fetchAll(
+    "SELECT course, COUNT(*) AS c FROM students
+     WHERE course IS NOT NULL AND TRIM(course) <> ''
+     GROUP BY course ORDER BY course"
+) as $r) {
+    $programCounts[(string) $r['course']] = (int) $r['c'];
+}
+
 // The distribution, and the filter, collapsed into one list in the rail.
 // Recent Activity is gone: with a work queue above it and a case panel
 // carrying the full history, a third timeline repeated the same rows in
@@ -161,17 +215,29 @@ foreach ($queueRows as $qr) {
     $queueRank[(int) $qr['student_id']] = $qr;
 }
 
-// Builds a directory URL that preserves the other two parameters.
-// Without this, filtering or searching drops the page number and the
-// view jumps back to the first page, losing the reader's place.
-$dirUrl = static function (array $over = []) use ($filterStatus, $search, $pageNum): string {
-    $p = ['status' => $filterStatus, 'q' => $search, 'page' => $pageNum];
+// Builds a directory URL that preserves every filter, not just two.
+// Without this, choosing a year level drops the status filter, the search
+// and the page number, so the view jumps back to the first page and loses
+// the reader's place.
+$dirUrl = static function (array $over = []) use ($filterStatus, $search, $pageNum, $filterYear, $filterProgram): string {
+    $p = ['status' => $filterStatus, 'q' => $search, 'page' => $pageNum,
+          'year' => $filterYear, 'program' => $filterProgram];
     foreach ($over as $k => $v) {
         $p[$k] = ($v === null || $v === '') ? '' : $v;
+    }
+    // page=1 is the default; carrying it would leave ?page=1 on a link that
+    // means "start again".
+    if (isset($p['page']) && (int) $p['page'] <= 1) {
+        unset($p['page']);
     }
     $p = array_filter($p, static fn($v) => $v !== '' && $v !== null);
     return $p ? '?' . http_build_query($p) : '';
 };
+
+// True when anything at all is narrowing the directory. Drives the Clear
+// link and the "no students match" copy, which would otherwise claim
+// nothing matches a status when the real cause is a year level.
+$hasAnyFilter = $search !== '' || $filterStatus !== '' || $filterYear !== '' || $filterProgram !== '';
 
 
 $page_title = 'Status Tracker';
@@ -402,13 +468,102 @@ include '../includes/sidebar.php';
       <?php if ($filterStatus !== ''): ?>
         <input type="hidden" name="status" value="<?= htmlspecialchars($filterStatus) ?>">
       <?php endif; ?>
+      <?php // Year survives a plain submit through a hidden field: the year
+            // control is a set of links, not an input. Program does NOT need
+            // one - it is a real <select name="program">, and a hidden field
+            // of the same name beside it would send the value twice. ?>
+      <input type="hidden" name="year" value="<?= htmlspecialchars($filterYear) ?>">
       <div class="st-search">
         <i class="fas fa-search"></i>
         <input type="search" name="q" placeholder="Search name or student ID"
                value="<?= htmlspecialchars($search) ?>" autocomplete="off">
       </div>
+
+      <!-- Year level. A segmented control rather than a <select>: it is four
+           options, and seeing every cohort size at once is the point.
+
+           Two decisions worth stating, because both were the other way round
+           first time:
+
+           - Ordinals (1st, 2nd) rather than bare digits. "1st Year" is how the
+             school says it out loud; "Year 1" is a database value.
+           - The rule under each ordinal is proportional to that year's share
+             of the largest cohort, so the shape of the intake is legible
+             without reading four numbers. A fourth year sitting near-empty is
+             a retention signal a registrar wants to see, not a rounding
+             detail. Click targets stay a fixed height - sizing the box itself
+             by count would make the empty years unclickable.
+
+           Counts are the whole-roster count per year, not the count within the
+           current status/program filter. A filter that re-counts itself to
+           zero looks broken. -->
+      <div class="st-year" role="group" aria-label="Filter by year level">
+        <span class="st-year-cap">Year level</span>
+        <div class="st-year-set">
+          <?php
+            // Ordinal suffix for 1-4. Held in an array rather than computed:
+            // the set is fixed, and "11th"-style generalisation is not needed.
+            $ORDINAL = [1 => 'st', 2 => 'nd', 3 => 'rd', 4 => 'th'];
+            // Widest cohort, the denominator for the proportional rule below.
+            // Guarded because an empty roster would otherwise divide by zero
+            // and emit a NaN width into the style attribute.
+            $yearMax = max(1, max($yearCounts ?: [0]));
+            // Always offer 1-4. A year with nobody in it must still be
+            // selectable, so a registrar can confirm it is empty rather than
+            // wondering whether the option is missing.
+          ?>
+          <?php foreach ([1, 2, 3, 4] as $y):
+              $yc  = $yearCounts[$y] ?? 0;
+              $on  = $filterYear === (string) $y;
+              $pct = $yc === 0 ? 0 : max(6, round(($yc / $yearMax) * 100));
+          ?>
+            <a class="st-year-b<?= $on ? ' on' : '' ?><?= $yc === 0 ? ' is-empty' : '' ?>"
+               href="<?= htmlspecialchars($dirUrl(['year' => $on ? null : $y, 'page' => 1])) ?>"
+               aria-pressed="<?= $on ? 'true' : 'false' ?>"
+               title="<?= $yc === 0
+                     ? $y . $ORDINAL[$y] . ' year — no students'
+                     : $y . $ORDINAL[$y] . ' year — ' . number_format($yc) . ' ' . ($yc === 1 ? 'student' : 'students') ?>">
+              <span class="st-ord"><?= $y ?><?= $ORDINAL[$y] ?></span>
+              <span class="st-year-n"><?= number_format($yc) ?></span>
+              <span class="st-year-rule" style="--w:<?= $pct ?>%"></span>
+            </a>
+          <?php endforeach; ?>
+        </div>
+      </div>
+
+      <?php /* Program. Open-ended free text in the data, so a select built from
+             the distinct values in the roster beats typing one. Always
+             rendered, even with nothing to choose, so the form's field set
+             does not change shape with the data.
+
+             The native select stays the control of record - it carries the
+             name, posts the value, and is the whole control when JS is off. A
+             custom listbox is layered over it by js/st-program-listbox.js,
+             which hides the native element and keeps it in sync. Building the
+             visible control in markup instead would mean two sources of truth
+             for the selected value; enhancing one is what stops them drifting.
+
+             Note: no angle-bracketed tag names, and no literal closing-tag
+             sequence, in this comment. PHP's lexer scans for a closing tag
+             even inside a comment, so either one ends the block early and the
+             rest of the sentence is parsed as code. */ ?>
+      <div class="st-progsel">
+        <span class="st-progsel-cap" id="stProgLbl">Program</span>
+        <span class="st-progsel-wrap">
+          <select name="program" id="programSel" class="st-progsel-in"
+                  aria-labelledby="stProgLbl" onchange="this.form.requestSubmit()">
+            <option value="">All programs</option>
+            <?php foreach ($programCounts as $pc => $pcc): ?>
+              <option value="<?= htmlspecialchars((string) $pc) ?>"<?= $filterProgram === (string) $pc ? ' selected' : '' ?>>
+                <?= htmlspecialchars((string) $pc) ?> (<?= number_format($pcc) ?>)
+              </option>
+            <?php endforeach; ?>
+          </select>
+        </span>
+      </div>
+
       <button type="submit" class="st-dirbar-go">Search</button>
-      <?php if ($search !== '' || $filterStatus !== ''): ?>
+      <?php if ($hasAnyFilter): ?>
         <a class="st-dirbar-clear" href="status-tracker.php">Clear</a>
       <?php endif; ?>
     </form>
@@ -419,6 +574,7 @@ include '../includes/sidebar.php';
           <tr>
             <th>Student</th>
             <th>Program</th>
+            <th>Year</th>
             <th>Status</th>
             <th>Last change</th>
             <th>Attention</th>
@@ -426,13 +582,24 @@ include '../includes/sidebar.php';
         </thead>
         <tbody>
           <?php if (!$students): ?>
-            <tr><td colspan="5">
+            <tr><td colspan="6">
               <div class="st-empty">
                 <i class="fas fa-inbox"></i>
                 <strong>No students match</strong>
-                <span><?= $search !== ''
-                      ? 'Nothing found for "' . htmlspecialchars($search) . '".'
-                      : 'No student has that status.' ?></span>
+                <span><?php // Name the filter that actually emptied the table.
+                      // This used to say only "No student has that status",
+                      // which was wrong the moment a year level or a program
+                      // could also be narrowing the list. ?>
+                  <?php if ($search !== ''): ?>
+                    Nothing found for &ldquo;<?= htmlspecialchars($search) ?>&rdquo;.
+                  <?php elseif ($filterYear !== ''): ?>
+                    No year <?= htmlspecialchars($filterYear) ?> student<?= $filterProgram !== '' ? ' in ' . htmlspecialchars($filterProgram) : '' ?>.
+                  <?php elseif ($filterProgram !== ''): ?>
+                    No students in <?= htmlspecialchars($filterProgram) ?>.
+                  <?php else: ?>
+                    No student has that status.
+                  <?php endif; ?>
+                </span>
                 <a href="status-tracker.php">Show all students</a>
               </div>
             </td></tr>
@@ -484,6 +651,23 @@ include '../includes/sidebar.php';
                   <span class="st-muted">&mdash;</span>
                 <?php else: ?>
                   <span class="st-prog" title="<?= htmlspecialchars(trim((string) $s['course'])) ?>"><?= htmlspecialchars($acronym) ?></span>
+                <?php endif; ?>
+              </td>
+              <td>
+                <?php // The year level sits beside the program rather than
+                      // instead of it: filtering by year while the results
+                      // hide the year makes a mis-set filter look like
+                      // missing data. ?>
+                <?php $yl = (int) ($s['year_level'] ?? 0); ?>
+                <?php if ($yl > 0): ?>
+                  <?php // Same ordinal suffix as the filter, so a row and the
+                        // control that produced it read identically. Guarded
+                        // because year_level is a plain int column: a value
+                        // above 4 would be an undefined index, and the ?? would
+                        // not stop the notice that comes first. ?>
+                  <span class="st-yr"><?= $yl ?><?= (['', 'st', 'nd', 'rd', 'th'][$yl] ?? 'th') ?></span>
+                <?php else: ?>
+                  <span class="st-muted" title="No year level on file">&mdash;</span>
                 <?php endif; ?>
               </td>
               <td><span class="st-badge" style="background:<?= $meta['bg'] ?>;color:<?= $meta['color'] ?>"><?= htmlspecialchars(ucwords(str_replace('-', ' ', (string) $s['status']))) ?></span></td>
@@ -649,6 +833,11 @@ include '../includes/sidebar.php';
 
 <!-- Toast -->
 <div class="st-toast" id="toast"></div>
+
+<!-- Program listbox. Progressive enhancement over the native select, which
+     stays in the DOM as the control of record. Loaded after the page script
+     so it does not race the toolbar's own initialisation. -->
+<script src="../js/st-program-listbox.js"></script>
 
 <script>
 'use strict';

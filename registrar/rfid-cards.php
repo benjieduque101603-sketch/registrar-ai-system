@@ -1324,6 +1324,33 @@ body[data-page="rfid"] .table-footer .info-text strong{color:#0f172a;font-varian
 }
 #assignModal .rfid-notice i, #editModal .rfid-notice i{color:#2563eb;margin-top:1px;flex:0 0 auto}
 
+/* The Student ID consequence, in the assign modal only. It is not an info tip:
+   it states what pressing "Assign Card" will also produce, so it is built like
+   the #editModal .rc-effect band above — a card-shaped notice with a solid
+   left rule — rather than as more form furniture. The all-caps line is the
+   notice, the sentence under it is the reassurance; giving them separate sizes
+   keeps the caps from reading as the whole message. */
+#assignModal .rfid-notice-issue{
+    gap:12px;padding:13px 20px;align-items:center;
+    background:linear-gradient(150deg,#eff6ff,#f8faff 78%);
+    border-top:1px solid #dbeafe;border-left:4px solid #1d4ed8;
+}
+#assignModal .rfid-notice-issue .rn-icon{
+    width:30px;height:30px;flex:0 0 30px;border-radius:9px;
+    background:linear-gradient(140deg,#2563eb,#1d4ed8);color:#fff;
+    display:grid;place-items:center;font-size:12px;
+    box-shadow:0 5px 14px rgba(37,99,235,.26);
+}
+#assignModal .rfid-notice-issue .rn-icon i{margin:0;color:#fff;font-size:12px}
+#assignModal .rfid-notice-issue .rn-text{display:block;min-width:0}
+#assignModal .rfid-notice-issue .rn-text b{
+    display:block;font-size:14px;font-weight:800;letter-spacing:.05em;
+    line-height:1.25;color:#172554;
+}
+#assignModal .rfid-notice-issue .rn-sub{
+    display:block;margin-top:3px;font-size:11.5px;line-height:1.45;color:#64748b;
+}
+
 /* Footer: pinned band */
 #assignModal .rfid-modal-actions, #editModal .rfid-modal-actions{
     flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:9px;
@@ -1865,7 +1892,13 @@ body[data-page="rfid"] td.rc-empty span{display:block}
                     <div class="form-group"><textarea id="cardNotes" name="notes" class="form-control" rows="2" placeholder="e.g. Replacement card..."></textarea></div>
                 </div>
             </div>
-            <div class="rfid-notice"><i class="fas fa-circle-info"></i> A Student ID (school_id) with QR code will also be issued automatically.</div>
+            <div class="rfid-notice rfid-notice-issue">
+                <span class="rn-icon"><i class="fas fa-id-card"></i></span>
+                <span class="rn-text">
+                    <b>STUDENT ID CARD WITH QR CODE WILL BE ISSUED AUTOMATICALLY</b>
+                    <span class="rn-sub">No extra step &mdash; it is generated the moment this card is assigned.</span>
+                </span>
+            </div>
             <div class="rfid-modal-actions">
                 <button type="button" class="btn btn-light" data-close-modal="assign">Cancel</button>
                 <button type="submit" class="btn btn-primary" id="assignSubmitBtn" disabled><i class="fas fa-save"></i> Assign Card</button>

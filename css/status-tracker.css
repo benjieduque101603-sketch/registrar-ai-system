@@ -334,8 +334,27 @@ body[data-page="status-tracker"] .st-directory{
   min-width:0;display:flex;flex-direction:column;gap:12px;
 }
 
-body[data-page="status-tracker"] .st-dirbar{display:flex;align-items:center;gap:8px}
-body[data-page="status-tracker"] .st-search{position:relative;flex:1;display:flex;align-items:center}
+/* The directory toolbar is a grid, not nested flex.
+   Three flex attempts at "give the cohort strip its own row" all failed the
+   same way: flex-basis:100% states the intent, but flex-shrink lets the
+   browser squeeze the strip back onto the search line and orphan Clear. A
+   grid line is a guarantee rather than a request, so the layout stops
+   depending on the shrink algorithm entirely.
+
+   Row 1  the cohort strip, full width - the thing worth seeing first
+   Row 2  search, program, submit, clear */
+body[data-page="status-tracker"] .st-dirbar{
+  display:grid;align-items:center;
+  grid-template-columns:minmax(0,1fr) auto auto auto;
+  gap:10px;
+}
+body[data-page="status-tracker"] .st-year{grid-column:1 / -1;grid-row:1}
+body[data-page="status-tracker"] .st-search{grid-column:1;grid-row:2}
+/* The search grows to fill spare width but stops at 340px. Unbounded it
+   pushed Program, Search and Clear off the row. */
+body[data-page="status-tracker"] .st-search{
+  position:relative;min-width:0;max-width:340px;display:flex;align-items:center;
+}
 body[data-page="status-tracker"] .st-search i{
   position:absolute;left:11px;color:var(--text-subtle);font-size:12px;pointer-events:none;
 }
@@ -349,6 +368,7 @@ body[data-page="status-tracker"] .st-search input:focus{
   outline:none;border-color:var(--brand-500);box-shadow:var(--focus-ring);
 }
 body[data-page="status-tracker"] .st-dirbar-go{
+  grid-column:3;grid-row:2;
   padding:9px 16px;font-size:12.5px;font-weight:600;
   font-family:inherit;color:#fff;cursor:pointer;
   background:var(--brand-500);border:1px solid var(--brand-500);
@@ -357,10 +377,270 @@ body[data-page="status-tracker"] .st-dirbar-go{
 body[data-page="status-tracker"] .st-dirbar-go:hover{background:var(--brand-600);border-color:var(--brand-600)}
 body[data-page="status-tracker"] .st-dirbar-go:focus-visible{outline:2px solid var(--brand-500);outline-offset:2px}
 body[data-page="status-tracker"] .st-dirbar-clear{
+  grid-column:4;grid-row:2;justify-self:end;
   font-size:12.5px;color:var(--text-muted);text-decoration:none;
   padding:8px 10px;border-radius:var(--radius-sm);
 }
 body[data-page="status-tracker"] .st-dirbar-clear:hover{color:var(--brand-600);background:var(--surface-subtle)}
+
+/* ── Filter groups ───────────────────────────────────────
+   The three controls read as one instrument rather than three widgets: each
+   group is a bordered well, and the wells carry the same height so the row
+   has a single baseline to sit on.
+
+   The captions are sentence case, not the 10px letterspaced capitals that
+   were here before. Small capitals are the most reliable tell of a
+   generated interface, and "Year level" needs no shouting to be read. */
+/* Grouped only for the parts that genuinely match. The flex value is NOT
+   shared: the cohort strip takes a full row of its own while the program
+   select stays inline, and grouping them forced both to `0 0 auto`, which
+   quietly defeated the strip's own rule further down. */
+body[data-page="status-tracker"] .st-year,
+body[data-page="status-tracker"] .st-progsel{
+  display:flex;align-items:center;gap:9px;min-width:0;
+}
+body[data-page="status-tracker"] .st-year-cap,
+body[data-page="status-tracker"] .st-progsel-cap{
+  font-size:11.5px;font-weight:600;color:var(--text-subtle);
+  white-space:nowrap;user-select:none;
+}
+/* ── Year cohorts ────────────────────────────────────────
+   Ordinals, because "1st Year" is how the school says it; "Year 1" is a
+   database value. Four equal segments - the click target does NOT vary with
+   the count, or the empty years would be unclickable - with a rule beneath
+   each one whose width encodes that year's share of the largest cohort. That
+   turns four numbers into a shape: a fourth year sitting near-empty is a
+   retention signal, readable before any text is.
+
+   This block is a comment opener. An earlier edit deleted the "── Year
+   cohorts ──" line and left the remaining lines unwrapped, so the CSS parser
+   hit bare text, recovered somewhere unpredictable, and silently dropped
+   every rule after it. The symptom was a flex property that read 0 1 auto
+   despite the source saying 1 1 100%. */
+/* The cohort strip always takes its own row, above the search.
+   This used to be a viewport media query at 1100px, which was the wrong
+   instrument: the dirbar sits in a grid column beside the rail, so its
+   available width is set by that column, not by the window. A 1500px window
+   gave the toolbar roughly 800px, the query never fired, and the controls
+   split across two ragged lines anyway. Container-driven, not viewport. */
+body[data-page="status-tracker"] .st-year{
+  display:flex;align-items:center;gap:10px;min-width:0;
+}
+/* With a full row to itself the segments share the width, so the
+   proportional rules get real room to be read as a shape. */
+/* The strip sits on its own grid row but is capped to a compact band and
+   left-aligned. Letting it span the toolbar's full 809px gave each segment
+   185px for three characters, so the control read as four large empty boxes
+   rather than one tight instrument. The row is the layout's business; the
+   instrument's width is not. */
+body[data-page="status-tracker"] .st-year-set{
+  display:flex;align-items:stretch;gap:1px;padding:1px;
+  flex:0 1 auto;width:auto;min-width:0;
+  background:var(--border-subtle);
+  border:1px solid var(--border-input);
+  border-radius:var(--radius-sm);
+}
+body[data-page="status-tracker"] .st-year-b{
+  position:relative;flex:0 0 88px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:7px 10px 9px;overflow:hidden;
+  border-radius:7px;text-decoration:none;
+  background:var(--surface);
+  transition:background .16s ease,box-shadow .16s ease;
+}
+body[data-page="status-tracker"] .st-year-b:hover{background:var(--surface-subtle)}
+body[data-page="status-tracker"] .st-year-b:focus-visible{
+  outline:2px solid var(--brand-500);outline-offset:1px;z-index:1;
+}
+body[data-page="status-tracker"] .st-ord{
+  font-size:13px;font-weight:700;line-height:1.15;letter-spacing:-.01em;
+  color:var(--text-strong);font-variant-numeric:tabular-nums;
+}
+body[data-page="status-tracker"] .st-year-n{
+  font-size:10.5px;font-weight:600;line-height:1.3;
+  color:var(--text-subtle);font-variant-numeric:tabular-nums;
+}
+/* The rule under each ordinal is DATA, and it is deliberately not blue.
+   An earlier pass drew it in brand-500, which meant a large inactive cohort
+   rendered as a full-width blue bar and read as a selected tab - colour was
+   doing two jobs at once, and the screenshot caught it. Blue now means
+   "selected" and nothing else; the count rule is ink, so the two can never
+   be confused. */
+body[data-page="status-tracker"] .st-year-rule{
+  position:absolute;left:0;bottom:0;height:2.5px;width:var(--w,0%);
+  background:var(--text-subtle);border-radius:0 2px 0 0;
+  transition:width .28s cubic-bezier(.4,0,.2,1),background .16s ease;
+}
+body[data-page="status-tracker"] .st-year-b:hover .st-year-rule{background:var(--text-muted)}
+body[data-page="status-tracker"] .st-year-b.on{
+  background:var(--brand-500);
+  box-shadow:0 1px 2px rgba(37,99,235,.28);
+}
+body[data-page="status-tracker"] .st-year-b.on .st-ord{color:#fff}
+body[data-page="status-tracker"] .st-year-b.on .st-year-n{color:rgba(255,255,255,.82)}
+/* White on the filled segment, so the baseline still reads as the same
+   mark it is on the unselected ones. */
+body[data-page="status-tracker"] .st-year-b.on .st-year-rule{background:rgba(255,255,255,.92)}
+/* A year with nobody in it stays clickable on purpose: a registrar
+   filtering by year needs to see 3rd sitting at zero to know it is empty
+   rather than wondering whether the option is missing. */
+body[data-page="status-tracker"] .st-year-b.is-empty:not(.on) .st-ord{color:var(--text-subtle)}
+body[data-page="status-tracker"] .st-year-b.is-empty:not(.on) .st-year-n{opacity:.5}
+
+/* ── Program listbox ─────────────────────────────────────
+   A native <select> can only be styled at the trigger; the panel, the rows
+   and the counts all belong to the browser, and that panel was the "plain
+   dropdown". js/st-program-listbox.js keeps the real select (it still holds
+   name="program" and still posts) and layers this control over it.
+
+   What the custom panel buys:
+     - the count set in its own column, right-aligned and tabular, so program
+       names of very different lengths stay scannable
+     - a tick in a reserved gutter, so the selected row is marked by position
+       as well as colour
+     - a panel wide enough for the longest name, which a native dropdown
+       matches to the trigger width and truncates instead
+
+   The trigger deliberately matches the year strip's weight: same radius, same
+   border colour, same height, so the toolbar reads as one set of controls. */
+body[data-page="status-tracker"] .st-progsel{grid-column:2;grid-row:2;flex:0 1 auto}
+body[data-page="status-tracker"] .st-progsel-wrap{position:relative;display:block;min-width:0}
+/* The native select, before JS takes over. Still the control of record, and
+   still what a no-JS visitor gets. The chevron is drawn here rather than by
+   the browser so the trigger looks the same with and without JS. */
+body[data-page="status-tracker"] .st-progsel-in{
+  -webkit-appearance:none;appearance:none;
+  display:block;width:100%;max-width:224px;min-width:0;
+  padding:8px 30px 8px 11px;
+  font-size:12.5px;font-family:inherit;color:var(--text-strong);
+  background:var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2394a3b8' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 11px center/9px 6px;
+  border:1px solid var(--border-input);border-radius:var(--radius-sm);
+  cursor:pointer;text-overflow:ellipsis;
+  transition:border-color .16s ease,box-shadow .16s ease;
+}
+body[data-page="status-tracker"] .st-progsel-in:hover{border-color:var(--text-subtle)}
+body[data-page="status-tracker"] .st-progsel-in:focus{
+  outline:none;border-color:var(--brand-500);box-shadow:var(--focus-ring);
+}
+
+/* Once JS has enhanced it, the native select leaves the accessibility tree
+   and the visual field. opacity/position rather than display:none, so it is
+   still submitted and still focusable programmatically if anything needs it. */
+body[data-page="status-tracker"] .st-lb-native{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;
+}
+
+body[data-page="status-tracker"] .st-lb-btn{
+  display:flex;align-items:center;gap:8px;width:224px;max-width:100%;
+  padding:8px 10px 8px 11px;text-align:left;cursor:pointer;
+  font-size:12.5px;font-family:inherit;color:var(--text-strong);
+  background:var(--surface);
+  border:1px solid var(--border-input);border-radius:var(--radius-sm);
+  transition:border-color .16s ease,box-shadow .16s ease;
+}
+body[data-page="status-tracker"] .st-lb-btn:hover{border-color:var(--text-subtle)}
+body[data-page="status-tracker"] .st-lb-btn:focus-visible,
+body[data-page="status-tracker"] .st-lb-btn.is-open{
+  outline:none;border-color:var(--brand-500);box-shadow:var(--focus-ring);
+}
+/* A chosen program is a filter in force, so the trigger marks itself rather
+   than relying on the panel being open to show it. */
+body[data-page="status-tracker"] .st-lb-btn.has-val{
+  color:var(--brand-700,var(--brand-600));border-color:var(--brand-100);
+  background:var(--brand-100);
+}
+body[data-page="status-tracker"] .st-lb-val{
+  flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;
+}
+body[data-page="status-tracker"] .st-lb-chev{
+  flex:0 0 auto;font-size:10px;color:var(--text-subtle);
+  transition:transform .18s ease;
+}
+body[data-page="status-tracker"] .st-lb-btn.is-open .st-lb-chev{transform:rotate(180deg)}
+
+body[data-page="status-tracker"] .st-lb-panel{
+  position:absolute;z-index:60;top:calc(100% + 5px);left:0;
+  min-width:100%;width:max-content;max-width:min(280px,calc(100vw - 40px));
+  overflow-y:auto;overscroll-behavior:contain;
+  padding:4px;
+  background:var(--surface);
+  border:1px solid var(--border-input);border-radius:var(--radius-sm);
+  box-shadow:0 10px 28px rgba(15,23,42,.13);
+}
+/* The expansion of an acronym. On the body and position:fixed, because the
+   panel sets overflow-y:auto and would clip a tooltip living inside it. It
+   must also sit above the panel's own z-index to escape that stacking context
+   and stay readable over the rows. */
+body[data-page="status-tracker"] .st-lb-tip{
+  position:fixed;z-index:90;max-width:min(320px,calc(100vw - 24px));
+  padding:6px 9px;border-radius:6px;
+  background:#0f172a;color:#fff;
+  font-size:11.5px;line-height:1.35;font-family:inherit;
+  pointer-events:none;white-space:normal;
+  box-shadow:0 8px 22px rgba(15,23,42,.28);
+  opacity:0;transform:translateY(2px);
+  transition:opacity .12s ease,transform .12s ease;
+}
+body[data-page="status-tracker"] .st-lb-tip[hidden]{display:none}
+body[data-page="status-tracker"] .st-lb-tip.on{opacity:1;transform:translateY(0)}
+body[data-page="status-tracker"] .st-lb-panel[hidden]{display:none}
+body[data-page="status-tracker"] .st-lb-row{
+  position:relative;
+  display:flex;align-items:center;gap:9px;
+  padding:7px 9px;border-radius:6px;cursor:pointer;
+  font-size:12.5px;color:var(--text-strong);
+}
+/* The "all" row is the reset, so it gets a hairline beneath it: it is a
+   different kind of choice from picking one specific program. */
+body[data-page="status-tracker"] .st-lb-all{margin-bottom:3px}
+body[data-page="status-tracker"] .st-lb-all::after{
+  content:"";position:absolute;left:9px;right:9px;bottom:-2px;height:1px;
+  background:var(--border-subtle);
+}
+/* A fixed-width tag, so every long title starts at the same x and the eye can
+   run down the column instead of restarting at a ragged left edge. */
+body[data-page="status-tracker"] .st-lb-tag{
+  flex:0 0 auto;min-width:52px;text-align:center;
+  padding:2px 6px;border-radius:5px;
+  font-size:10px;font-weight:800;letter-spacing:.03em;
+  color:var(--brand-600);background:var(--brand-100);
+}
+body[data-page="status-tracker"] .st-lb-row.is-active{background:var(--surface-subtle)}
+/* The tick lives in a reserved gutter rather than being prepended, so names
+   stay left-aligned to one x-position whether or not a row is selected. */
+body[data-page="status-tracker"] .st-lb-check{
+  flex:0 0 12px;font-size:9px;color:var(--brand-600);
+  visibility:hidden;
+}
+body[data-page="status-tracker"] .st-lb-row.is-sel .st-lb-check{visibility:visible}
+body[data-page="status-tracker"] .st-lb-row.is-sel{font-weight:600}
+body[data-page="status-tracker"] .st-lb-lbl{
+  flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;
+}
+body[data-page="status-tracker"] .st-lb-n{
+  flex:0 0 auto;padding-left:14px;font-size:11px;font-weight:600;
+  color:var(--text-subtle);font-variant-numeric:tabular-nums;
+}
+body[data-page="status-tracker"] .st-lb-row.is-sel .st-lb-n{color:var(--brand-600)}
+body[data-page="status-tracker"] .st-lb-empty{
+  padding:10px 11px;font-size:12px;color:var(--text-subtle);
+}
+
+/* Year level in a row. Quiet on purpose - the filter above is the control;
+   this is only confirmation that it took effect. Ordinals match the filter. */
+body[data-page="status-tracker"] .st-yr{
+  display:inline-block;min-width:34px;text-align:center;
+  padding:2px 8px;
+  font-size:11.5px;font-weight:600;color:var(--text-muted);
+  background:var(--surface-subtle);
+  border:1px solid var(--border-subtle);border-radius:var(--radius-sm);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
 
 body[data-page="status-tracker"] .st-table-wrap{
   background:var(--surface);
@@ -652,11 +932,39 @@ body[data-page="status-tracker"] .st-rail{
 }
 body[data-page="status-tracker"] .st-rail-sec{flex:1 1 260px;min-width:240px}
 }
+@media(max-width:1100px){
+/* Nothing needed here. The cohort strip takes its own row from the base grid
+   rather than from a viewport query, and the toolbar's available width is
+   decided by its grid column beside the rail, not by the window. A 1500px
+   window leaves the toolbar around 800px, so a 1100px viewport query would
+   never have fired at the width that actually needed it. */
+}
 @media(max-width:640px){
 body[data-page="status-tracker"] .st-wrap{padding:16px 14px}
 body[data-page="status-tracker"] .st-rail{flex-direction:column}
-body[data-page="status-tracker"] .st-dirbar{flex-wrap:wrap}
-body[data-page="status-tracker"] .st-search{flex:1 1 100%}
+body[data-page="status-tracker"] .st-dirbar{
+  /* One column on a phone. The grid template collapses and each control
+     takes a full row, so nothing depends on wrapping behaviour. */
+  grid-template-columns:minmax(0,1fr);
+}
+body[data-page="status-tracker"] .st-year{grid-column:1;grid-row:1}
+/* On a phone the four segments share the full width evenly rather than
+   holding their 88px cap, so the strip still fills the column. */
+body[data-page="status-tracker"] .st-year-set{flex:1 1 auto;width:100%}
+body[data-page="status-tracker"] .st-year-b{flex:1 1 0}
+body[data-page="status-tracker"] .st-search{grid-column:1;grid-row:2;max-width:none}
+body[data-page="status-tracker"] .st-progsel{grid-column:1;grid-row:3;flex:1 1 auto}
+body[data-page="status-tracker"] .st-progsel-wrap{width:100%}
+body[data-page="status-tracker"] .st-progsel-in{max-width:none;width:100%}
+/* The listbox trigger follows its native counterpart into full width, and the
+   panel is allowed to be wider than the trigger on a phone - the names are
+   long and a panel clipped to a 350px column would truncate them all. */
+body[data-page="status-tracker"] .st-lb-btn{width:100%;max-width:none}
+body[data-page="status-tracker"] .st-lb-panel{max-width:min(280px,calc(100vw - 40px))}
+/* Submit and Clear share the last row: submit fills it, Clear hugs the
+   right edge. */
+body[data-page="status-tracker"] .st-dirbar-go{grid-column:1;grid-row:4;justify-self:stretch}
+body[data-page="status-tracker"] .st-dirbar-clear{grid-column:1;grid-row:5;justify-self:start}
 body[data-page="status-tracker"] .st-table-wrap th,
 body[data-page="status-tracker"] .st-table-wrap td{padding:8px 10px}
 body[data-page="status-tracker"] .st-cell-when{white-space:normal}
@@ -666,7 +974,13 @@ body[data-page="status-tracker"] .st-pager{flex-direction:column;align-items:fle
 body[data-page="status-tracker"] .st-drawer-scrim,
 body[data-page="status-tracker"] .st-drawer-panel,
 body[data-page="status-tracker"] .st-rail-item,
-body[data-page="status-tracker"] .st-rail-f{transition:none}
+body[data-page="status-tracker"] .st-rail-f,
+body[data-page="status-tracker"] .st-year-b,
+body[data-page="status-tracker"] .st-year-rule,
+body[data-page="status-tracker"] .st-progsel-in,
+body[data-page="status-tracker"] .st-lb-btn,
+body[data-page="status-tracker"] .st-lb-chev,
+body[data-page="status-tracker"] .st-lb-tip{transition:none}
 }
 /* â”€â”€ Case panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Flags and the evidence behind them, two columns. The rule colour
