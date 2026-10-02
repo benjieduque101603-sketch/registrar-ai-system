@@ -56,6 +56,56 @@ $api_base = rtrim(app_url('/api'), '/') . '/';
         </div>
     </div>
 
+    <!-- LANE PICKER — shown after the card is read.
+         Two questions, one at a time. The first is WHAT you came for;
+         the second is WHO you are. Keeping them on separate screens
+         (rather than four buttons, or a dropdown) means the choice is
+         always two taps at most and never a misread small label. -->
+    <div id="screen-pick" style="display:none;">
+        <div class="lane-pick" id="lanePick">
+            <div class="lane-head">
+                <div class="lane-step" id="laneStep">1</div>
+                <div>
+                    <h2 id="laneQuestion">What do you need?</h2>
+                    <p id="laneSub">Choose one to continue.</p>
+                </div>
+            </div>
+            <div class="lane-choices" id="laneChoices"></div>
+            <button type="button" class="lane-back" id="laneBack">
+                <i class="fas fa-arrow-left"></i> <span id="laneBackLabel">Back</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- CLOSED — the queue is not taking numbers. Replaces the tap
+         prompt entirely so nobody starts a tap that cannot finish.
+
+         The mark is a clock, not a door. Every way this screen appears
+         (before open, after close, cut off) is about TIME, and a door
+         just says "locked" without saying why. A still door also reads
+         as broken equipment to a student who is looking for something
+         to tap. -->
+    <div id="screen-closed" style="display:none;">
+        <div class="closed-sign">
+            <div class="closed-mark" aria-hidden="true">
+                <svg viewBox="0 0 100 100" class="closed-clock">
+                    <circle class="cc-face" cx="50" cy="50" r="43" />
+                    <circle class="cc-tick" cx="50" cy="8" r="2.6" />
+                    <circle class="cc-tick" cx="92" cy="50" r="2.6" />
+                    <circle class="cc-tick" cx="50" cy="92" r="2.6" />
+                    <circle class="cc-tick" cx="8" cy="50" r="2.6" />
+                    <circle class="cc-ring" cx="50" cy="50" r="37" />
+                    <line class="cc-hand cc-hand-h" x1="50" y1="50" x2="50" y2="27" />
+                    <line class="cc-hand cc-hand-m" x1="50" y1="50" x2="50" y2="18" />
+                    <circle class="cc-pin" cx="50" cy="50" r="3.6" />
+                </svg>
+            </div>
+            <h2 id="closedTitle">The queue is closed</h2>
+            <p id="closedMessage">The queue is closed right now.</p>
+            <div class="closed-when" id="closedWhen"></div>
+        </div>
+    </div>
+
     <!-- RESULT screen -->
     <div id="screen-result" style="display:none;">
         <div class="result-card" id="resultCard">

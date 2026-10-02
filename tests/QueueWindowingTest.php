@@ -118,11 +118,309 @@ final class QueueWindowingTest extends TestCase
         }
     }
 
-    // ── Window map helper ─────────────────────────────────────
+    // ── Open hours, cut-off, and tap caps ─────────────────────
 
-    public function testHelperDefinesThreeWindows(): void
+    public function testDefaultsMatchTheAgreedOfficeHours(): void
     {
-        self::assertStringContainsString("define('QUEUE_MAX_WINDOWS', 3)", self::src(self::HELPERS));
+        $src = self::src(self::HELPERS);
+        self::assertStringContainsString("'opens_time'        => '08:00:00'", $src);
+        self::assertStringContainsString("'closes_time'       => '17:00:00'", $src);
+        // 0 = unlimited, so a fresh install behaves as it did before.
+        self::assertStringContainsString("'max_taps_student'  => 0", $src);
+        self::assertStringContainsString("'max_taps_priority' => 0", $src);
+    }
+
+    public function testReadingDaySettingsNeverWritesARow(): void
+    {
+        // The kiosk polls this every few seconds. A read that inserted the
+        // missing row would grow the table for no reason, so only an
+        // explicit save writes.
+        $src = self::src(self::HELPERS);
+        $body = self::actionBlock($src, 'function queueDaySettings');
+        self::assertDoesNotMatchRegularExpression(
+            '/INSERT/i',
+            $body,
+            'queueDaySettings must stay read-only.'
+        );
+        self::assertStringContainsString('catch (Throwable', $body,
+            'A missing table must degrade to defaults, not 500.');
+    }
+
+    public function testClosedStateDistinguishesBeforeOpenAfterCloseAndForced(): void
+    {
+        $src = self::src(self::HELPERS);
+        // Three closed states, three different sentences to a student at
+        // a kiosk. Collapsing them into one "closed" makes people come
+        // back at the wrong time.
+        foreach (['before_open', 'after_close', 'forced'] as $reason) {
+            self::assertStringContainsString("'" . $reason . "'", $src);
+        }
+    }
+
+    public function testJoinRefusesWhenTheQueueIsClosed(): void
+    {
+        $src = self::src(self::PUBLIC_API);
+        self::assertStringContainsString("'queue_closed'", $src);
+        self::assertStringContainsString('queueIsClosed(', $src);
+        self::assertLessThan(
+            strpos($src, 'lookupCardByUid'),
+            strpos($src, 'queueIsClosed('),
+            'The closed check must run before the card lookup.'
+        );
+    }
+
+    /**
+     * The Tap Card tab used to walk the kiosk straight out of the closed
+     * sign and back onto the tap prompt. Observed live: the poll had put the
+     * sign up, one press of "Tap Card" dismissed it, and the student was then
+     * invited to tap a card that beginTap() refuses — so the tap was made and
+     * then bounced in front of whoever was watching.
+     *
+     * Source-level, because the bug is a missing guard rather than a wrong
+     * value: the tab handler has to consult queueClosed before showing the
+     * tap screen, and it has to re-raise the sign rather than just return.
+     */
+    public function testTapTabCannotDismissTheClosedSign(): void
+    {
+        $src = self::src(self::CONSOLE_JS);
+
+        // The tab handler must check the closed state...
+        self::assertMatchesRegularExpression(
+            "/dataset\.tab === 'tap'\)\s*\{\s*if \(queueClosed\)/",
+            $src,
+            'The Tap Card tab must check queueClosed before showing the tap screen.'
+        );
+
+        // ...and must re-raise the sign, not silently decline, so the student
+        // gets an answer instead of a dead press.
+        self::assertMatchesRegularExpression(
+            "/if \(queueClosed\)\s*\{\s*showClosed\(/",
+            $src,
+            'Pressing Tap Card while closed must re-raise the closed sign.'
+        );
+
+        // The other two tabs must stay reachable: reading the board and
+        // checking a held number both still work with no numbers being issued.
+        self::assertStringContainsString("b.dataset.tab === 'board') show('board')", $src,
+            'The board must stay reachable while the queue is closed.');
+        self::assertStringContainsString("b.dataset.tab === 'standing') show('standing')", $src,
+            'Check-my-number must stay reachable while the queue is closed.');
+
+        // A sign raised by the poll carries no server-side sentence, so the
+        // kiosk must build one from the reason. Without this it showed the
+        // generic "closed right now" for "has not opened yet", which is the
+        // one case that most needs to say when to come back.
+        self::assertStringContainsString('closedMessageFor(', $src,
+            'The kiosk must derive a closed message from the reason and time.');
+        foreach (['before_open', 'after_close', 'forced'] as $reason) {
+            self::assertMatchesRegularExpression(
+                '/' . $reason . '/',
+                $src,
+                'A specific sentence is required for the "' . $reason . '" state.'
+            );
+        }
+    }
+
+    public function testTapCapIsCheckedInsideTheTransaction(): void
+    {
+        $src = self::src(self::PUBLIC_API);
+        self::assertStringContainsString('queueTapLimitReached(', $src);
+        // "Inside the transaction" means it runs AFTER beginTransaction
+        // (so two rapid taps cannot both read a stale count) and BEFORE
+        // the row is written (so an over-limit tap gets no number).
+        self::assertGreaterThan(
+            strpos($src, '$db->beginTransaction()'),
+            strpos($src, 'queueTapLimitReached('),
+            'The tap cap must be enforced inside the join transaction.'
+        );
+        self::assertLessThan(
+            strpos($src, "\$db->insert('queue_tickets'"),
+            strpos($src, 'queueTapLimitReached('),
+            'The tap cap must be checked before a number is issued.'
+        );
+    }
+
+    public function testTapsTodayCountsEveryStatusNotJustLiveOnes(): void
+    {
+        // The cap is taps per DAY. Counting only waiting/serving would let
+        // a served student tap again immediately.
+        self::assertMatchesRegularExpression(
+            '/SELECT COUNT\(\*\) FROM queue_tickets WHERE queue_date = \? AND student_id = \?/',
+            self::src(self::HELPERS)
+        );
+    }
+
+    // ── Cut-off controls ─────────────────────────────────────
+
+    public function testConsoleExposesCutOffAndReopen(): void
+    {
+        $src = self::src(self::AUTH_API);
+        self::assertStringContainsString("'set_cutoff'", $src);
+        self::assertStringContainsString("'clear_cutoff'", $src);
+        // An upsert: pressing CUT OFF on a day nobody configured must work.
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $src);
+    }
+
+    public function testSavingTimesCannotSilentlyReopenAClosedQueue(): void
+    {
+        // The manual cut-off is its own action. Saving hours must not clear
+        // it, or a registrar re-saving the times reopens the queue.
+        $src = self::src(self::AUTH_API);
+        $block = self::actionBlock($src, "if (\$action === 'save_day_settings')");
+        self::assertStringContainsString('cutoff_forced_at', $block);
+        self::assertStringContainsString('NULL,NULL', $block,
+            'save_day_settings must not carry the existing forced cut-off.');
+        self::assertStringNotContainsString('cutoff_forced_at = NULL', $block,
+            'Saving hours must never clear the manual cut-off.');
+    }
+
+    public function testHelperDefinesFourWindows(): void
+    {
+        // Was 3. The single shared line became four desks:
+        // service/claim x student/priority. Bumping the constant without
+        // updating this assertion would leave the test green on a system
+        // that still rendered three slots, so it is pinned deliberately.
+        self::assertStringContainsString("define('QUEUE_MAX_WINDOWS', 4)", self::src(self::HELPERS));
+        self::assertStringNotContainsString("define('QUEUE_MAX_WINDOWS', 3)", self::src(self::HELPERS));
+    }
+
+    // ── Lane split ─────────────────────────────────────────────
+
+    public function testEveryWindowServesExactlyOneLane(): void
+    {
+        $src = self::src(self::HELPERS);
+        // The four desks, in order. A duplicate or missing pair would
+        // silently merge two queues into one, which is the whole bug
+        // this split exists to fix.
+        foreach ([
+            "1 => ['txn_type' => 'service', 'priority_group' => 'priority'",
+            "2 => ['txn_type' => 'service', 'priority_group' => 'student'",
+            "3 => ['txn_type' => 'claim',   'priority_group' => 'priority'",
+            "4 => ['txn_type' => 'claim',   'priority_group' => 'student'",
+        ] as $row) {
+            self::assertStringContainsString($row, $src, 'Missing or reordered window lane: ' . $row);
+        }
+    }
+
+    public function testCallNextOnlyDrawsFromItsOwnLane(): void
+    {
+        $src = self::src(self::AUTH_API);
+        // Without these two filters, Window 2 (Service - Student) pulls
+        // the oldest ticket off the whole day and can call a priority
+        // student who belongs at Window 1.
+        self::assertMatchesRegularExpression(
+            "/status = 'waiting'\s*\r?\n\s*AND txn_type = \? AND priority_group = \?/",
+            $src,
+            'call_next must filter waiting tickets to the window\'s own lane.'
+        );
+    }
+
+    public function testSkipAutoAdvanceStaysInTheSkippedTicketsLane(): void
+    {
+        $src = self::src(self::AUTH_API);
+        // The skip path auto-calls the next ticket. It has to follow the
+        // skipped ticket's lane, not the globally-oldest waiting number.
+        self::assertStringContainsString('$skippedLane', $src);
+        self::assertStringContainsString(
+            "AND txn_type = ? AND priority_group = ?",
+            $src,
+            'The skip auto-advance must also be lane-scoped.'
+        );
+    }
+
+    public function testJoinRejectsALaneThatIsNotADesk(): void
+    {
+        $src = self::src(self::PUBLIC_API);
+        self::assertStringContainsString("'bad_lane'", $src);
+        self::assertStringContainsString('queueIsValidLane(', $src);
+        // Validated before the card, so a bad lane is never reported as a
+        // card problem and nothing is written.
+        self::assertLessThan(
+            strpos($src, 'lookupCardByUid'),
+            strpos($src, 'queueIsValidLane('),
+            'The lane check must run before the card lookup.'
+        );
+    }
+
+    public function testJoinWritesTheLaneOntoTheTicket(): void
+    {
+        $src = self::src(self::PUBLIC_API);
+        self::assertStringContainsString("'txn_type'       => \$txnType", $src);
+        self::assertStringContainsString("'priority_group' => \$priorityGroup", $src);
+    }
+
+    public function testPositionIsRankedWithinTheLane(): void
+    {
+        $src = self::src(self::PUBLIC_API);
+        // "You are #3" must mean #3 among people waiting for the same
+        // desk. Ranking across all four lines told a priority student
+        // they were behind someone they would never be called behind.
+        self::assertMatchesRegularExpression(
+            "/status = 'waiting'\s*\r?\n\s*AND txn_type = \? AND priority_group = \?/",
+            $src
+        );
+    }
+
+    public function testReopenDoesNotExtendPastTheClosingTime(): void
+    {
+        // Reopening at 6 PM would invent an office-hours window nobody
+        // agreed to. clear_cutoff returns the day to the CLOCK rule only.
+        $src = self::src(self::AUTH_API);
+        $block = self::actionBlock($src, "if (\$action === 'clear_cutoff')");
+        self::assertStringContainsString('cutoff_forced_at = NULL', $block);
+        self::assertStringContainsString('closes_time', $block,
+            'Reopen must still respect the closing time.');
+        self::assertStringNotContainsString('closes_time = VALUES', $block,
+            'Reopen must not extend the closing time.');
+    }
+
+    public function testAnInvertedWindowIsRefusedRatherThanSaved(): void
+    {
+        // A closing time at or before the opening time would close the
+        // queue all day while looking correctly configured.
+        self::assertMatchesRegularExpression(
+            '/strtotime\(\$closes\) <= strtotime\(\$opens\)/',
+            self::src(self::AUTH_API)
+        );
+    }
+
+    // ── History date filter ───────────────────────────────────
+
+    public function testHistoryIsDateSelectable(): void
+    {
+        $src = self::src(self::AUTH_API);
+        self::assertStringContainsString('function queueHistoryDate(', $src);
+        self::assertStringContainsString("queueHistoryDate(\$_GET['date'] ?? \$today)", $src);
+        self::assertStringContainsString('[$historyDate]', $src,
+            'The finished-ticket query must be date-scoped.');
+    }
+
+    public function testHistoryDateRejectsRubbishAndTheFuture(): void
+    {
+        $fn = self::actionBlock(self::src(self::AUTH_API), 'function queueHistoryDate(');
+        self::assertStringContainsString('checkdate(', $fn);
+        self::assertStringContainsString('$raw > $today', $fn,
+            'A future date renders an empty table that reads as data loss.');
+    }
+
+    /**
+     * The body of one action branch or function.
+     *
+     * Cut at the next top-level `if ($action ===` / `function `, NOT at
+     * "\nexit;" — `exit;` is indented inside these blocks, so an anchor on
+     * it silently yields an empty string and every assertion below it then
+     * fails for the wrong reason.
+     */
+    private static function actionBlock(string $src, string $needle): string
+    {
+        $i = strpos($src, $needle);
+        self::assertNotFalse($i, 'Anchor not found: ' . $needle);
+        $rest = substr($src, $i);
+        $cut = strlen($rest);
+        if (preg_match('/\n(?:if \(\$action|function )\s/', $rest, $m, PREG_OFFSET_CAPTURE)) {
+            $cut = $m[0][1];
+        }
+        return substr($rest, 0, $cut);
     }
 
     public function testWindowMapAlwaysRendersAFixedNumberOfSlots(): void

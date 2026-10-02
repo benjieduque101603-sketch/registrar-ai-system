@@ -7,11 +7,14 @@
 //    GET  ?action=my_ticket&number=N      standing lookup (portal-ready)
 //
 //  Join is evaluated strictly in this order:
+//    0. lane is a real desk + the queue is open (office hours / cut-off)
+//    0b. daily tap cap for that lane
 //    1. card validation (exists, linked, active)
 //    2. 2 s per-card anti-bounce (same cardUid rapid re-tap)
 //    3. 5 min per-student cooldown (already has a ticket that is < 5 min old)
-//    4. join from the back (always) — new number appended, prior ticket stays
-//       Steps 3 + 4 run inside a transaction with SELECT … FOR UPDATE
+//    4. daily tap cap for that lane
+//    5. join from the back (always) — new number appended, prior ticket stays
+//       Steps 3 + 4 + 5 run inside a transaction with SELECT … FOR UPDATE
 //       to prevent duplicate tickets from race conditions.
 // ============================================================
 
@@ -37,6 +40,42 @@ function padNumber(int $n): string {
     return str_pad((string)$n, 3, '0', STR_PAD_LEFT);
 }
 
+/**
+ * The sentence a student reads at the kiosk when no number can be
+ * issued. Three closed states, three different answers — a generic
+ * "the queue is closed" at 7 AM (it is not, it has not opened) or at
+ * 6 PM (it has been open all day) sends people to the counter to ask,
+ * which is exactly the walk-up traffic a cut-off is meant to stop.
+ *
+ * None of these point at the registrar. The cut-off exists precisely so
+ * that a closed queue sends nobody to the counter, and "please see the
+ * registrar" is the one instruction that undoes that.
+ */
+function queueClosedMessage(array $closed): string {
+    switch ($closed['reason'] ?? '') {
+        case 'before_open':
+            return 'The queue opens at ' . queueTimeLabel($closed['at']) . '. Please come back then.';
+        case 'after_close':
+            return 'The queue closed at ' . queueTimeLabel($closed['at']) . '. Please come back tomorrow.';
+        case 'forced':
+            return 'The queue was closed at ' . queueTimeLabel($closed['at']) . ' today. '
+                 . 'Numbers already issued are still being served.';
+        default:
+            return 'The queue is closed right now.';
+    }
+}
+
+// 08:00:00 -> "8:00 AM". The kiosk is read from a distance, so this is
+// never a 24-hour clock. Accepts a time-of-day or a full datetime —
+// a forced cut-off carries the latter, and only the time is wanted.
+function queueTimeLabel(?string $t): string {
+    if (empty($t)) {
+        return '—';
+    }
+    $ts = strtotime(substr((string) $t, 0, 8));
+    return $ts === false ? (string) $t : date('g:i A', $ts);
+}
+
 // queue_date / joined_at are written in PHP's Asia/Manila wall clock,
 // but the MySQL session may run at +00:00, so CURDATE()/NOW() can be
 // 8 h behind. Always bind the PHP-computed date for "today" comparisons.
@@ -51,9 +90,40 @@ if ($action === 'join') {
     }
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
     $cardUid = trim($input['card_uid'] ?? $input['uid'] ?? '');
+    $txnType = trim($input['txn_type'] ?? 'service');
+    $priorityGroup = trim($input['priority_group'] ?? 'student');
 
     if ($cardUid === '') {
         echo json_encode(['success' => false, 'message' => 'Card UID is required.']);
+        exit;
+    }
+
+    // ── 0. The lane has to be a real desk ───────────────────
+    // Checked before the card so a bad lane is never reported as a
+    // card problem, and so an un-migrated queue_tickets (no lane
+    // columns yet) cannot be written to.
+    if (!in_array($txnType, ['service', 'claim'], true)
+        || !in_array($priorityGroup, ['student', 'priority'], true)
+        || !queueIsValidLane($txnType, $priorityGroup)) {
+        echo json_encode(['success' => false, 'code' => 'bad_lane', 'message' => 'That option is not available. Please tap again.']);
+        exit;
+    }
+
+    // ── 0b. Is the queue even taking numbers? ──────────────
+    // Ahead of the card check: a closed queue turns every tap into the
+    // same answer, and the kiosk shows the reason rather than a card
+    // error. The reason distinguishes "not yet", "done for the day",
+    // and "a registrar cut the line off".
+    $daySettings = queueDaySettings($db, $today);
+    $closed = queueIsClosed($daySettings);
+    if ($closed['closed']) {
+        echo json_encode([
+            'success' => false,
+            'code'    => 'queue_closed',
+            'reason'  => $closed['reason'],
+            'at'      => $closed['at'],
+            'message' => queueClosedMessage($closed),
+        ]);
         exit;
     }
 
@@ -174,6 +244,26 @@ if ($action === 'join') {
                 exit;
             }
 
+            // ── 3b. Daily tap cap for this lane ────────────────
+            // Inside the transaction and before the number is drawn, so
+            // two rapid taps cannot both read a stale count and both pass.
+            // Read inside the same FOR UPDATE block as the live-ticket
+            // check so the count is taken under the row lock.
+            $tapsUsed = queueTapsToday($db, $today, $studentId);
+            if (queueTapLimitReached($daySettings, $tapsUsed, $priorityGroup)) {
+                $db->rollBack();
+                $limit = queueTapLimit($daySettings, $priorityGroup);
+                echo json_encode([
+                    'success' => false,
+                    'code'    => 'tap_limit',
+                    'message' => 'You have already taken ' . $tapsUsed . ' ' . ($priorityGroup === 'priority' ? 'priority' : 'student')
+                               . ' ' . ($tapsUsed === 1 ? 'number' : 'numbers') . ' today (limit ' . $limit . '). '
+                               . 'Please see the registrar if you still need help.',
+                    'data'    => ['taps_used' => $tapsUsed, 'limit' => $limit],
+                ]);
+                exit;
+            }
+
             // Short cooldown — only meaningful once a previous ticket has
             // actually finished, so this cannot block a legitimate re-queue.
             $finished = $db->fetchOne(
@@ -213,6 +303,8 @@ if ($action === 'join') {
                 'course'         => $course,
                 'status'         => 'waiting',
                 'counter'        => 0,
+                'txn_type'       => $txnType,
+                'priority_group' => $priorityGroup,
                 'card_uid'       => $cardUid,
                 'joined_at'      => $now,
             ]);
@@ -235,13 +327,22 @@ if ($action === 'join') {
             'ip_address' => $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0',
         ]);
 
+        // Position is within the student's own LANE, not the whole day.
+        // Four windows now drain four independent lines; "you are #3"
+        // has to mean #3 among the students waiting for the same desk,
+        // or a priority student is told they are third behind someone
+        // they will never be called behind.
         $position = (int) $db->fetchColumn(
             "SELECT COUNT(*) FROM queue_tickets
-             WHERE queue_date = ? AND status = 'waiting' AND ticket_number <= ?",
-            [$today, $nextNumber]
+             WHERE queue_date = ? AND status = 'waiting'
+               AND txn_type = ? AND priority_group = ?
+               AND ticket_number <= ?",
+            [$today, $txnType, $priorityGroup, $nextNumber]
         );
 
         $reQueued = !empty($finished); // had a finished ticket earlier today
+        $window = queueWindowForLane($txnType, $priorityGroup);
+        $laneLabel = queueWindowLane((int) $window)['label'];
 
         echo json_encode([
             'success' => true,
@@ -254,6 +355,10 @@ if ($action === 'join') {
                 'position'       => $position,
                 'waiting_ahead'  => max(0, $position - 1),
                 're_queued'      => $reQueued,
+                'txn_type'       => $txnType,
+                'priority_group' => $priorityGroup,
+                'window'         => $window,
+                'lane_label'     => $laneLabel,
             ],
         ]);
     } catch (Throwable $e) {
@@ -267,12 +372,42 @@ if ($action === 'board') {
     try {
         $payload = windowMapToPayload(buildWindowMap($db, $today));
 
+        // Waiting tickets are grouped by lane, not returned as one list.
+        // The board's job is to answer "where do I stand" — with four
+        // desks that is a different question per lane, so the client is
+        // handed one ranked list per lane and does not re-sort.
         $waitingRows = $db->fetchAll(
-            "SELECT id, ticket_number, student_name FROM queue_tickets
+            "SELECT id, ticket_number, student_name, txn_type, priority_group
+             FROM queue_tickets
              WHERE queue_date = ? AND status = 'waiting'
              ORDER BY ticket_number ASC",
             [$today]
         );
+        $lanes = [];
+        foreach (queueWindows() as $w => $lane) {
+            $lanes[$w] = [];
+        }
+        foreach ($waitingRows as $w) {
+            $wNum = queueWindowForLane($w['txn_type'] ?? 'service', $w['priority_group'] ?? 'student');
+            if ($wNum === null) {
+                continue; // a lane with no desk; nothing to rank it under
+            }
+            $lanes[$wNum][] = [
+                'ticket_id'     => (int) $w['id'],
+                'number'        => padNumber((int) $w['ticket_number']),
+                'ticket_number' => (int) $w['ticket_number'],
+                'name'          => $w['student_name'],
+            ];
+        }
+        foreach ($lanes as $wNum => $rows) {
+            foreach ($rows as $i => $r) {
+                $lanes[$wNum][$i]['position'] = $i + 1;
+                $lanes[$wNum][$i]['next_up']  = ($i === 0);
+            }
+        }
+
+        // A flat view of the whole day, oldest first. The kiosk still has
+        // a "Full Queue" tab, and one ordered list is what that tab means.
         $waiting = [];
         foreach ($waitingRows as $i => $w) {
             $waiting[] = [
@@ -281,7 +416,10 @@ if ($action === 'board') {
                 'number'        => padNumber((int) $w['ticket_number']),
                 'ticket_number' => (int) $w['ticket_number'],
                 'name'          => $w['student_name'],
-                'next_up'       => $i === 0,
+                'next_up'       => false,
+                'txn_type'      => $w['txn_type'] ?? 'service',
+                'priority_group'=> $w['priority_group'] ?? 'student',
+                'window'        => queueWindowForLane($w['txn_type'] ?? 'service', $w['priority_group'] ?? 'student'),
             ];
         }
 
@@ -305,6 +443,8 @@ if ($action === 'board') {
             [$today]
         );
         $waitingCount = count($waiting);
+        $daySettings = queueDaySettings($db, $today);
+        $closed = queueIsClosed($daySettings);
 
         echo json_encode([
             'success' => true,
@@ -312,9 +452,15 @@ if ($action === 'board') {
                 'windows'         => $payload['windows'],
                 'serving'         => $payload['serving'],
                 'waiting'         => $waiting,
+                'lanes'           => $lanes,
+                'queue_closed'    => (bool) $closed['closed'],
+                'closed_reason'   => $closed['reason'],
+                'closed_at'       => $closed['at'],
+                'opens_time'      => $daySettings['opens_time'],
+                'closes_time'     => $daySettings['closes_time'],
                 'recently_served' => $recentMapped,
-                'waiting_count' => $waitingCount,
-                'last_number'   => $lastNumber,
+                'waiting_count'   => $waitingCount,
+                'last_number'     => $lastNumber,
             ],
         ]);
     } catch (Throwable $e) {
@@ -359,10 +505,16 @@ if ($action === 'my_ticket') {
         $waitingAhead = 0;
         $nextUp = false;
         if ($ticket['status'] === 'waiting') {
+            // Ranked within the ticket's own lane, matching what the kiosk
+            // told them at join time. Ranking across all four lines made
+            // "you are #3" mean something different at the kiosk than in
+            // the portal.
             $position = (int) $db->fetchColumn(
                 "SELECT COUNT(*) FROM queue_tickets
-                 WHERE queue_date = ? AND status = 'waiting' AND ticket_number <= ?",
-                [$today, (int) $ticket['ticket_number']]
+                 WHERE queue_date = ? AND status = 'waiting'
+                   AND txn_type = ? AND priority_group = ?
+                   AND ticket_number <= ?",
+                [$today, $ticket['txn_type'] ?? 'service', $ticket['priority_group'] ?? 'student', (int) $ticket['ticket_number']]
             );
             $waitingAhead = max(0, $position - 1);
             $nextUp = $position === 1;
@@ -395,6 +547,8 @@ if ($action === 'my_ticket') {
                 'joined_at'       => $ticket['joined_at'],
                 'called_at'       => $ticket['called_at'],
                 'served_at'       => $ticket['served_at'],
+                'txn_type'        => $ticket['txn_type'] ?? 'service',
+                'priority_group'  => $ticket['priority_group'] ?? 'student',
                 'lineup'          => $lineup,
             ],
         ]);

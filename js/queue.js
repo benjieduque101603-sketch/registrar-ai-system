@@ -146,6 +146,18 @@
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    // The lane class that colours a window slot (monitor) or chip
+    // (console). Priority wins over the service/claim tint, because
+    // "is this the amber one" is the question a student scans the wall
+    // to answer; the transaction type is the secondary one.
+    //
+    // One function, read by both boards, so the monitor and the console
+    // can never disagree about what a colour means.
+    function laneTone(txn, prio) {
+        if (prio === 'priority') return 'lane-priority';
+        return txn === 'claim' ? 'lane-claim' : 'lane-service';
+    }
+
     // ==========================================================
     //  KIOSK
     // ==========================================================
@@ -158,16 +170,30 @@
 
         function show(screen) {
             activeScreen = screen;
-            var screens = ['tap', 'result', 'board', 'standing'];
+            var screens = ['tap', 'result', 'board', 'standing', 'pick', 'closed'];
             screens.forEach(function (s) {
                 var el = document.getElementById('screen-' + s);
-                if (el) el.style.display = (s === screen) ? 'block' : 'none';
+                if (!el) return;
+                var on = (s === screen);
+                el.style.display = on ? 'block' : 'none';
+                // A class, not a style attribute, so the closed sign's
+                // entrance animation can key off it. Matching on
+                // `[style*="display: none"]` would be reading the browser's
+                // serialised inline style back out of the DOM, which breaks
+                // the moment the value is written differently.
+                el.classList.toggle('is-open', on);
             });
+            // pick/closed are not tab destinations, so every tab reads
+            // inactive while either is up. Toggling by data-tab alone
+            // would leave "Tap Card" lit behind the lane picker.
             document.querySelectorAll('.q-tab-btn').forEach(function (b) {
                 b.classList.toggle('active', b.dataset.tab === screen);
             });
             if (screen === 'board') startBoard();
             else if (boardTimer) { boardTimer.stop(); boardTimer = null; }
+            // Back to the tap prompt: put the reader's focus back, or the
+            // next tap is swallowed by whatever the last click left focused.
+            if (screen === 'tap' && cardInput) cardInput.focus();
         }
 
         function returnToTap(ms) {
@@ -177,26 +203,229 @@
             }, ms || 6000);
         }
 
-        function submitJoin(uid) {
-            if (submitting) return;
-            submitting = true;
-            if (cardInput) cardInput.value = '';
-            fetchJson(API + '?action=join', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ card_uid: uid })
-            }).then(function (d) {
-                renderResult(d);
-                returnToTap(d.success || d.code === 'cooldown' ? 7000 : 4500);
-            }).catch(function (e) {
-                // The tap reached nothing, so say why rather than "Network
-                // error" - and keep the detail in the console for whoever is
-                // standing at the machine.
-                reportQueueError(e, 'kiosk join');
-                renderResult({ success: false, message: shortReason(e), code: 'network' });
-                returnToTap(4500);
-            }).finally(function () { submitting = false; });
+        // The lane flow. Two questions, asked in order, because the kiosk is
+// read from a distance and a four-way grid forces someone to read four
+// labels before they can commit to one.
+//
+//   step 1  WHAT   service | claim
+//   step 2  WHO    student | priority
+//
+// The two combine into exactly one of the four desks. Keeping the
+// questions separate (rather than four buttons) is what makes a
+// mis-tap recoverable in one press instead of four.
+var LANE_STEPS = [
+    {
+        key: 'txn_type',
+        step: '1',
+        question: 'What do you need?',
+        sub: 'Choose one to continue.',
+        choices: [
+            { letter: 'A', tone: 'service', title: 'Service',
+              meta: 'Enrolment, payments, records, and other registrar work.',
+              value: 'service' },
+            { letter: 'B', tone: 'claim', title: 'Claim',
+              meta: 'Pick up a document you already filed for.',
+              value: 'claim' }
+        ]
+    },
+    {
+        key: 'priority_group',
+        step: '2',
+        question: 'Are you a priority client?',
+        sub: 'Choose the one that applies to you.',
+        choices: [
+            { letter: 'A', tone: 'service', title: 'Student',
+              meta: 'Joining as a regular student.',
+              value: 'student' },
+            { letter: 'B', tone: 'priority', title: 'Priority',
+              meta: 'PWD · Senior Citizen · Pregnant · Parent',
+              value: 'priority' }
+        ]
+    }
+];
+
+// Pending tap: the card read but not yet turned into a ticket.
+var pendingUid = null;
+var laneStep = 0;
+var laneChoice = { txn_type: null, priority_group: null };
+var queueClosed = false;   // set from the board feed
+var closedInfo = null;
+
+function renderLaneStep() {
+    var cfg = LANE_STEPS[laneStep];
+    document.getElementById('laneStep').textContent = cfg.step;
+    document.getElementById('laneQuestion').textContent = cfg.question;
+    document.getElementById('laneSub').textContent = cfg.sub;
+
+    var box = document.getElementById('laneChoices');
+    box.innerHTML = '';
+    cfg.choices.forEach(function (c) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'lane-choice t-' + c.tone;
+        btn.innerHTML =
+            '<span class="lane-letter">' + esc(c.letter) + '</span>' +
+            '<span class="lane-body">' +
+                '<span class="lane-title">' + esc(c.title) + '</span>' +
+                '<span class="lane-meta">' + esc(c.meta) + '</span>' +
+            '</span>' +
+            '<i class="fas fa-chevron-right lane-go"></i>';
+        btn.addEventListener('click', function () { pickLane(c.value); });
+        box.appendChild(btn);
+    });
+
+    var back = document.getElementById('laneBack');
+    // On the first question there is nowhere to go back to, so the
+    // control is hidden rather than shown and inert.
+    if (laneStep === 0) {
+        back.style.display = 'none';
+    } else {
+        back.style.display = '';
+        document.getElementById('laneBackLabel').textContent = LANE_STEPS[0].question;
+    }
+}
+
+function pickLane(value) {
+    var cfg = LANE_STEPS[laneStep];
+    laneChoice[cfg.key] = value;
+
+    if (laneStep < LANE_STEPS.length - 1) {
+        laneStep++;
+        renderLaneStep();
+        return;
+    }
+    submitJoin(pendingUid);
+}
+
+function laneBack() {
+    if (laneStep === 0) return;
+    laneStep--;
+    renderLaneStep();
+}
+
+// The closed sign replaces the tap prompt entirely, so nobody starts a
+// tap that cannot finish and then gets an error card in front of a line
+// of people. Three closed states, three titles: "not open yet" and
+// "closed for today" are different facts and a student told the wrong
+// one turns up at the wrong time tomorrow.
+var CLOSED_TITLES = {
+    before_open: 'The queue has not opened yet',
+    after_close: 'The queue is closed for today',
+    forced: 'The queue is closed'
+};
+
+// The sentence under the title, mirroring queueClosedMessage() in
+// api/queue-public.php. The board poll returns a reason and a time but no
+// ready-made sentence, so without this the kiosk fell back to the generic
+// "The queue is closed right now." even for "has not opened yet" — the exact
+// case where the student most needs to be told to come back later, and the one
+// most likely to send them to the counter to ask. Two copies of one rule is a
+// cost; a student turning up at the wrong time is a bigger one.
+var CLOSED_MESSAGES = {
+    before_open: function (when) {
+        return 'The queue opens at ' + (when || '—') + '. Please come back then.';
+    },
+    after_close: function (when) {
+        return 'The queue closed at ' + (when || '—') + '. Please come back tomorrow.';
+    },
+    forced: function () {
+        return 'The queue was closed today. Numbers already issued are still being served.';
+    }
+};
+
+function closedMessageFor(reason, when) {
+    var f = CLOSED_MESSAGES[reason];
+    return f ? f(when) : 'The queue is closed right now.';
+}
+
+function showClosed(reason, message, when) {
+    queueClosed = true;
+    closedInfo = { reason: reason, at: when };
+    document.getElementById('closedTitle').textContent = CLOSED_TITLES[reason] || 'The queue is closed';
+    // An explicit message from the server wins — the join path sends a
+    // considered sentence. Otherwise derive one from the reason and time, so
+    // a sign raised by the poll is as specific as one raised by a refused tap.
+    document.getElementById('closedMessage').textContent = message || closedMessageFor(reason, when);
+    document.getElementById('closedWhen').textContent = '';
+    show('closed');
+}
+
+// Called from the board poll, which runs on a short interval, so the
+// sign appears on its own the moment a registrar hits CUT OFF — nobody
+// has to be at the kiosk to trigger it.
+function refreshClosed(data) {
+    var wasClosed = queueClosed;
+    queueClosed = !!(data && data.queue_closed);
+
+    if (queueClosed) {
+        var when = data.closed_at ? queueTimeLabel(data.closed_at) : '';
+        // Re-render only when it would change something. The poll runs
+        // every few seconds; rewriting the DOM each time would restart
+        // any text selection and is wasted work.
+        if (!wasClosed || !closedInfo || closedInfo.reason !== data.closed_reason
+            || closedInfo.at !== data.closed_at) {
+            showClosed(data.closed_reason, null, when);
+        } else if (when) {
+            document.getElementById('closedWhen').textContent = when;
         }
+        return;
+    }
+
+    // Reopened: drop back to the tap prompt and clear the stale copy so
+    // the next close does not show yesterday's reason.
+    closedInfo = null;
+    document.getElementById('closedMessage').textContent = 'The queue is closed right now.';
+    document.getElementById('closedTitle').textContent = 'The queue is closed';
+    if (activeScreen === 'closed' || activeScreen === 'pick') show('tap');
+}
+
+// "17:00:00" / "2026-02-10 17:00:00" -> "5:00 PM"
+function queueTimeLabel(t) {
+    if (!t) return '';
+    var s = String(t);
+    var d = new Date(s.indexOf(' ') > 0 ? s.replace(' ', 'T') : s);
+    if (isNaN(d.getTime())) return '';
+    var h = d.getHours();
+    var m = d.getMinutes();
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ampm;
+}
+
+function showLanePicker(uid) {
+    pendingUid = uid;
+    laneStep = 0;
+    laneChoice = { txn_type: null, priority_group: null };
+    renderLaneStep();
+    show('pick');
+}
+
+function submitJoin(uid) {
+    if (!uid || submitting) return;
+    submitting = true;
+    if (cardInput) cardInput.value = '';
+    fetchJson(API + '?action=join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            card_uid: uid,
+            txn_type: laneChoice.txn_type || 'service',
+            priority_group: laneChoice.priority_group || 'student'
+        })
+    }).then(function (d) {
+        renderResult(d);
+        returnToTap(d.success || d.code === 'cooldown' ? 7000 : 4500);
+    }).catch(function (e) {
+        // The tap reached nothing, so say why rather than "Network
+        // error" - and keep the detail in the console for whoever is
+        // standing at the machine.
+        reportQueueError(e, 'kiosk join');
+        renderResult({ success: false, message: shortReason(e), code: 'network' });
+        returnToTap(4500);
+    }).finally(function () { submitting = false; }
+    );
+}
 
         function renderResult(d) {
             var icon = document.getElementById('rIcon');
@@ -212,11 +441,18 @@
                 name.style.display = d.data ? '' : 'none';
                 num.textContent = d.data ? d.data.display_number : '';
                 name.textContent = d.data ? d.data.student_name : '';
+                // Which desk, in words a student can act on. "Window 2" on its own is
+                // not enough once there are four desks with different jobs —
+                // the label says what that desk is FOR.
+                var where = (d.data && d.data.window)
+                    ? ' — go to Window ' + d.data.window + ' (' + d.data.lane_label + ')'
+                    : '';
                 if (d.data && d.data.re_queued) {
-                    sub.textContent = 'Your new number is ' + d.data.display_number + ' — line up at the back.';
+                    sub.textContent = 'Your new number is ' + d.data.display_number + ' — line up at the back' + where + '.';
                 } else {
                     sub.textContent = d.data
-                        ? 'You are #' + d.data.position + ' in line — please wait for your number to be called.'
+                        ? 'You are #' + d.data.position + ' in line for ' + (d.data.lane_label || 'Service')
+                          + where + '. Please wait for your number.'
                         : '';
                 }
                 document.getElementById('resultCard').className = 'result-card big-number';
@@ -250,6 +486,21 @@
                     icon.className = 'result-icon info fas fa-clock';
                     icon.style.display = '';
                     sub.textContent = d.message;
+                } else if (d.code === 'queue_closed') {
+                    // The queue shut between the card read and the join.
+                    // Show the sign rather than a red error card: the
+                    // student's number was never the problem.
+                    icon.className = 'result-icon warn fas fa-clock';
+                    icon.style.display = '';
+                    sub.textContent = d.message || 'The queue is closed.';
+                } else if (d.code === 'tap_limit') {
+                    icon.className = 'result-icon warn fas fa-hourglass-half';
+                    icon.style.display = '';
+                    sub.textContent = d.message || 'You have used all of your numbers for today.';
+                } else if (d.code === 'bad_lane') {
+                    icon.className = 'result-icon error fas fa-circle-question';
+                    icon.style.display = '';
+                    sub.textContent = d.message || 'That option is not available.';
                 } else if (d.code === 'denied') {
                     icon.className = 'result-icon error fas fa-credit-card';
                     icon.style.display = '';
@@ -354,6 +605,19 @@
         }
 
         function bindKiosk() {
+            function beginTap(uid) {
+                if (!uid) return;
+                // The picker comes BEFORE the join. A tap while the queue
+                // is closed must not open a picker that leads to a
+                // guaranteed failure — it goes straight to the sign.
+                if (queueClosed) {
+                    showClosed(closedInfo && closedInfo.reason, null,
+                        closedInfo && closedInfo.at);
+                    return;
+                }
+                showLanePicker(uid);
+            }
+
             // RFID keystroke capture: hidden input types the UID, Enter submits
             if (cardInput) {
                 cardInput.addEventListener('keydown', function (e) {
@@ -361,7 +625,7 @@
                         e.preventDefault();
                         var uid = cardInput.value.trim();
                         cardInput.value = '';
-                        if (uid) submitJoin(uid);
+                        if (uid) beginTap(uid);
                     }
                 });
                 cardInput.addEventListener('input', function () {
@@ -369,17 +633,43 @@
                     if (cardInput.value.length >= 10) {
                         var uid = cardInput.value.trim();
                         cardInput.value = '';
-                        submitJoin(uid);
+                        beginTap(uid);
                     }
                 });
             }
             document.querySelectorAll('.q-tab-btn').forEach(function (b) {
                 b.addEventListener('click', function () {
-                    if (b.dataset.tab === 'tap') show('tap');
+                    // The Tap Card tab must not talk the kiosk out of the
+                    // closed sign. It did, and the result was a student being
+                    // invited to tap a card while the queue was shut: the poll
+                    // had put the sign up, one tap on the tab threw it away,
+                    // and the tap was then refused at the last step with a
+                    // card they were already holding. The two other tabs stay
+                    // available on purpose — reading the board or checking a
+                    // number still work when no numbers are being issued.
+                    if (b.dataset.tab === 'tap') {
+                        if (queueClosed) { showClosed(closedInfo && closedInfo.reason, null, closedInfo && closedInfo.at); return; }
+                        show('tap');
+                    }
                     else if (b.dataset.tab === 'board') show('board');
                     else if (b.dataset.tab === 'standing') show('standing');
                     if (cardInput) cardInput.focus();
                 });
+            });
+
+            var laneBackBtn = document.getElementById('laneBack');
+            if (laneBackBtn) laneBackBtn.addEventListener('click', laneBack);
+
+            // Keyboard shortcuts for the picker. A reader keyboard
+            // (and the tab bar on a touch kiosk) both work better with
+            // A/B than with a hunt for a button.
+            document.addEventListener('keydown', function (e) {
+                if (activeScreen !== 'pick') return;
+                var k = (e.key || '').toUpperCase();
+                if (k !== 'A' && k !== 'B') return;
+                var cfg = LANE_STEPS[laneStep];
+                var idx = k === 'A' ? 0 : 1;
+                if (cfg.choices[idx]) { e.preventDefault(); pickLane(cfg.choices[idx].value); }
             });
             var checkBtn = document.getElementById('standingCheck');
             if (checkBtn) checkBtn.addEventListener('click', doStandingCheck);
@@ -392,6 +682,29 @@
         bindKiosk();
         show('tap');
         if (cardInput) cardInput.focus();
+
+        // Exposed for tests/queue_strip_probe.js. This whole block is an
+        // `if (PAGE === 'kiosk') { ... }`, so nothing in it reaches `window`
+        // and the probe could not reach showClosed() or the screen switcher at
+        // all. showLanePicker() was called by that probe and silently did
+        // nothing for the same reason, which is why the picker screenshot it
+        // wrote was of whatever screen happened to be up. Named for the
+        // probe's benefit, not for the application's.
+        window.queueKioskShow = show;
+        window.queueKioskClosed = showClosed;
+        window.queueKioskMessage = closedMessageFor;
+        window.queueKioskLanePicker = showLanePicker;
+
+        // A background poll for the open/closed state only. Without it the
+        // closed sign appears only after somebody taps and is refused, so
+        // the kiosk would invite a tap all afternoon that cannot succeed.
+        // 15 s is deliberate: this state changes a handful of times a day,
+        // so it does not need the board's 3 s cadence.
+        startPoll(function () {
+            fetchJson(API + '?action=board').then(function (d) {
+                if (d.success && d.data) refreshClosed(d.data);
+            }).catch(function (e) { reportQueueError(e, 'kiosk status'); });
+        }, 15000);
     }
 
     // ==========================================================
@@ -417,8 +730,10 @@
                     var key = s ? (slot.window + ':' + s.number + ':' + s.name) : '';
                     var isNew = s && lastServing[slot.window] !== undefined && lastServing[slot.window] !== key;
                     lastServing[slot.window] = key;
-                    sh += '<div class="win-slot' + (s ? ' busy' : ' idle') + (isNew ? ' calling' : '') + '">' +
-                        '<div class="win-head">Window ' + slot.window + '</div>' +
+                    sh += '<div class="win-slot ' + laneTone(slot.txn_type, slot.priority_group)
+                        + (s ? ' busy' : ' idle') + (isNew ? ' calling' : '') + '">' +
+                        '<div class="win-head">Window ' + slot.window +
+                          (slot.label ? ' <span class="win-lane">' + esc(slot.label) + '</span>' : '') + '</div>' +
                         (s
                             ? '<div class="win-num">' + esc(s.display_number) + '</div>' +
                               '<div class="win-name">' + esc(s.student_name) + '</div>' +
@@ -507,8 +822,146 @@
             });
         }
 
-        function render(data) {
+        // The history date the console is looking at. Tracked here rather than
+// read from the input on every tick so the 3 s poll and the date picker
+// can never disagree about which day is on screen.
+var histDate = null;
+var lastSettings = null;
+
+function timeLabel(t) {
+    if (!t) return '';
+    var s = String(t);
+    var d = new Date(s.indexOf(' ') > 0 ? s.replace(' ', 'T') : s);
+    if (isNaN(d.getTime())) return '';
+    var h = d.getHours();
+    var m = d.getMinutes();
+    var ap = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
+}
+
+// Shown next to each ticket so a registrar can see which desk a student
+// belongs to without cross-referencing the window strip. Priority is
+// amber here too, matching the kiosk.
+function laneChip(txn, prio) {
+    var isPrio = prio === 'priority';
+    var cls = isPrio ? 'lane-priority' : (txn === 'claim' ? 'lane-claim' : 'lane-service');
+    var label = (txn === 'claim' ? 'Claim' : 'Service') + (isPrio ? ' · Priority' : ' · Student');
+    return '<span class="chip ' + cls + '">' + esc(label) + '</span>';
+}
+
+function renderOpenState(d) {
+    var bar = document.getElementById('openBar');
+    if (!bar) return;
+    var txt = document.getElementById('openBarText');
+    var sub = document.getElementById('openBarSub');
+    var btnOff = document.getElementById('btnCutOff');
+    var btnOn = document.getElementById('btnReopen');
+    var s = d.settings || {};
+    var hours = timeLabel(s.opens_time) + ' – ' + timeLabel(s.closes_time);
+
+    if (d.queue_closed) {
+        bar.classList.add('is-closed');
+        if (d.closed_reason === 'forced') {
+            txt.textContent = 'Closed now';
+            sub.textContent = 'Cut off at ' + timeLabel(d.closed_at) + '. Numbers already issued are still being served.';
+        } else if (d.closed_reason === 'before_open') {
+            txt.textContent = 'Not open yet';
+            sub.textContent = 'Opens at ' + timeLabel(s.opens_time) + '. The kiosk is showing a closed sign.';
+        } else {
+            txt.textContent = 'Closed for today';
+            sub.textContent = 'Closed at ' + timeLabel(s.closes_time) + '. The kiosk is showing a closed sign.';
+        }
+        btnOff.style.display = 'none';
+        btnOn.style.display = '';
+    } else {
+        bar.classList.remove('is-closed');
+        txt.textContent = 'Open';
+        sub.textContent = 'Taking numbers ' + hours + '.'
+            + (s.max_taps_student ? ' Student limit ' + s.max_taps_student + '/day.' : '')
+            + (s.max_taps_priority ? ' Priority limit ' + s.max_taps_priority + '/day.' : '');
+        btnOff.style.display = '';
+        btnOn.style.display = 'none';
+    }
+    lastSettings = s;
+}
+
+function openDayPanel() {
+    var s = lastSettings || {};
+    var set = function (id, v) { var el = document.getElementById(id); if (el) el.value = v; };
+    // The API returns H:i:s; <input type="time"> wants HH:MM.
+    var hhmm = function (t) { return t ? String(t).slice(0, 5) : ''; };
+    set('dayOpens', hhmm(s.opens_time) || '08:00');
+    set('dayCloses', hhmm(s.closes_time) || '17:00');
+    set('dayMaxStudent', s.max_taps_student != null ? s.max_taps_student : 0);
+    set('dayMaxPriority', s.max_taps_priority != null ? s.max_taps_priority : 0);
+    var en = document.getElementById('dayEnabled');
+    if (en) en.checked = s.cutoff_enabled === undefined ? true : !!Number(s.cutoff_enabled);
+    document.getElementById('dayModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeDay() {
+    document.getElementById('dayModal').classList.remove('active');
+    document.body.style.overflow = '';
+}
+window.queueCloseDay = closeDay;
+
+function saveDaySettings() {
+    var btn = document.getElementById('daySave');
+    btn.disabled = true;
+    post('save_day_settings', {
+        opens_time: document.getElementById('dayOpens').value,
+        closes_time: document.getElementById('dayCloses').value,
+        cutoff_enabled: document.getElementById('dayEnabled').checked,
+        max_taps_student: document.getElementById('dayMaxStudent').value,
+        max_taps_priority: document.getElementById('dayMaxPriority').value
+    }).then(function (d) {
+        if (d.success) { showToast(d.message, 'success'); closeDay(); loadState(); }
+        else showToast(d.message || 'Could not save.', 'error');
+    }).catch(function (e) {
+        reportQueueError(e, 'save day settings');
+        showToast(shortReason(e), 'error');
+    }).finally(function () { btn.disabled = false; });
+}
+
+function shiftHistory(days) {
+    var base = histDate ? new Date(histDate + 'T00:00:00') : new Date();
+    base.setDate(base.getDate() + days);
+    var y = base.getFullYear();
+    var m = String(base.getMonth() + 1).padStart(2, '0');
+    var d = String(base.getDate()).padStart(2, '0');
+    setHistoryDate(y + '-' + m + '-' + d);
+}
+
+function setHistoryDate(iso) {
+    var today = new Date();
+    var todayIso = today.getFullYear() + '-'
+        + String(today.getMonth() + 1).padStart(2, '0') + '-'
+        + String(today.getDate()).padStart(2, '0');
+    // Never look at a future day: there is nothing there, and an empty
+    // table reads as "the records were lost".
+    if (!iso || iso > todayIso) iso = todayIso;
+    histDate = iso;
+    var input = document.getElementById('histDate');
+    if (input) input.value = iso;
+    var next = document.getElementById('histNext');
+    if (next) next.disabled = (iso >= todayIso);
+    loadState();
+}
+
+function render(data) {
             var d = data;
+            renderOpenState(d);
+
+            if (histDate === null) {
+                histDate = d.history_date || d.today;
+                var input = document.getElementById('histDate');
+                if (input) input.value = histDate;
+                var next = document.getElementById('histNext');
+                if (next) next.disabled = !!(d.is_today);
+            }
             // Stats
             ['waiting', 'serving', 'completed', 'no_show'].forEach(function (k) {
                 var el = document.getElementById('stat-' + k);
@@ -525,8 +978,14 @@
                 var wh2 = '';
                 (d.windows || []).forEach(function (slot) {
                     var s = slot.serving;
-                    wh2 += '<div class="win-chip' + (s ? ' busy' : ' idle') + '">' +
+                    // slot.label is "Service · Priority". Shown in full here
+                    // rather than as "W1", because a registrar moving between
+                    // desks needs to know which desk this is without
+                    // switching the selector to find out.
+                    wh2 += '<div class="win-chip ' + laneTone(slot.txn_type, slot.priority_group)
+                        + (s ? ' busy' : ' idle') + '" title="Window ' + slot.window + ' — ' + esc(slot.label || '') + '">' +
                         '<span class="wc-n">W' + slot.window + '</span>' +
+                        '<span class="wc-lane">' + esc(slot.label || '') + '</span>' +
                         (s ? '<span class="wc-t">' + esc(s.display_number) + '</span>' +
                              '<span class="wc-name">' + esc(s.student_name) + '</span>'
                            : '<span class="wc-t idle-num">—</span><span class="wc-name idle-name">Available</span>') +
@@ -568,13 +1027,15 @@
             if (tbody) {
                 var html = '';
                 if (!(d.waiting || []).length) {
-                    html = '<tr class="empty-state-row"><td colspan="7" style="height:60vh;text-align:center;"><div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;"><i class="fas fa-people-group" style="font-size:40px;color:#cbd5e1;margin-bottom:12px;"></i><p style="font-size:15px;font-weight:600;color:#64748b;margin:0 0 4px;">No students waiting</p><span style="font-size:13px;color:#94a3b8;">Tickets appear here when students tap at the kiosk</span></div></td></tr>';
+                    html = '<tr class="empty-state-row"><td colspan="8" style="height:60vh;text-align:center;"><div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;"><i class="fas fa-people-group" style="font-size:40px;color:#cbd5e1;margin-bottom:12px;"></i><p style="font-size:15px;font-weight:600;color:#64748b;margin:0 0 4px;">No students waiting</p><span style="font-size:13px;color:#94a3b8;">Tickets appear here when students tap at the kiosk</span></div></td></tr>';
                 } else {
                     (d.waiting || []).forEach(function (w) {
                         html += '<tr>' +
                             '<td><span class="chip blue">#' + w.position + '</span></td>' +
                             '<td><strong>' + esc(w.display_number) + '</strong></td>' +
                             '<td><div class="student-info"><div class="student-avatar blue">' + esc((w.student_name || '?').charAt(0).toUpperCase()) + '</div><div><div class="student-name">' + esc(w.student_name) + '</div></div></div></td>' +
+                            '<td>' + laneChip(w.txn_type, w.priority_group) +
+                              (w.window ? ' <span style="font-size:11px;color:#94a3b8;">W' + w.window + '</span>' : '') + '</td>' +
                             '<td style="font-size:13px;">' + esc(w.student_number || '—') + '</td>' +
                             '<td style="font-size:13px;color:#64748b;">' + esc(w.course || '—') + '</td>' +
                             '<td style="font-size:12px;color:#64748b;">' + esc(timeAgo(w.joined_at)) + '</td>' +
@@ -595,14 +1056,25 @@
             if (cbody) {
                 var ch = '';
                 if (!(d.completed || []).length) {
-                    ch = '<tr><td colspan="4" class="empty-state"><i class="fas fa-inbox"></i><p>Nothing served yet today</p></td></tr>';
+                    ch = '<tr><td colspan="5" class="empty-state"><i class="fas fa-inbox"></i><p>'
+                        + (d.is_today ? 'Nothing served yet today' : 'Nothing served on ' + esc(d.history_date))
+                        + '</p></td></tr>';
                 } else {
+                    // "3h ago" is meaningless for a day that is already over,
+                    // so anything but today shows the clock time instead.
+                    var when = function (ts) {
+                        if (!ts) return '—';
+                        var parsed = parseDbDt(ts);
+                        if (d.is_today) return timeAgo(ts);
+                        return parsed === null ? '—' : new Date(parsed).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    };
                     (d.completed || []).forEach(function (c) {
                         ch += '<tr>' +
                             '<td><strong>' + esc(c.display_number) + '</strong></td>' +
                             '<td>' + esc(c.student_name) + '</td>' +
+                            '<td>' + laneChip(c.txn_type, c.priority_group) + '</td>' +
                             '<td><span class="pill ' + (c.status === 'completed' ? 'active' : 'inactive') + '">' + esc(ucfirst(c.status)) + '</span></td>' +
-                            '<td style="font-size:12px;color:#64748b;">' + esc(c.served_at ? timeAgo(c.served_at) : '—') + '</td></tr>';
+                            '<td style="font-size:12px;color:#64748b;">' + esc(when(c.served_at)) + '</td></tr>';
                     });
                 }
                 cbody.innerHTML = ch;
@@ -719,9 +1191,16 @@
             // card shows the person at THIS desk. Without it the server fell
             // back to the globally-newest serving ticket, so two desks open at
             // once each saw the other's student.
+            //
+            // The date rides along because the history table is filtered. The
+            // server scopes ONLY history to it — live counts and the now-serving
+            // card stay on today, so browsing last Tuesday does not stop the
+            // desk from serving the student standing in front of it.
             var ws = document.getElementById('windowSelect');
             var w = ws ? (parseInt(ws.value, 10) || 1) : 1;
-            fetchJson(API_AUTH + '?action=state&window=' + w).then(function (d) {
+            var url = API_AUTH + '?action=state&window=' + w
+                + (histDate ? '&date=' + encodeURIComponent(histDate) : '');
+            fetchJson(url).then(function (d) {
                 if (d.success && d.data) render(d.data);
             }).catch(function (e) { reportQueueError(e, 'serving console state'); });
         }
@@ -730,7 +1209,7 @@
         var winSel = document.getElementById('windowSelect');
         if (winSel) {
             var saved = localStorage.getItem('queue_window');
-            if (saved && [1,2,3].indexOf(parseInt(saved,10)) !== -1) winSel.value = saved;
+            if (saved && [1, 2, 3, 4].indexOf(parseInt(saved, 10)) !== -1) winSel.value = saved;
             winSel.addEventListener('change', function() {
                 localStorage.setItem('queue_window', this.value);
                 // Switching desks must repaint the now-serving card for the new
@@ -738,6 +1217,91 @@
                 loadState();
             });
         }
+
+        // ── Open / closed ──────────────────────────────────────
+        // CUT OFF is destructive-ish: it stops every student at the kiosk
+        // from getting a number. It asks first, and the dialog names what
+        // it does to people already holding a number.
+        //
+        // Uses the shared confirmAction() rather than native confirm():
+        // the native box is drawn by the OS, so it arrives as an unstyled
+        // "localhost says" dialog that blocks the tab and reads as an
+        // error state rather than a question. confirm.js already exists
+        // for exactly this and is loaded on every page by header.php.
+        var btnOff = document.getElementById('btnCutOff');
+        if (btnOff) btnOff.addEventListener('click', async function () {
+            var ok = await confirmAction({
+                title: 'Cut off the queue now?',
+                body: 'The kiosk will stop issuing numbers for today.'
+                    + '<br><br>Students who already hold a number are <b>still served</b>'
+                    + ' &mdash; this stops new tickets only.',
+                confirmLabel: 'Cut off now',
+                tone: 'danger'
+            });
+            if (!ok) return;
+            btnOff.disabled = true;
+            post('set_cutoff', {}).then(function (d) {
+                showToast(d.message, d.success ? 'success' : 'error');
+                if (d.success) loadState();
+            }).catch(function (e) {
+                reportQueueError(e, 'cut off queue');
+                showToast(shortReason(e), 'error');
+            }).finally(function () { btnOff.disabled = false; });
+        });
+
+        var btnOn = document.getElementById('btnReopen');
+        if (btnOn) btnOn.addEventListener('click', function () {
+            btnOn.disabled = true;
+            post('clear_cutoff', {}).then(function (d) {
+                // Reopening past the closing time does NOT reopen the queue,
+                // and the server says so in the message. Show it either way
+                // rather than optimistically flipping the banner.
+                showToast(d.message, d.success ? 'success' : 'error');
+                loadState();
+            }).catch(function (e) {
+                reportQueueError(e, 'reopen queue');
+                showToast(shortReason(e), 'error');
+            }).finally(function () { btnOn.disabled = false; });
+        });
+
+        var btnPanel = document.getElementById('btnDayPanel');
+        if (btnPanel) btnPanel.addEventListener('click', openDayPanel);
+        var btnDaySave = document.getElementById('daySave');
+        if (btnDaySave) btnDaySave.addEventListener('click', saveDaySettings);
+        var dayModal = document.getElementById('dayModal');
+        if (dayModal) dayModal.addEventListener('click', function (e) {
+            if (e.target === dayModal) closeDay();
+        });
+
+        // ── History date filter ────────────────────────────────
+        var histInput = document.getElementById('histDate');
+        if (histInput) histInput.addEventListener('change', function () {
+            setHistoryDate(this.value);
+        });
+        var histPrev = document.getElementById('histPrev');
+        if (histPrev) histPrev.addEventListener('click', function () { shiftHistory(-1); });
+        var histNext = document.getElementById('histNext');
+        if (histNext) histNext.addEventListener('click', function () { shiftHistory(1); });
+        var histToday = document.getElementById('histToday');
+        if (histToday) histToday.addEventListener('click', function () {
+            var n = new Date();
+            setHistoryDate(n.getFullYear() + '-'
+                + String(n.getMonth() + 1).padStart(2, '0') + '-'
+                + String(n.getDate()).padStart(2, '0'));
+        });
+
+        // Enter inside the settings modal saves, matching every other form
+        // in this app.
+        if (dayModal) {
+            dayModal.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+                    e.preventDefault();
+                    saveDaySettings();
+                }
+                if (e.key === 'Escape') closeDay();
+            });
+        }
+
         bindConsole();
         loadState();
         startPoll(loadState, 3000);

@@ -61,6 +61,47 @@ body[data-page="console"] .dashboard-main{padding:24px clamp(18px,2.5vw,38px) 48
 .q-metric .q-value{margin-top:6px;font-size:30px;font-weight:800;line-height:1;color:#0f172a;font-variant-numeric:tabular-nums}
 .q-metric.is-serving .q-value{color:#1d4ed8}
 
+/* ── Open/closed banner ────────────────────────────────────
+   A status, not a control: the left rule and the dot carry the
+   state, and only the one legal action is offered. Offering both
+   buttons at once invites a registrar to press the wrong one. */
+.q-openbar{display:flex;align-items:center;gap:11px;margin:0 0 16px;padding:13px 18px;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:13px;background:#f0fdf4}
+.q-openbar .ob-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#16a34a}
+.q-openbar .ob-text{font-size:14px;font-weight:800;letter-spacing:.01em;color:#15803d}
+.q-openbar .ob-sub{font-size:12.5px;color:#475569}
+.q-openbar .ob-action{margin-left:auto;box-sizing:border-box;min-height:34px;font-size:12px}
+.q-openbar.is-closed{border-color:#fecaca;border-left-color:#dc2626;background:#fef2f2}
+.q-openbar.is-closed .ob-dot{background:#dc2626}
+.q-openbar.is-closed .ob-text{color:#b91c1c}
+
+/* ── History date filter ─────────────────────────────────── */
+.date-nav{display:flex;align-items:center;gap:6px}
+.dn-btn,.dn-today{box-sizing:border-box;height:30px;min-width:30px;padding:0 9px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font:600 12px Inter,sans-serif;cursor:pointer;transition:border-color .15s,background .15s}
+.dn-btn:hover,.dn-today:hover{border-color:#2563eb;background:#eff6ff;color:#1d4ed8}
+.dn-btn:disabled{opacity:.4;cursor:not-allowed;border-color:#e2e8f0;background:#fff;color:#94a3b8}
+.dn-btn:focus-visible,.dn-today:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.dn-input{box-sizing:border-box;height:30px;padding:0 8px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font:600 12.5px Inter,sans-serif}
+.dn-input:focus{outline:0;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+
+/* ── Lane chip ───────────────────────────────────────────────
+   Reuses the kiosk's palette so the console and the kiosk agree
+   on what "priority" looks like: amber, both places. */
+.chip.lane-service{background:#dbeafe;color:#1d4ed8}
+.chip.lane-claim{background:#ccfbf1;color:#0f766e}
+.chip.lane-priority{background:#fef3c7;color:#b45309}
+
+/* ── Day settings modal ─────────────────────────────────── */
+.day-lead{margin:0 0 16px;font-size:12.5px;line-height:1.5;color:#64748b}
+.day-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.day-check{display:flex;align-items:flex-start;gap:9px;margin:4px 0 18px;padding:11px 13px;border:1px solid #e2e8f0;border-radius:10px;background:#f8faff;cursor:pointer}
+.day-check input{margin-top:2px;accent-color:#2563eb}
+.day-check b{display:block;font-size:13px;font-weight:700;color:#0f172a}
+.day-check small{display:block;font-size:11.5px;color:#64748b;margin-top:2px;line-height:1.4}
+.day-rule{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
+.day-rule::after{content:"";flex:1 1 auto;height:1px;background:#e2e8f0}
+.day-note{margin:14px 0 0;font-size:11.5px;line-height:1.5;color:#94a3b8}
+@media(max-width:560px){.day-grid{grid-template-columns:1fr}.q-openbar{flex-wrap:wrap}.q-openbar .ob-action{margin-left:0}}
+
 /* ── Panels ───────────────────────────────────────────── */
 body[data-page="console"] .panel{border:1px solid #dbeafe;border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(15,23,42,.045);margin-bottom:16px;overflow:hidden}
 body[data-page="console"] .panel-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 18px;background:#f8faff;border-bottom:1px solid #e5e7eb}
@@ -134,15 +175,28 @@ body[data-page="console"] td.empty-state{display:table-cell;height:300px;padding
         <div class="q-window">
             <label for="windowSelect">Window</label>
             <select id="windowSelect">
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
+                <option value="1">1 &middot; Service &middot; Priority</option>
+                <option value="2">2 &middot; Service &middot; Student</option>
+                <option value="3">3 &middot; Claim &middot; Priority</option>
+                <option value="4">4 &middot; Claim &middot; Student</option>
             </select>
         </div>
+        <button class="btn btn-secondary" id="btnDayPanel"><i class="fas fa-sliders"></i> Queue settings</button>
         <a href="../queue/monitor.php" target="_blank" class="btn btn-secondary"><i class="fas fa-tv"></i> Open Monitor</a>
         <a href="../queue/kiosk.php" target="_blank" class="btn btn-secondary"><i class="fas fa-credit-card"></i> Open Kiosk</a>
     </div>
 </header>
+
+<!-- Open / closed state. This is the single most consequential fact on
+     the page — once it is shut nobody gets a number — so it is a banner
+     above everything rather than a field inside the settings modal. -->
+<div class="q-openbar" id="openBar">
+    <span class="ob-dot"></span>
+    <span class="ob-text" id="openBarText">Open</span>
+    <span class="ob-sub" id="openBarSub"></span>
+    <button type="button" class="btn btn-sm btn-danger ob-action" id="btnCutOff"><i class="fas fa-lock"></i> Cut off now</button>
+    <button type="button" class="btn btn-sm btn-success ob-action" id="btnReopen" style="display:none;"><i class="fas fa-unlock"></i> Reopen</button>
+</div>
 
 <!-- Counts -->
 <div class="q-strip">
@@ -211,10 +265,10 @@ body[data-page="console"] td.empty-state{display:table-cell;height:300px;padding
     <div class="table-responsive" style="overflow-x:auto;">
     <table class="table q-queue-table">
         <thead><tr>
-            <th>#</th><th>Number</th><th>Student</th><th>ID No.</th><th>Course</th><th>Joined</th><th style="text-align:center;">Action</th>
+            <th>#</th><th>Number</th><th>Student</th><th>Lane</th><th>ID No.</th><th>Course</th><th>Joined</th><th style="text-align:center;">Action</th>
         </tr></thead>
         <tbody id="waitingBody">
-            <tr class="empty-state-row"><td colspan="7"><div class="q-waiting-empty"><i class="fas fa-people-group"></i><p>No students waiting</p><span>Tickets appear here when students tap at the kiosk</span></div></td></tr>
+            <tr class="empty-state-row"><td colspan="8"><div class="q-waiting-empty"><i class="fas fa-people-group"></i><p>No students waiting</p><span>Tickets appear here when students tap at the kiosk</span></div></td></tr>
         </tbody>
     </table>
     </div>
@@ -225,13 +279,19 @@ body[data-page="console"] td.empty-state{display:table-cell;height:300px;padding
 <!-- HISTORY -->
 <div class="panel">
     <div class="panel-toolbar">
-        <div class="panel-title"><i class="fas fa-clock-rotate-left"></i> Today's History</div>
+        <div class="panel-title"><i class="fas fa-clock-rotate-left"></i> History</div>
+        <div class="date-nav">
+            <button type="button" class="dn-btn" id="histPrev" title="Previous day" aria-label="Previous day"><i class="fas fa-chevron-left"></i></button>
+            <input type="date" id="histDate" class="dn-input" aria-label="History date">
+            <button type="button" class="dn-btn" id="histNext" title="Next day" aria-label="Next day"><i class="fas fa-chevron-right"></i></button>
+            <button type="button" class="dn-today" id="histToday">Today</button>
+        </div>
     </div>
     <div class="table-responsive" style="overflow-x:auto;">
     <table class="table">
-        <thead><tr><th>Number</th><th>Student</th><th>Status</th><th>Served At</th></tr></thead>
+        <thead><tr><th>Number</th><th>Student</th><th>Lane</th><th>Status</th><th>Served At</th></tr></thead>
         <tbody id="completedBody">
-            <tr><td colspan="4" class="empty-state"><i class="fas fa-inbox"></i><p>Nothing served yet today</p></td></tr>
+            <tr><td colspan="5" class="empty-state"><i class="fas fa-inbox"></i><p>Nothing served yet today</p></td></tr>
         </tbody>
     </table>
     </div>
@@ -239,6 +299,56 @@ body[data-page="console"] td.empty-state{display:table-cell;height:300px;padding
 
 </div>
 </main>
+
+<!-- Queue settings: opening hours + daily tap caps -->
+<div class="modal-overlay" id="dayModal">
+    <div class="modal-content" style="max-width:520px;">
+        <div class="modal-header">
+            <h2><i class="fas fa-sliders"></i> Queue settings</h2>
+            <button class="modal-close" onclick="window.queueCloseDay()"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <p class="day-lead">Applies to today only. Tomorrow starts fresh with these same hours.</p>
+
+            <div class="day-grid">
+                <div class="form-group">
+                    <label for="dayOpens">Opens</label>
+                    <input type="time" id="dayOpens" class="form-control" value="08:00">
+                </div>
+                <div class="form-group">
+                    <label for="dayCloses">Closes</label>
+                    <input type="time" id="dayCloses" class="form-control" value="17:00">
+                </div>
+            </div>
+
+            <label class="day-check">
+                <input type="checkbox" id="dayEnabled" checked>
+                <span>
+                    <b>Use these hours</b>
+                    <small>Untick for an open-ended queue with no cut-off.</small>
+                </span>
+            </label>
+
+            <div class="day-rule"><span>Daily tap limit</span></div>
+
+            <div class="day-grid">
+                <div class="form-group">
+                    <label for="dayMaxStudent">Students per day</label>
+                    <input type="number" id="dayMaxStudent" class="form-control" min="0" step="1" value="0" placeholder="0 = unlimited">
+                </div>
+                <div class="form-group">
+                    <label for="dayMaxPriority">Priority per day</label>
+                    <input type="number" id="dayMaxPriority" class="form-control" min="0" step="1" value="0" placeholder="0 = unlimited">
+                </div>
+            </div>
+            <p class="day-note">0 means no limit. A student who reaches the limit is told at the kiosk and sent to the registrar.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-light" onclick="window.queueCloseDay()">Cancel</button>
+            <button class="btn btn-primary" id="daySave"><i class="fas fa-check"></i> Save settings</button>
+        </div>
+    </div>
+</div>
 
 <!-- Skip Confirm Modal -->
 <div class="modal-overlay" id="skipModal">

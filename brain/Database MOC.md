@@ -33,7 +33,8 @@ Canonical schema is `registrar_ai.sql` (base dump) + `database/registrar_upgrade
 
 - [[users]] — login accounts (roles: admin / registrar / staff / student); `username`, `student_id`, `login_attempts`, `locked_until` (Phase 5)
 - [[otp_codes]] — one-time codes for login + reset (Phase 5)
-- [[queue_tickets]] — queue numbers per day (waiting / serving / completed / no-show / removed / cancelled)
+- [[queue_tickets]] — queue numbers per day (waiting / serving / completed / no-show / removed / cancelled); `txn_type` + `priority_group` pick one of four windows
+- `queue_day_settings` — one row per queue date: opening/closing hours, the manual cut-off, and the daily tap caps (see [[Queue Management]])
 - [[audit_logs]] — full action history with old/new JSON values
 - [[masterlist_cache]] — cached masterlist query results
 - [[ai_cache]] — cached AI completions (prompt_hash + TTL)

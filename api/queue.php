@@ -8,6 +8,10 @@
 //    POST ?action=complete    finish the serving ticket
 //    POST ?action=no_show     mark serving ticket as no-show
 //    POST ?action=remove      remove a stuck/duplicate ticket
+//    GET  ?action=state&window=N&date=YYYY-MM-DD
+//    POST ?action=save_day_settings  open/close times + daily tap caps
+//    POST ?action=set_cutoff        close the queue now
+//    POST ?action=clear_cutoff      return to the clock rule
 // ============================================================
 
 header('Content-Type: application/json');
@@ -64,6 +68,53 @@ function logQueueEvent($db, array $ticket, string $eventType, string $status, st
     }
 }
 
+/**
+ * Normalise a history date from the query string.
+ *
+ * This value is always passed as a bound parameter and never
+ * concatenated into SQL, but it is still checked: a valid Y-m-d can
+ * only be a real calendar day, so a typo falls back to today rather
+ * than an empty history table, and a future date is refused rather
+ * than rendering an empty day that looks like data loss.
+ */
+function queueHistoryDate($raw, ?string $today = null): string {
+    $today = $today ?? date('Y-m-d');
+    $raw = trim((string) $raw);
+    if ($raw === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
+        return $today;
+    }
+    [$y, $m, $d] = array_map('intval', explode('-', $raw));
+    if (!checkdate($m, $d, $y) || $raw > $today) {
+        return $today;
+    }
+    return $raw;
+}
+
+/**
+ * Normalise an incoming time to H:i:s, or null if it is not a time.
+ *
+ * Accepts the HH:MM a <input type="time"> submits as well as a full
+ * H:i:s, so the console can post either without the server guessing.
+ * Returns null rather than silently falling back — a registrar who typed
+ * a nonsense time must be told, not given the default back.
+ */
+function queueTimeValue($raw, ?string $fallback = null): ?string {
+    $raw = trim((string) $raw);
+    if ($raw === '') {
+        return $fallback;
+    }
+    if (!preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/', $raw, $m)) {
+        return null;
+    }
+    $h = (int) $m[1];
+    $i = (int) $m[2];
+    $s = isset($m[3]) ? (int) $m[3] : 0;
+    if ($h > 23 || $i > 59 || $s > 59) {
+        return null;
+    }
+    return sprintf('%02d:%02d:%02d', $h, $i, $s);
+}
+
 $now = date('Y-m-d H:i:s');
 
 // ── Timezone-consistent "today" ─────────────────────────────────
@@ -101,15 +152,26 @@ if ($action === 'state') {
                 'student_number'=> $w['student_number'],
                 'course'        => $w['course'],
                 'joined_at'     => $w['joined_at'],
+                'txn_type'      => $w['txn_type'] ?? 'service',
+                'priority_group'=> $w['priority_group'] ?? 'student',
+                'window'        => queueWindowForLane($w['txn_type'] ?? 'service', $w['priority_group'] ?? 'student'),
             ];
         }
+
+        // History is date-selectable; the live line above is not. A
+        // registrar reviewing last Tuesday needs that day's finished
+        // tickets, but "waiting now" is only ever today — showing a
+        // three-day-old waiting list next to a live counter would be
+        // nonsense. So only this query is date-scoped.
+        $historyDate = queueHistoryDate($_GET['date'] ?? $today);
+        $isToday = ($historyDate === $today);
 
         $completedRows = $db->fetchAll(
             "SELECT * FROM queue_tickets
              WHERE queue_date = ? AND status IN ('completed','no-show','removed','cancelled')
              ORDER BY COALESCE(served_at, joined_at) DESC, id DESC
-             LIMIT 10",
-            [$today]
+             LIMIT 200",
+            [$historyDate]
         );
         $completed = array_map(static function ($c) {
             return [
@@ -117,18 +179,28 @@ if ($action === 'state') {
                 'ticket_number' => (int) $c['ticket_number'],
                 'display_number'=> padNumber((int) $c['ticket_number']),
                 'student_name'  => $c['student_name'],
+                'student_number'=> $c['student_number'],
                 'status'        => $c['status'],
                 'served_at'     => $c['served_at'],
+                'txn_type'      => $c['txn_type'] ?? 'service',
+                'priority_group'=> $c['priority_group'] ?? 'student',
             ];
         }, $completedRows);
 
+        // Counts follow the date the console is looking at, so the strip
+        // and the history table underneath always describe the same day.
+        // "Now serving" stays on today regardless — that desk is live now.
+        $countDate = $historyDate;
         $stats = [
-            'waiting'   => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'waiting'", [$today]),
-            'serving'   => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'serving'", [$today]),
-            'completed' => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'completed'", [$today]),
-            'no_show'   => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'no-show'", [$today]),
-            'cancelled' => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'cancelled'", [$today]),
+            'waiting'   => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'waiting'", [$countDate]),
+            'serving'   => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'serving'", [$countDate]),
+            'completed' => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'completed'", [$countDate]),
+            'no_show'   => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'no-show'", [$countDate]),
+            'cancelled' => (int) $db->fetchColumn("SELECT COUNT(*) FROM queue_tickets WHERE queue_date = ? AND status = 'cancelled'", [$countDate]),
         ];
+
+        $daySettings = queueDaySettings($db, $today);
+        $closed = queueIsClosed($daySettings);
 
         echo json_encode([
             'success' => true,
@@ -136,9 +208,24 @@ if ($action === 'state') {
                 'serving'   => $serving,
                 'windows'   => windowMapToPayload($windowMap)['windows'],
                 'my_window' => $myWindow,
+                'my_lane'   => queueWindowLane($myWindow),
                 'waiting'   => $waiting,
                 'completed' => $completed,
                 'stats'     => $stats,
+                'history_date' => $historyDate,
+                'is_today'  => $isToday,
+                'today'     => $today,
+                'queue_closed'    => (bool) $closed['closed'],
+                'closed_reason'   => $closed['reason'],
+                'closed_at'       => $closed['at'],
+                'settings'  => [
+                    'opens_time'        => $daySettings['opens_time'],
+                    'closes_time'       => $daySettings['closes_time'],
+                    'cutoff_enabled'    => (int) $daySettings['cutoff_enabled'],
+                    'cutoff_forced_at'  => $daySettings['cutoff_forced_at'],
+                    'max_taps_student'  => (int) $daySettings['max_taps_student'],
+                    'max_taps_priority' => (int) $daySettings['max_taps_priority'],
+                ],
             ],
         ]);
     } catch (Throwable $e) {
@@ -157,6 +244,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 if ($action === 'call_next') {
     try {
         $window = normalizeWindow($input['window'] ?? 1);
+        $lane = queueWindowLane($window);
 
         // A window serves ONE student at a time. This used to auto-complete
         // the globally-newest serving ticket regardless of which window owned
@@ -188,14 +276,23 @@ if ($action === 'call_next') {
             exit;
         }
 
+        // Only this desk's own lane. Without the filter, Window 2 (Service ·
+        // Student) pulled the oldest ticket off the whole day and could
+        // call a priority student who belonged at Window 1 — the split
+        // existed on paper and did nothing.
         $next = $db->fetchOne(
             "SELECT * FROM queue_tickets
              WHERE queue_date = ? AND status = 'waiting'
+               AND txn_type = ? AND priority_group = ?
              ORDER BY ticket_number ASC LIMIT 1",
-            [$today]
+            [$today, $lane['txn_type'], $lane['priority_group']]
         );
         if (!$next) {
-            echo json_encode(['success' => true, 'message' => 'Queue is empty.', 'data' => ['called' => null]]);
+            echo json_encode([
+                'success' => true,
+                'message' => 'No one is waiting for ' . $lane['label'] . '.',
+                'data'    => ['called' => null, 'lane' => $lane],
+            ]);
             exit;
         }
 
@@ -259,11 +356,20 @@ if ($action === 'skip') {
 
         $calledNext = null;
         if ($wasServing) {
+            // Auto-advance follows the skipped ticket's OWN lane, not the
+            // globally-oldest waiting number. Skipping someone at Window 1
+            // used to pull a student belonging to another desk onto this
+            // one, leaving the real next-in-line still waiting.
+            $skippedLane = [
+                'txn_type'       => $ticket['txn_type'] ?? 'service',
+                'priority_group' => $ticket['priority_group'] ?? 'student',
+            ];
             $next = $db->fetchOne(
                 "SELECT * FROM queue_tickets
                  WHERE queue_date = ? AND status = 'waiting'
+                   AND txn_type = ? AND priority_group = ?
                  ORDER BY ticket_number ASC LIMIT 1",
-                [$today]
+                [$today, $skippedLane['txn_type'], $skippedLane['priority_group']]
             );
             if ($next) {
                 $db->update('queue_tickets',
@@ -385,6 +491,127 @@ if ($action === 'remove') {
         echo json_encode(['success' => true, 'message' => 'Ticket removed from the queue.']);
     } catch (Throwable $e) {
         json_error($e, 'Unable to remove the ticket.');
+    }
+    exit;
+}
+
+// ─── DAY SETTINGS (cut-off + daily tap caps) ─────────────────
+// One row per queue_date, written with an upsert. A registrar pressing
+// CUT OFF at 4 PM on a day nobody configured must work, so this cannot
+// assume the row already exists.
+if ($action === 'save_day_settings') {
+    $date = queueHistoryDate($input['date'] ?? $today, $today);
+    try {
+        $cur = queueDaySettings($db, $date);
+
+        $opens  = queueTimeValue($input['opens_time']  ?? $cur['opens_time'],  '08:00:00');
+        $closes = queueTimeValue($input['closes_time'] ?? $cur['closes_time'], '17:00:00');
+        if ($opens === null || $closes === null) {
+            echo json_encode(['success' => false, 'message' => 'Enter valid opening and closing times.']);
+            exit;
+        }
+
+        // A window that ends before it starts would close the queue all
+        // day while looking configured. Refuse rather than save it.
+        if (strtotime($closes) <= strtotime($opens)) {
+            echo json_encode(['success' => false, 'message' => 'The closing time must be after the opening time.']);
+            exit;
+        }
+
+        $maxStudent  = max(0, (int) ($input['max_taps_student']  ?? $cur['max_taps_student']));
+        $maxPriority = max(0, (int) ($input['max_taps_priority'] ?? $cur['max_taps_priority']));
+        $enabled = isset($input['cutoff_enabled'])
+            ? (int) (bool) $input['cutoff_enabled']
+            : (int) $cur['cutoff_enabled'];
+
+        // `cutoff_forced_at` is the manual CUT OFF switch and is NOT part of
+        // this save: clearing it is a separate, deliberate action
+        // (clear_cutoff). Saving times must never silently reopen a queue
+        // a registrar just closed.
+        $db->query(
+            "INSERT INTO queue_day_settings
+                (queue_date, opens_time, closes_time, cutoff_enabled,
+                 cutoff_forced_at, cutoff_forced_by, max_taps_student, max_taps_priority, updated_by)
+             VALUES (?,?,?,?,NULL,NULL,?,?,?)
+             ON DUPLICATE KEY UPDATE
+                opens_time = VALUES(opens_time),
+                closes_time = VALUES(closes_time),
+                cutoff_enabled = VALUES(cutoff_enabled),
+                max_taps_student = VALUES(max_taps_student),
+                max_taps_priority = VALUES(max_taps_priority),
+                updated_by = VALUES(updated_by)",
+            [$date, $opens, $closes, $enabled, $maxStudent, $maxPriority, $_SESSION['user_id']]
+        );
+        logActivity($_SESSION['user_id'], 'queue_day_settings', null, 'queue_day_settings', null,
+            [], ['queue_date' => $date, 'opens_time' => $opens, 'closes_time' => $closes,
+                 'max_taps_student' => $maxStudent, 'max_taps_priority' => $maxPriority]);
+
+        $fresh = queueDaySettings($db, $date);
+        $closed = queueIsClosed($fresh);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Day settings saved.',
+            'data'    => ['settings' => $fresh, 'queue_closed' => $closed['closed'], 'closed_reason' => $closed['reason']],
+        ]);
+    } catch (Throwable $e) {
+        json_error($e, 'Unable to save day settings.');
+    }
+    exit;
+}
+
+if ($action === 'set_cutoff') {
+    try {
+        $db->query(
+            "INSERT INTO queue_day_settings (queue_date, cutoff_forced_at, cutoff_forced_by, updated_by)
+             VALUES (?,?,?,?)
+             ON DUPLICATE KEY UPDATE
+                cutoff_forced_at = VALUES(cutoff_forced_at),
+                cutoff_forced_by = VALUES(cutoff_forced_by),
+                updated_by = VALUES(updated_by)",
+            [$today, $now, $_SESSION['user_id'], $_SESSION['user_id']]
+        );
+        logActivity($_SESSION['user_id'], 'queue_cutoff', null, 'queue_day_settings', null,
+            [], ['queue_date' => $today, 'cutoff_forced_at' => $now]);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Queue closed at ' . date('g:i A', strtotime($now))
+                       . '. Numbers already issued will still be served.',
+            'data'    => ['cutoff_forced_at' => $now],
+        ]);
+    } catch (Throwable $e) {
+        json_error($e, 'Unable to close the queue.');
+    }
+    exit;
+}
+
+// Reopen returns the day to the CLOCK rule. It deliberately does not
+// extend past closes_time — reopening the queue at 6 PM would invent an
+// office-hours window nobody agreed to, and the whole point of the
+// cut-off is that students get a definite answer.
+if ($action === 'clear_cutoff') {
+    try {
+        $db->query(
+            "INSERT INTO queue_day_settings (queue_date, cutoff_forced_at, cutoff_forced_by, updated_by)
+             VALUES (?,NULL,NULL,?)
+             ON DUPLICATE KEY UPDATE
+                cutoff_forced_at = NULL,
+                cutoff_forced_by = NULL,
+                updated_by = VALUES(updated_by)",
+            [$today, $_SESSION['user_id']]
+        );
+        logActivity($_SESSION['user_id'], 'queue_reopen', null, 'queue_day_settings', null,
+            ['cutoff_forced_at' => $now], []);
+        $fresh = queueDaySettings($db, $today);
+        $closed = queueIsClosed($fresh);
+        echo json_encode([
+            'success' => true,
+            'message' => $closed['closed']
+                ? 'The manual cut-off is cleared, but the queue is still closed for today (' . $fresh['closes_time'] . ').'
+                : 'Queue reopened.',
+            'data'    => ['settings' => $fresh, 'queue_closed' => $closed['closed']],
+        ]);
+    } catch (Throwable $e) {
+        json_error($e, 'Unable to reopen the queue.');
     }
     exit;
 }

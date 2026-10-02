@@ -97,6 +97,213 @@
     pointer-events: none;
 }
 
+/* ── Lane picker ────────────────────────────────────────────
+   The kiosk is read from about two metres away, standing up, by
+   someone who may be holding a baby or a cane. So: very large type,
+   full-width rows rather than a grid of four small tiles, and a
+   minimum tap height well past the 44px comfortable minimum.
+
+   Colour does real work here — blue = SERVICE, teal = CLAIM,
+   amber = PRIORITY — because that split is the whole point of the
+   screen and it should be legible before the words are read. */
+.lane-pick {
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid #e2e8f0;
+    border-radius: 28px;
+    padding: 34px 34px 26px;
+    text-align: left;
+}
+.lane-head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+/* The step number is the only decoration on the screen: it is the one
+   thing that tells a student there is a second question coming. */
+.lane-step {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 14px;
+    background: #0f172a;
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-size: 20px;
+    font-weight: 800;
+}
+.lane-head h2 { font-size: 30px; font-weight: 800; margin: 0; color: #0f172a; letter-spacing: -0.02em; }
+.lane-head p { font-size: 15px; color: #64748b; margin: 4px 0 0; }
+
+.lane-choices { display: flex; flex-direction: column; gap: 14px; }
+.lane-choice {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+    min-height: 104px;
+    padding: 18px 22px;
+    border: 2px solid #e2e8f0;
+    border-radius: 18px;
+    background: #fff;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease, transform .12s ease;
+}
+.lane-choice:hover { transform: translateY(-1px); }
+.lane-choice:active { transform: translateY(0); }
+.lane-choice:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 3px; }
+.lane-letter {
+    width: 52px;
+    height: 52px;
+    flex: 0 0 52px;
+    border-radius: 13px;
+    display: grid;
+    place-items: center;
+    font-size: 22px;
+    font-weight: 800;
+    background: #f1f5f9;
+    color: #475569;
+}
+.lane-body { flex: 1 1 auto; min-width: 0; }
+.lane-title { font-size: 32px; font-weight: 800; line-height: 1.1; color: #0f172a; }
+.lane-meta { font-size: 15px; color: #64748b; margin-top: 5px; line-height: 1.4; }
+.lane-go { font-size: 20px; color: #cbd5e1; flex: 0 0 auto; }
+
+/* Tone is carried by a modifier class rather than an attribute, so a
+   choice can never render with a stale colour after a state change. */
+.lane-choice.t-service  { border-color: #bfdbfe; background: #f8fbff; }
+.lane-choice.t-service:hover  { border-color: #2563eb; }
+.lane-choice.t-service .lane-letter  { background: linear-gradient(140deg, #2563eb, #1d4ed8); color: #fff; }
+.lane-choice.t-claim    { border-color: #99f6e4; background: #f4fffd; }
+.lane-choice.t-claim:hover    { border-color: #0d9488; }
+.lane-choice.t-claim .lane-letter    { background: linear-gradient(140deg, #0d9488, #0f766e); color: #fff; }
+.lane-choice.t-priority { border-color: #fcd34d; background: #fffcf2; }
+.lane-choice.t-priority:hover { border-color: #d97706; }
+.lane-choice.t-priority .lane-letter { background: linear-gradient(140deg, #d97706, #b45309); color: #fff; }
+
+.lane-back {
+    margin-top: 20px;
+    background: none;
+    border: 0;
+    color: #64748b;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 8px 4px;
+}
+.lane-back:hover { color: #0f172a; }
+
+/* ── Closed sign ─────────────────────────────────────────────
+   Shown instead of the tap prompt when no numbers can be issued.
+
+   The mark is an animated clock rather than a static padlock or door.
+   Every way this screen appears is about time — before opening, after
+   closing, cut off — and a running clock says "come back later" while
+   a locked door says only "no", which a student reads as a broken
+   machine and tries to tap anyway. */
+.closed-sign {
+    background: rgba(255, 255, 255, 0.92);
+    border: 2px solid #fecaca;
+    border-radius: 28px;
+    padding: 54px 40px;
+    text-align: center;
+}
+.closed-mark {
+    position: relative;   /* anchor for the ::after halo below */
+    width: 104px; height: 104px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    background: #fef2f2;
+    display: grid;
+    place-items: center;
+}
+.closed-clock { width: 84px; height: 84px; overflow: visible; }
+/* Face + a solid bezel ring + cardinal ticks. The first pass used a very
+   pale double ring and it disappeared against the #fef2f2 disc — legible
+   on paper, invisible on a wall display. */
+.cc-face  { fill: #fff; stroke: #fca5a5; stroke-width: 2.5; }
+.cc-ring  { fill: none; stroke: #ef4444; stroke-width: 3; opacity: .55; }
+.cc-tick  { fill: #ef4444; opacity: .7; }
+/* Hands are anchored at the centre so they rotate from the middle, the
+   way a real clock does. The hour hand is short and thick, the minute
+   long and thinner, so the two are never mistaken for one another. */
+.cc-hand {
+    stroke: #dc2626;
+    stroke-width: 5;
+    stroke-linecap: round;
+    transform-origin: 50px 50px;
+}
+.cc-hand-h { stroke-width: 6.5; animation: ccSweep 8s linear infinite; }
+.cc-hand-m { stroke-width: 4;   animation: ccSweep 48s linear infinite; }
+.cc-pin { fill: #dc2626; }
+
+@keyframes ccSweep { to { transform: rotate(360deg); } }
+
+/* The halo breathes behind the clock so the screen is obviously alive
+   at a distance. Slow on purpose: a fast pulse on a wall display reads
+   as an alert, and this is not an alert. */
+.closed-mark::after {
+    content: "";
+    position: absolute;
+    width: 104px; height: 104px;
+    border-radius: 50%;
+    border: 3px solid #f87171;
+    opacity: 0;
+    animation: ccHalo 3.6s ease-out infinite;
+    pointer-events: none;
+}
+@keyframes ccHalo {
+    0%   { transform: scale(1);    opacity: .7; }
+    70%  { transform: scale(1.3);  opacity: 0; }
+    100% { transform: scale(1.3);  opacity: 0; }
+}
+
+.closed-sign h2 { font-size: 42px; font-weight: 800; margin: 0 0 12px; color: #7f1d1d; letter-spacing: -0.02em; }
+.closed-sign p { font-size: 21px; line-height: 1.5; color: #475569; margin: 0; max-width: 46ch; margin-inline: auto; }
+.closed-when { margin-top: 18px; font-size: 17px; font-weight: 700; color: #b91c1c; }
+
+/* The screen arriving is the one motion worth animating: it is the moment
+   a registrar's CUT OFF becomes visible at the kiosk, so the sign eases
+   in rather than snapping to it. Keyed on the is-open class that
+   show() toggles, not on an inline style attribute. */
+@keyframes closedIn {
+    from { opacity: 0; transform: translateY(14px) scale(.97); }
+    to   { opacity: 1; transform: none; }
+}
+#screen-closed.is-open .closed-sign {
+    animation: closedIn .42s cubic-bezier(.22, .9, .3, 1) both;
+}
+
+/* Motion here is decoration, never information: the copy, the time and the
+   clock all read without it. So it is the first thing to go. The hands are
+   parked at a plausible time so the clock still looks like a clock. */
+@media (prefers-reduced-motion: reduce) {
+    .cc-hand, .closed-mark::after { animation: none !important; }
+    .cc-hand-h { transform: rotate(150deg); }
+    .cc-hand-m { transform: rotate(60deg); }
+    #screen-closed.is-open .closed-sign { animation: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lane-choice { transition: none; }
+    .lane-choice:hover { transform: none; }
+}
+@media (max-width: 640px) {
+    .lane-pick { padding: 22px 18px; border-radius: 20px; }
+    .lane-head h2 { font-size: 23px; }
+    .lane-choice { min-height: 84px; gap: 14px; padding: 14px 16px; }
+    .lane-letter { width: 44px; height: 44px; flex-basis: 44px; }
+    .lane-title { font-size: 24px; }
+    .lane-meta { font-size: 13.5px; }
+    .closed-sign { padding: 40px 22px; }
+    .closed-sign h2 { font-size: 30px; }
+    .closed-sign p { font-size: 17px; }
+}
+
 /* ── Kiosk tabs ───────────────────────────────────────────── */
 .q-tabs {
     display: flex;
@@ -431,18 +638,43 @@
 
 /* ==========================================================
    WINDOW STRIP (monitor + registrar console)
-   One slot per service window. Idle desks are rendered, not
-   hidden, so the board reads as "3 windows, 2 busy" instead of
-   making a closed desk look like it does not exist.
+   One slot per service window, always four of them, always in
+   one row. Idle desks are rendered rather than hidden, so the
+   board reads as "4 windows, 2 busy" instead of making a closed
+   desk look like it does not exist.
+
+   The track count is 4 and never a variable: a strip that re-flowed
+   as desks opened would move the numbers a student is reading
+   across the wall.
    ========================================================== */
 .window-strip,
 .win-strip {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 18px;
     margin-bottom: 24px;
 }
 .window-strip { gap: 22px; }
+
+/* Lane tone. Priority is amber on both boards and in the console —
+   the one place a student scans for "is my desk the amber one".
+   Service stays the app's blue, claim teal, so the two axes of the
+   split (what you came for / who you are) are both readable at a
+   glance from across a room. */
+.win-slot.lane-priority { border-top: 4px solid #d97706; }
+.win-slot.lane-priority.idle { background: #fffdf5; border-color: #fcd34d; }
+.win-slot.lane-priority.busy { border-color: #d97706; box-shadow: 0 10px 28px rgba(217, 119, 6, 0.18); }
+.win-slot.lane-claim { border-top: 4px solid #0d9488; }
+.win-slot.lane-claim.idle { background: #f4fffd; border-color: #99f6e4; }
+.win-slot.lane-claim.busy { border-color: #0d9488; box-shadow: 0 10px 28px rgba(13, 148, 136, 0.18); }
+.win-slot.lane-service { border-top: 4px solid #2563eb; }
+.win-slot.lane-service.idle { background: #f8fbff; border-color: #bfdbfe; }
+.win-slot.lane-service.busy { border-color: #2563eb; box-shadow: 0 10px 28px rgba(37, 99, 235, 0.16); }
+
+.win-slot.lane-service .win-num { color: #1d4ed8; }
+/* Idle desks keep the grey dash: an empty slot must not advertise a lane
+   as though someone were being served there. */
+.win-slot.idle .win-num.idle-num { color: #cbd5e1; }
 
 .win-slot {
     box-sizing: border-box;          /* borders must not inflate the grid track */
@@ -502,26 +734,88 @@
     margin-top: 8px;
 }
 .win-slot.idle .win-state { color: #94a3b8; }
+/* The desk's job, under the window number. With four desks that are not
+   interchangeable, "Window 3" alone tells a student at the wall nothing
+   about whether they are in the right place. Letter-spacing is dropped
+   here — the inherited 2px suits a short caps label and makes a
+   multi-word lane name look broken. */
+.win-lane {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-transform: none;
+    color: #94a3b8;
+}
+.win-slot.busy .win-lane { color: #1d4ed8; }
 .idle-num { color: #cbd5e1; }
 .idle-name { color: #94a3b8; font-weight: 600; }
 
-/* Console: compact per-window chips */
-.win-strip { gap: 12px; margin-bottom: 18px; }
+/* Lane colours for the slot's TEXT.
+   These have to come AFTER `.win-head` and `.win-slot.busy .win-head`:
+   `.win-slot.lane-priority .win-head` ties with `.win-slot.busy .win-head`
+   on specificity (three classes each), so source order decides — and put
+   first, every heading stayed blue on an amber card. */
+.win-slot.lane-priority .win-head,
+.win-slot.lane-priority .win-lane { color: #b45309; }
+.win-slot.lane-claim .win-head,
+.win-slot.lane-claim .win-lane { color: #0f766e; }
+.win-slot.lane-service .win-head,
+.win-slot.lane-service .win-lane { color: #1d4ed8; }
+
+/* The ticket number takes the lane colour too. It is the largest thing on
+   the slot, so tinting it is what makes the amber desks read as amber from
+   across a room — the heading alone is too small to catch a glance. */
+.win-slot.lane-priority .win-num { color: #b45309; }
+.win-slot.lane-claim .win-num { color: #0f766e; }
+.win-slot.lane-service .win-num { color: #1d4ed8; }
+/* Idle desks keep the grey dash: an empty slot must not advertise a lane
+   as though someone were being served there. */
+.win-slot.idle .win-num.idle-num { color: #cbd5e1; }
+
+/* Console: compact per-window chips, four across in one row.
+   The chip is a grid, not a row: the lane label sits on its own line
+   under the window number. With four desks that are not interchangeable,
+   the label is what tells a registrar which desk this is at a glance.
+   The left rule carries the lane tone, matching the monitor. */
+.win-strip { gap: 10px; margin-bottom: 18px; }
 .win-chip {
     box-sizing: border-box;
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "n lane" "t name";
     align-items: center;
-    gap: 10px;
+    column-gap: 8px;
+    row-gap: 2px;
     background: #fff;
     border: 1px solid #e2e8f0;
     border-left: 4px solid #cbd5e1;
-    border-radius: 12px;
-    padding: 10px 14px;
+    border-radius: 11px;
+    padding: 9px 11px;
+    min-width: 0;
 }
 .win-chip.busy { border-left-color: #2563eb; background: #f8fbff; }
-.wc-n { font-weight: 800; font-size: 13px; color: #475569; min-width: 30px; }
-.wc-t { font-weight: 900; font-size: 20px; color: #0f172a; font-variant-numeric: tabular-nums; }
-.wc-name { font-size: 13px; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.win-chip.lane-priority { border-left-color: #d97706; }
+.win-chip.lane-priority.idle { background: #fffdf5; border-color: #fcd34d; border-left-color: #d97706; }
+.win-chip.lane-priority.busy { background: #fffbeb; }
+.win-chip.lane-claim { border-left-color: #0d9488; }
+.win-chip.lane-claim.idle { background: #f4fffd; border-color: #99f6e4; border-left-color: #0d9488; }
+.win-chip.lane-claim.busy { background: #f0fdfa; }
+.wc-n { grid-area: n; font-weight: 800; font-size: 12.5px; color: #475569; }
+.wc-lane {
+    grid-area: lane;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wc-t { grid-area: t; font-weight: 900; font-size: 18px; color: #0f172a; font-variant-numeric: tabular-nums; }
+.wc-name { grid-area: name; font-size: 12.5px; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .q-kicker-inline { font-size: 12px; font-weight: 700; color: #64748b; text-transform: none; letter-spacing: 0; }
 
 /* Kiosk board: window tag on the serving tile */
@@ -537,7 +831,15 @@
     color: #64748b;
 }
 
-@media (max-width: 900px) {
+/* The monitor is a wall display, so the strip stays one row far longer
+   than a responsive layout would normally allow — a stack of four tall
+   slots on a TV wastes the whole point of a board. It only folds to
+   2x2 when the window itself gets narrow (a small side monitor), which
+   is the point where a student could no longer read all four at once. */
+@media (max-width: 1180px) {
+    .window-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
     .window-strip, .win-strip { grid-template-columns: 1fr; }
     .win-slot { min-height: 140px; }
 }
