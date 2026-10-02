@@ -265,12 +265,63 @@ $b = $page['body'];
 check('no PHP error on the page',
     !str_contains($b, 'Fatal error') && !str_contains($b, 'Warning:') && !str_contains($b, 'Notice:'),
     substr($b, 0, 400));
-check('has the Auto-assign button', str_contains($b, 'id="btnAutoAssign"'));
-check('has the Create Section button', str_contains($b, 'id="btnCreateSection"'));
+// Auto-assign was removed from the page. Checked on the button AND the handler,
+// because deleting the markup alone leaves working JS with nothing to fire
+// it, and the page still renders clean - the handler only fails on click.
+check('the Auto-assign button is gone', !str_contains($b, 'id="btnAutoAssign"'));
+check('and no JS still wires it up', !str_contains($b, 'btnAutoAssign')
+    && !str_contains($b, "'assign_sections'"));
+// AI search was removed from the page. Checked on the button, the handler,
+// the banner it reported into, and the fetch itself - deleting only the
+// button leaves a live function plus a fetch to an endpoint nothing calls.
+check('the AI search button is gone', !str_contains($b, 'id="aiSearchBtn"'));
+check('and no JS still wires it up', !str_contains($b, 'runAiSearch')
+    && !str_contains($b, 'aiSearchBtn')
+    && !str_contains($b, 'aiInterpretation')
+    && !str_contains($b, 'aiExplanation'));
+check('the page no longer calls the AI search endpoint',
+    !str_contains($b, 'masterlist-ai-search.php'));
+check('urlParamSafe went with it', !str_contains($b, 'function urlParamSafe'));
+// Create Section is gone entirely - the button, the modal, and the handlers.
+// Checked on the JS too because deleting only the markup leaves functions
+// wired to element ids that no longer exist, which throws on page load.
+check('the Create Section button is gone', !str_contains($b, 'id="btnCreateSection"'));
+check('the Create Section modal is gone', !str_contains($b, 'id="createSectionModal"'));
+check('no JS still wires Create Section up', !str_contains($b, 'openCreateSectionModal')
+    && !str_contains($b, 'closeCreateSectionModal')
+    && !str_contains($b, 'createSectionAndOpen')
+    && !str_contains($b, 'function refreshSectionCode'));
+// The create modal was the only caller of the next_section code lookup.
+check('the page no longer asks for a next section code',
+    !str_contains($b, "'next_section'"));
+// Deleting a function the Escape handler still called throws a ReferenceError
+// on keypress and strands every modal after it in the chain.
+check('the Escape handler has no dead calls',
+    preg_match("/if \(e\.key === 'Escape'\) \{([^}]*)\}/", $b, $m) === 1
+    && !str_contains($m[1], 'closeCreateSectionModal'));
+// Sections that already exist are still manageable - the chips, the edit
+// modal and the workspace must survive, or there is no way left to place a
+// student at all once both creation paths are gone.
+check('existing sections are still editable', str_contains($b, 'class="ml-section-chip')
+    && str_contains($b, 'id="editSectionModal"')
+    && str_contains($b, 'id="sectionWorkspaceModal"')
+    && str_contains($b, 'onclick="manageSectionStudents()"'));
+// The toolbar is now just the search box and Filter.
+check('the toolbar no longer holds a section button',
+    !str_contains($b, 'masterlist-create-section'));
+// The plain search box must still filter on its own, and it is now the only
+// way to search - its input listener is what does it.
+check('the search box still filters on input',
+    str_contains($b, 'id="masterlistSearch"')
+    && preg_match('/getElementById\(.masterlistSearch.\)/', $b) === 1);
+// The hand-off row is Prepare Full List -> Send List -> Export, in that order.
+check('the output group is prepare, send, export, in order',
+    preg_match('/id="btnPrepareList".*?onclick="sendList\(\)".*?id="exportBtn"/s', $b) === 1);
+check('the status line still reports unassigned students',
+    str_contains($b, 'id="sectionStatus"'));
 check('has a Section column', str_contains($b, 'data-field="section"'));
 check('section chips are rendered', str_contains($b, 'class="ml-section-chip'));
 check('the status line is rendered', str_contains($b, 'id="sectionStatus"'));
-check('the Create Section modal is present', str_contains($b, 'id="createSectionModal"'));
 check('the workspace modal is present', str_contains($b, 'id="sectionWorkspaceModal"'));
 check('the edit modal is present', str_contains($b, 'id="editSectionModal"'));
 // The Generate button was removed as a duplicate of Filter - Filter has all

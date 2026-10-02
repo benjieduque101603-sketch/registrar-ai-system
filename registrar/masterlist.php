@@ -46,7 +46,7 @@ $filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : 
 // So the rule is: assigned = on the list, unassigned = counted, not listed.
 // The unassigned count is still reported in the header status line, which
 // is how a registrar knows there is work left to do; the "assign students"
-// picker and Auto-assign both read the students table directly
+// picker on the Create/Edit Section modals reads the students table directly
 // ($assignableStudents below), so hiding these rows here costs no ability to
 // place them.
 //
@@ -339,8 +339,6 @@ body[data-page="masterlist"] .main{padding:24px clamp(18px,2.5vw,38px) 48px;back
 .masterlist-search i{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#64748b;font-size:13px;pointer-events:none}
 .masterlist-search input{width:100%;height:40px;box-sizing:border-box;padding:0 12px 0 36px;border:1px solid #cbd5e1;border-radius:9px;background:#f8faff;color:#1e293b;font:13px Inter,sans-serif}
 .masterlist-search input:focus{outline:0;border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.1)}
-.masterlist-ai{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-.masterlist-ai i{color:#7c3aed}
 .masterlist-filter-btn{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
 body[data-page="masterlist"] .card{border:1px solid #dbeafe!important;border-radius:16px!important;background:#fff!important;box-shadow:0 8px 24px rgba(15,23,42,.045)!important}
 body[data-page="masterlist"] .masterlist-section-block{overflow:hidden;margin-bottom:16px!important;border:1px solid #dbeafe!important;border-radius:16px!important;box-shadow:0 8px 24px rgba(15,23,42,.045)!important}
@@ -623,7 +621,7 @@ body[data-page="masterlist"] .masterlist-table tbody tr:last-child td{border-bot
 }
 .ml-table-tag i{color:#94a3b8;font-size:11px}
 .ml-table-tag span{color:#475569;font-weight:700;font-variant-numeric:tabular-nums}
-@media(max-width:640px){.masterlist-header{padding:21px 18px}.masterlist-header h1{font-size:25px}.masterlist-actionbar{flex-direction:column}.masterlist-action-group{width:100%}.masterlist-action-buttons .btn{flex:1 1 100%;justify-content:center}.masterlist-toolbar{align-items:stretch}.masterlist-search{flex-basis:100%}.masterlist-ai,.masterlist-filter-btn{justify-content:center}}
+@media(max-width:640px){.masterlist-header{padding:21px 18px}.masterlist-header h1{font-size:25px}.masterlist-actionbar{flex-direction:column}.masterlist-action-group{width:100%}.masterlist-action-buttons .btn{flex:1 1 100%;justify-content:center}.masterlist-toolbar{align-items:stretch}.masterlist-search{flex-basis:100%}.masterlist-filter-btn{justify-content:center}}
 /* Narrow widths. The fixed tracks add up to more than a phone can show, and
    a fixed-layout table squeezed below that does not reflow - it crushes the
    one flexible track, which is the name, down to a single letter. So the table
@@ -644,27 +642,33 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
         <div>
             <div class="masterlist-kicker"><i class="fas fa-table-list"></i> Registrar directory</div>
             <h1>Masterlist</h1>
-            <p>Search, filter, and send the full student list. Auto-assign fills sections in batches of up to <?= (int) $sectionCap ?>, using the code format 11001 (year 1, 1st semester, section 1).</p>
+            <p>Search, filter, and send the full student list. Open a section chip in a block heading to rename it or change who is in it. Codes follow the format 11001 (year 1, 1st semester, section 1).</p>
         </div>
     </header>
 
-    <!-- Action bar: section tools + output -->
+    <!-- Action bar: one group. Both section-creation entry points (auto-assign
+         and Create Section) are gone, so the bar no longer splits into
+         "section tools" and "output". What is left is the hand-off, and the
+         status line under it still reports the work that has yet to be done. -->
     <section class="masterlist-actionbar" aria-label="Masterlist actions">
         <div class="masterlist-action-group">
-            <span class="masterlist-action-label">Section tools</span>
+            <span class="masterlist-action-label">Output &amp; handoff</span>
             <div class="masterlist-action-buttons">
-                <button type="button" class="btn btn-primary" id="btnAutoAssign"
-                        title="Fill existing sections first, then open new ones only when needed (<?= (int) $sectionCap ?> max each)">
-                    <i class="fas fa-wand-magic-sparkles"></i> Auto-assign
-                </button>
-                <button type="button" class="btn btn-secondary" id="btnCreateSection"
-                        title="Create one section by hand, then add students to it">
-                    <i class="fas fa-plus-circle"></i> Create Section
-                </button>
-                <button type="button" class="btn btn-secondary" id="btnPrepareList"
+                <button type="button" class="btn btn-primary" id="btnPrepareList"
                         title="Show every student who has a section, with no filters applied">
                     <i class="fas fa-list-check"></i> Prepare Full List
                 </button>
+                <button type="button" class="btn btn-primary" onclick="sendList()" title="Send the masterlist to the Academic Strand / Course Assignment module (CMS)">
+                    <i class="fas fa-paper-plane"></i> Send List
+                </button>
+                <div class="export-wrap" style="position:relative;">
+                    <button class="btn btn-secondary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
+                    <div class="export-menu" id="exportMenu" style="position:absolute;top:100%;right:0;z-index:50;background:white;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.1);min-width:160px;padding:4px;margin-top:4px;display:none;">
+                        <a href="#" onclick="exportCSV()" style="display:block;padding:8px 12px;font-size:12px;font-weight:600;color:#1e293b;text-decoration:none;border-radius:6px;"><i class="fas fa-file-csv"></i> Export CSV</a>
+                        <a href="#" onclick="exportExcel()" style="display:block;padding:8px 12px;font-size:12px;font-weight:600;color:#1e293b;text-decoration:none;border-radius:6px;"><i class="fas fa-file-excel"></i> Export Excel</a>
+                        <a href="#" onclick="window.print()" style="display:block;padding:8px 12px;font-size:12px;font-weight:600;color:#1e293b;text-decoration:none;border-radius:6px;"><i class="fas fa-file-pdf"></i> Export PDF</a>
+                    </div>
+                </div>
             </div>
             <p class="masterlist-section-status" id="sectionStatus">
                 <?php if ($studentsTotal === 0): ?>
@@ -681,22 +685,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 <?php endif; ?>
             </p>
         </div>
-        <div class="masterlist-action-group">
-            <span class="masterlist-action-label">Output &amp; handoff</span>
-            <div class="masterlist-action-buttons">
-                <button type="button" class="btn btn-primary" onclick="sendList()" title="Send the masterlist to the Academic Strand / Course Assignment module (CMS)">
-                    <i class="fas fa-paper-plane"></i> Send List
-                </button>
-                <div class="export-wrap" style="position:relative;">
-                    <button class="btn btn-secondary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
-                    <div class="export-menu" id="exportMenu" style="position:absolute;top:100%;right:0;z-index:50;background:white;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.1);min-width:160px;padding:4px;margin-top:4px;display:none;">
-                        <a href="#" onclick="exportCSV()" style="display:block;padding:8px 12px;font-size:12px;font-weight:600;color:#1e293b;text-decoration:none;border-radius:6px;"><i class="fas fa-file-csv"></i> Export CSV</a>
-                        <a href="#" onclick="exportExcel()" style="display:block;padding:8px 12px;font-size:12px;font-weight:600;color:#1e293b;text-decoration:none;border-radius:6px;"><i class="fas fa-file-excel"></i> Export Excel</a>
-                        <a href="#" onclick="window.print()" style="display:block;padding:8px 12px;font-size:12px;font-weight:600;color:#1e293b;text-decoration:none;border-radius:6px;"><i class="fas fa-file-pdf"></i> Export PDF</a>
-                    </div>
-                </div>
-            </div>
-        </div>
     </section>
 
     <?php if ($prepared): ?>
@@ -705,15 +693,15 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
         </div>
     <?php endif; ?>
 
-    <!-- Toolbar: search bar + filter button -->
+    <!-- Toolbar: the search box and Filter. Create Section is gone - a new
+         section code is no longer minted from this page; the chips in the
+         block headings still open Edit / Manage Students for sections that
+         already exist. -->
     <section class="masterlist-toolbar" aria-label="Masterlist filters">
         <div class="masterlist-search">
             <i class="fas fa-search"></i>
             <input type="text" id="masterlistSearch" name="q" class="form-control" placeholder="Search by name, student no., course…">
         </div>
-        <button type="button" class="btn btn-secondary masterlist-ai" id="aiSearchBtn" title="Ask AI to build the filters for you - e.g. 'at-risk BSIT 3rd year'">
-            <i class="fas fa-wand-magic-sparkles"></i> AI
-        </button>
         <button type="button" class="btn btn-primary masterlist-filter-btn" onclick="openFilterSearchModal()">
             <i class="fas fa-sliders"></i> Filter
             <?php if ($anyFilterActive): ?>
@@ -725,12 +713,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
         </label>
         <span style="font-size:13px;color:#64748b;">Showing <strong id="showingCount"><?= $totalStudents ?></strong> student(s)</span>
     </section>
-
-    <!-- AI interpretation banner (below the search bar) -->
-    <div id="aiInterpretation" style="display:none;padding:10px 14px;background:#eef4ff;border:1px solid #bfdbfe;border-radius:10px;margin-bottom:16px;box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
-        <i class="fas fa-brain" style="color:#2563eb;"></i>
-        <span id="aiExplanation" style="color:#1e40af;margin-left:8px;font-size:13px;"></span>
-    </div>
 
     <!-- Bulk action bar -->
     <div class="bulk-bar" id="bulkBar" style="display:none;padding:10px 16px;background:#eef4ff;border:1px solid #bfdbfe;border-radius:12px;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
@@ -759,7 +741,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                         <p style="margin:0;">
                             <?= (int) $unassignedCount ?> student(s) on file have not been assigned to a section yet,
                             and this list only shows students who have one.
-                            Use <strong>Auto-assign sections</strong> or <strong>Assign Students</strong> above to place them.
+                            Open a section chip in a block heading and use <strong>Manage Students</strong> to place them.
                         </p>
                     <?php else: ?>
                         <p style="margin:0;">There are no students on file yet.</p>
@@ -1135,47 +1117,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
     </div>
 </div>
 
-<!-- Create Section Modal -->
-<!-- Creating a section does not create a section record: there is no
-     sections table. It computes the next free code and opens the
-     workspace on it, and the code only exists once students are
-     actually assigned to it. That is why the primary button says
-     "Create & Assign" - it is honest that the write happens on the
-     students, and it means a section can never be created empty and
-     then forgotten. -->
-<div class="modal-overlay" id="createSectionModal">
-    <div class="modal-content" style="max-width: 560px;">
-        <div class="modal-header"><h2 style="font-size:18px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:10px;"><i class="fas fa-plus-circle" style="color:#2563eb;"></i> Create Section</h2><button class="modal-close" onclick="closeCreateSectionModal()"><i class="fas fa-times"></i></button></div>
-        <div class="modal-body">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                <div class="form-group"><label>Course</label><select id="csCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Year Level</label><select id="csYear" class="form-control"><option value="">Select</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
-                <div class="form-group"><label>Semester</label><select id="csSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
-                <div class="form-group"><label>School Year</label><input type="text" id="csSchoolYear" class="form-control" placeholder="2026-2027" list="csSyOptions"><datalist id="csSyOptions"><?php foreach ($schoolYears as $row): ?><option value="<?= htmlspecialchars($row['school_year']) ?>"><?php endforeach; ?></datalist></div>
-                <div class="form-group" style="grid-column:span 2;">
-                    <label>Section Code</label>
-                    <!-- The suggested code is shown but not editable. An
-                         override here would let someone type a code whose
-                         year and semester digits contradict the two selects
-                         above, and the list would then print a section that
-                         says 2nd semester inside a 1st-semester block. Rename
-                         an existing section instead - that path checks the
-                         code against the students actually in it. -->
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                        <div id="csCode" style="font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:18px;font-weight:700;color:#2563eb;min-width:90px;">—</div>
-                        <span style="font-size:12px;color:#94a3b8;">Next free code for this course, year and term.</span>
-                    </div>
-                </div>
-            </div>
-            <p id="csError" style="color:#dc2626;font-size:13px;margin-top:8px;display:none;"></p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeCreateSectionModal()">Cancel</button>
-            <button class="btn btn-primary" id="csCreateBtn" onclick="createSectionAndOpen()"><i class="fas fa-user-check"></i> Create &amp; Assign Students</button>
-        </div>
-    </div>
-</div>
-
 <!-- Edit Section Modal -->
 <div class="modal-overlay" id="editSectionModal">
     <div class="modal-content" style="max-width: 560px;">
@@ -1221,7 +1162,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
 </div>
 
 <script>
-const MAX_PER_SECTION = <?= (int) $sectionCap ?>;
 const ASSIGNABLE_STUDENTS = <?= json_encode($assignableStudents) ?>;
 const RFID_MAP = <?= json_encode(array_map(fn($c) => ['card_uid' => $c['card_uid'], 'status' => $c['status'], 'expiry_date' => $c['expiry_date']], $rfidMap)) ?>;
 const ADVISER_NAMES = <?= json_encode($adviserNames) ?>;
@@ -1232,122 +1172,6 @@ const SECTION_SUMMARIES = <?= json_encode(array_map(fn($s) => [
     'section'   => (string) $s['section'],
     'count'     => (int) $s['count'],
 ], $sectionSummaries)) ?>;
-
-// ─── AUTO-ASSIGN ───────────────────────────────────────────────
-// The one-click path. Fills the gaps in sections that already exist
-// and only opens a new code once every existing one is at the cap, so
-// running it twice does not renumber anybody. The dialog says what it
-// will do before it does it, because the write touches every
-// unassigned student in one transaction and there is no undo button.
-document.getElementById('btnAutoAssign')?.addEventListener('click', async function () {
-    const btn = this;
-    const ok = await confirmAction({
-        title: 'Auto-assign sections',
-        body: 'Give a section code to every student who does not have one?<br><br>'
-            + 'Students are grouped by course, year level and term, and split into sections of at most '
-            + '<strong>' + MAX_PER_SECTION + '</strong>. Existing sections are filled first, so codes already '
-            + 'assigned do not change. Students with no year level are skipped and reported back.',
-        confirmLabel: 'Assign sections'
-    });
-    if (!ok) return;
-    btn.disabled = true;
-    const original = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Assigning…';
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'assign_sections', max_per_section: MAX_PER_SECTION })
-        });
-        const d = await r.json();
-        if (!d.success) { showToast(d.message || 'Failed to assign sections.', 'error'); return; }
-        showToast(d.message || 'Sections assigned.', 'success');
-        // Reload rather than patch: the block headings carry the section
-        // chips and the status line carries the unassigned count, and both
-        // are server-rendered. A local update would leave them stale.
-        setTimeout(() => window.location.reload(), 700);
-    } catch (e) {
-        showToast('Network error. Please try again.', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = original;
-    }
-});
-
-// ─── CREATE SECTION ────────────────────────────────────────────
-function openCreateSectionModal() {
-    document.getElementById('csCourse').value = '';
-    document.getElementById('csYear').value = '';
-    document.getElementById('csSemester').value = '';
-    document.getElementById('csError').style.display = 'none';
-    document.getElementById('csCode').textContent = '—';
-    document.getElementById('createSectionModal').classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-function closeCreateSectionModal() {
-    document.getElementById('createSectionModal').classList.remove('active');
-    document.body.style.overflow = '';
-}
-document.getElementById('btnCreateSection')?.addEventListener('click', openCreateSectionModal);
-document.getElementById('createSectionModal')?.addEventListener('click', function (e) {
-    if (e.target === this) closeCreateSectionModal();
-});
-
-// The suggested code refreshes as the three inputs settle. These are
-// selects, so 'change' fires once on commit rather than on every
-// keystroke - three lookups per character was the alternative.
-['csCourse', 'csYear', 'csSemester'].forEach(function (id) {
-    document.getElementById(id)?.addEventListener('change', refreshSectionCode);
-});
-async function refreshSectionCode() {
-    const course = document.getElementById('csCourse').value;
-    const year   = document.getElementById('csYear').value;
-    const sem    = document.getElementById('csSemester').value;
-    const codeEl = document.getElementById('csCode');
-    if (!course || !year || !sem) { codeEl.textContent = '—'; return; }
-    try {
-        const r = await fetch('../api/masterlist.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'next_section', course: course, year_level: parseInt(year, 10), semester: sem })
-        });
-        const d = await r.json();
-        codeEl.textContent = d.success ? d.code : '—';
-    } catch (e) { codeEl.textContent = '—'; }
-}
-
-function createSectionAndOpen() {
-    const course = document.getElementById('csCourse').value;
-    const year   = document.getElementById('csYear').value;
-    const sem    = document.getElementById('csSemester').value;
-    const schoolYear = document.getElementById('csSchoolYear').value.trim();
-    const errEl  = document.getElementById('csError');
-
-    if (!course || !year || !sem) {
-        errEl.textContent = 'Course, year level and semester are all required — the code is built from them.';
-        errEl.style.display = 'block';
-        return;
-    }
-    // The code is checked here rather than trusted, because "—" is a
-    // legitimate thing for that element to hold: it means the lookup
-    // did not come back. Opening the workspace on "—" would create a
-    // section literally named "—".
-    const code = document.getElementById('csCode').textContent.trim();
-    if (!/^[0-9]{5}$/.test(code)) {
-        errEl.textContent = 'Could not work out a section code. Check the year level and semester, then try again.';
-        errEl.style.display = 'block';
-        return;
-    }
-    closeCreateSectionModal();
-    openSectionWorkspace({
-        course: course,
-        year_level: parseInt(year, 10),
-        semester: sem,
-        school_year: schoolYear,
-        section: code,
-        isNew: true
-    });
-}
 
 // ─── DUPLICATE SECTION CODE ───────────────────────────────────
 // A code is only unique within one program + year + term, which is
@@ -2252,63 +2076,6 @@ function ucfirst(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 // ─── ESC CLOSE ───────────────────────────────────────────────
 // ??? SEARCH & FILTER MODAL ????????????????????????????????
-// SMART SEARCH: natural language -> masterlist filters
-const aiSearchBtn = document.getElementById('aiSearchBtn');
-const aiInterpretation = document.getElementById('aiInterpretation');
-const aiExplanation = document.getElementById('aiExplanation');
-
-function urlParamSafe(val) {
-    return val !== undefined && val !== null && String(val).trim() !== '';
-}
-
-async function runAiSearch() {
-    const query = searchInput.value.trim();
-    if (query.length < 3) {
-        showToast('Type at least 3 characters for the AI search.', 'warning');
-        return;
-    }
-    aiSearchBtn.disabled = true;
-    aiSearchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> AI';
-    aiInterpretation.style.display = 'none';
-    try {
-        const res = await fetch('../api/masterlist-ai-search.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query })
-        });
-        const data = await res.json();
-        if (!data.success || !data.data) {
-            throw new Error(data.message || 'AI search failed.');
-        }
-        const f = data.data.filter || {};
-        const p = new URLSearchParams();
-        if (urlParamSafe(f.course)) p.set('course', f.course);
-        if (urlParamSafe(f.year_level)) p.set('year_level', f.year_level);
-        if (urlParamSafe(f.school_year)) p.set('school_year', f.school_year);
-        if (urlParamSafe(f.semester)) p.set('semester', f.semester);
-        if (urlParamSafe(f.section)) p.set('section', f.section);
-        if (urlParamSafe(f.status)) p.set('status', f.status);
-        if (Array.isArray(f.keywords) && f.keywords.length) p.set('q', f.keywords.join(' '));
-        aiExplanation.textContent = f.explanation || 'Filters applied.';
-        aiInterpretation.style.display = 'block';
-        const target = 'masterlist.php' + (p.toString() ? '?' + p.toString() : '');
-        setTimeout(() => { window.location.href = target; }, 700);
-    } catch (err) {
-        console.error(err);
-        aiExplanation.textContent = 'AI search failed. Check that the AI server is running, or use the filters below.';
-        aiExplanation.style.color = '#b91c1c';
-        aiInterpretation.style.background = '#fef2f2';
-        aiInterpretation.style.borderColor = '#fecaca';
-        aiInterpretation.style.display = 'block';
-    } finally {
-        aiSearchBtn.disabled = false;
-        aiSearchBtn.innerHTML = '<i class="fas fa-wand-magic-sparkles" style="color:#7c3aed;"></i> AI';
-    }
-}
-
-if (aiSearchBtn) {
-    aiSearchBtn.addEventListener('click', runAiSearch);
-}
 
 // Restore a search query passed via ?q=
 const qParam = new URLSearchParams(window.location.search).get('q');
@@ -2328,7 +2095,7 @@ function closeFilterSearchModal() {
 document.getElementById('filterSearchModal').addEventListener('click', function (e) { if (e.target === this) closeFilterSearchModal(); });
 
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeViewModal(); closeFilterSearchModal(); closeCreateSectionModal(); closeEditSection(); closeSectionWorkspace(); }
+    if (e.key === 'Escape') { closeViewModal(); closeFilterSearchModal(); closeEditSection(); closeSectionWorkspace(); }
 });
 
 // ---- SEND LIST / HAND-OFF (CMS) ----

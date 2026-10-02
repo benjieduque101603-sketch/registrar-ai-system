@@ -257,7 +257,7 @@ $timeout = isset($_GET['timeout']) ? true : false;
             </div>
             <div class="left-body">
                 <h1>Registrar Management System</h1>
-                <p class="subtitle">AI-Powered Records Management</p>
+                <p class="subtitle">AI-Supported Records Management</p>
                 <p><span>Registrar</span> is the process of managing student records, documents, RFID cards, and academic history.</p>
             </div>
         </div>
