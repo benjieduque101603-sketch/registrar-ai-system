@@ -10,7 +10,8 @@ which document templates may populate real data versus print `N/A`.
 |---|---|
 | Personal Info Database | ✅ In scope — `students` (except **section** — see below) |
 | Guardian & Emergency Contact | ✅ In scope — `guardians`, `emergency_contacts` |
-| Academic History | ✅ In scope — `academic_history` |
+| Academic History (records) | 🔄 **Faculty-owned** — `academic_history`, `academic_grades`. See below. |
+| Academic History (templates) | ✅ In scope — the printable grade record the Registrar issues |
 | Health Record Log | ✅ In scope — `health_records`, `health_visits` |
 | RFID/QR Code Integration | ✅ In scope — `rfid_cards`, `rfid_scan_logs` |
 | Student ID Generation | ✅ In scope — `student_ids` |
@@ -18,6 +19,46 @@ which document templates may populate real data versus print `N/A`.
 | Student Status Tracker | ✅ In scope — `status_tracker` |
 | Digital File Storage | ✅ In scope — `documents` |
 | Student Masterlist Generator | ✅ In scope — `registrar/masterlist.php` |
+
+### Academic History — CHANGED 2026-10-02: Faculty owns the grades
+
+**Faculty Management #296 now owns the grade record. The Registrar reads it.**
+
+This supersedes the earlier "✅ In scope — `academic_history`". The tables
+have not moved and nothing was dropped; what changed is which office may
+**write** them.
+
+| | Owner | Registrar's role |
+|---|---|---|
+| `academic_grades` (subjects, units, ratings, status) | Faculty #296 | Read-only |
+| `academic_history` (term, semester, school year) | Faculty #296 | Read-only |
+| Computed GWA | Registrar | **Computed here, from the recorded ratings** |
+| Printable grade record / template | Registrar | Produced here |
+
+Concretely, in this repository:
+
+- `registrar/academic-history.php` has no grade editor. `addGradeRow()`,
+  `removeGradeRow()`, `readGrid()`, `saveGrades()` and the Add-subject and
+  Remove controls are gone, not disabled.
+- `api/students.php?action=save-academic` and `…=delete-academic` now return
+  **409** with the reason, rather than 404. A 404 would read as an unknown
+  action; a 409 says the endpoint exists, the boundary moved, and where the
+  data comes from now.
+- `js/bcp-letterhead.js` is the shared letterhead used by both the AI Insight
+  report and the printable grade record.
+
+**Why computed GWA stays ours.** Once Faculty owns the grades, a number typed
+in two places is a number that can disagree. `academic_history` therefore
+carries `gwa_reported` (Faculty's) and `gwa_computed` (ours, from
+`shared/term_grades.php`) **side by side**, and the printable record prints the
+computed figure. A disagreement is *printed*, never silently resolved — a
+document that quietly picks one of two conflicting numbers is worse than one
+that admits there are two.
+
+**Not yet decided:** where the Faculty data actually comes from. The local
+read path is source-agnostic (`source_system` / `source_ref` / `faculty_id` /
+`received_at`, see `migrations/grades_faculty_source.sql`) so that an API sync
+or a file import can be attached later without changing the pages above.
 
 ### Note on "Section" — RESOLVED: the Masterlist assigns sections
 

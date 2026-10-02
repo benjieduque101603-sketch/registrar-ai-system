@@ -27,7 +27,169 @@ const GRADE_SCALE_MIN = 1.0;
 const GRADE_SCALE_MAX = 5.0;
 
 /** A GWA at or above this is treated as a concern by the status rules. */
+/** A GWA at or above this is treated as a concern by the status rules. */
 const GWA_AT_RISK = 3.0;
+
+/**
+ * The grade_status vocabulary, in one place.
+ *
+ * This list MUST stay identical to the `grade_status` ENUM on
+ * academic_grades. It was not, and the mismatch was silent and lossy: the
+ * column allowed 'incomplete' but the grading dropdown only offered
+ * passed / failed / dropped, so a row saved as 'incomplete' reopened with
+ * no matching <option>, the select fell back to "Not set", and the next
+ * save wrote NULL over a real value. tests/GradeStatusVocabularyTest.php
+ * asserts the two agree, so the drift cannot come back.
+ *
+ * 'incomplete' is kept, not removed: it is a genuine state (midterm done,
+ * final not yet) and may already be present in data.
+ *
+ * @return array<int, array{value: string, label: string}>
+ */
+function gradeStatusOptions(): array {
+    return [
+        ['value' => '',           'label' => 'Not set'],
+        ['value' => 'passed',     'label' => 'Passed'],
+        ['value' => 'failed',     'label' => 'Failed'],
+        ['value' => 'incomplete', 'label' => 'Incomplete'],
+        ['value' => 'dropped',    'label' => 'Dropped'],
+    ];
+}
+
+/** The subset with a meaning: excludes the empty "not set". */
+function gradeStatusValues(): array {
+    return array_values(array_filter(array_column(gradeStatusOptions(), 'value')));
+}
+
+/** Is this a status the column can actually store? */
+function gradeStatusValid(?string $s): bool {
+    return $s !== null && in_array($s, gradeStatusValues(), true);
+}
+
+// ============================================================
+//  Faculty grade source contract
+//
+//  Where the grades actually come from is STILL UNDECIDED — an API sync, a
+//  file import, or a nightly dump. Nothing above this line should care.
+//
+//  So the read path is defined as an interface and satisfied locally. The
+//  pages and the printable template call these three functions and cannot
+//  tell whether the rows behind them arrived from a REST call or are sitting
+//  in our own tables. When the decision is made, a second implementation is
+//  added behind the same contract; no page changes.
+//
+//  The local implementation is deliberately thin: it reads what the Faculty
+//  sync has already written. It does not invent data, and it never fails a
+//  print because Faculty is unreachable — a document that cannot be produced
+//  when a remote system is down is worse than one printed from the last
+//  known figures, provided the last sync is stated on the document.
+// ============================================================
+
+/**
+ * Every term record held for a student, newest school year last.
+ *
+ * @return array<int, array{
+ *   id:int, school_year:?string, semester:?string,
+ *   gwa:?float, gwa_reported:?float, gwa_computed:?float, credits:?float,
+ *   source:string, received_at:?string
+ * }>
+ */
+function gradesFetchTerm(int $studentId): array {
+    $db = Database::getInstance();
+    return $db->fetchAll(
+        "SELECT h.id, h.school_year, h.semester, h.gwa,
+                h.gwa_reported, h.gwa_computed, h.credits,
+                COALESCE(g.source_system, 'faculty') AS source,
+                MAX(g.received_at) AS received_at
+           FROM academic_history h
+           LEFT JOIN academic_grades g ON g.academic_history_id = h.id
+          WHERE h.student_id = ?
+          GROUP BY h.id, h.school_year, h.semester, h.gwa,
+                   h.gwa_reported, h.gwa_computed, h.credits,
+                   g.source_system
+          ORDER BY COALESCE(h.school_year, ''), COALESCE(h.semester, ''), h.id",
+        [$studentId]
+    );
+}
+
+/** The subjects for one term record, in the order Faculty supplied them. */
+function gradesFetchSubjects(int $termId): array {
+    $db = Database::getInstance();
+    return $db->fetchAll(
+        "SELECT id, subject, subject_code, units, final_rating, grade,
+                grade_status, instructor, source_system, source_ref,
+                faculty_id, received_at, instructor_confirmed
+           FROM academic_grades
+          WHERE academic_history_id = ?
+          ORDER BY id ASC",
+        [$termId]
+    );
+}
+
+/**
+ * When the most recent Faculty data arrived.
+ *
+ * Returned for every student as well as globally, because a registrar
+ * looking at one student with an empty term needs to know whether Faculty
+ * has never sent anything or has sent something this office has not picked
+ * up. Those are different problems and the number distinguishes them.
+ *
+ * @return array{global:?string, by_student:array<int, ?string>}
+ */
+function gradesLastSync(?int $studentId = null): array {
+    $db = Database::getInstance();
+
+    $global = $db->fetchColumn(
+        'SELECT MAX(received_at) FROM academic_grades'
+    );
+
+    $byStudent = [];
+    if ($studentId !== null) {
+        // The key is set even when the value is null, deliberately. A
+        // missing key and a present-but-null key are different answers —
+        // "this student has no grade rows" versus "we did not ask" — and
+        // array access on a missing key raises a warning and yields null
+        // anyway, which collapses the two into something indistinguishable.
+        $byStudent[$studentId] = $db->fetchColumn(
+            'SELECT MAX(g.received_at) FROM academic_grades g
+               JOIN academic_history h ON h.id = g.academic_history_id
+              WHERE h.student_id = ?',
+            [$studentId]
+        );
+    }
+
+    return ['global' => $global, 'by_student' => $byStudent];
+}
+
+/**
+ * Trigger a fetch of everything Faculty has for this student.
+ *
+ * Local implementation: the rows are already here — a sync wrote them — so
+ * this confirms the local copy is current and stamps nothing. It exists so
+ * callers have the verb they will need, and so a real implementation can be
+ * dropped in without touching a page.
+ *
+ * The result is deliberately explicit about WHERE the data came from. A
+ * caller must never have to guess whether "synced" means "asked Faculty" or
+ * "read our own tables" — those are different guarantees and pretending
+ * otherwise is how a stale record gets certified.
+ *
+ * @return array{ok:bool, source:string, terms:int, last_sync:?string, detail:string}
+ */
+function gradesSyncAll(int $studentId): array {
+    $terms = gradesFetchTerm($studentId);
+    $last  = gradesLastSync($studentId)['by_student'][$studentId] ?? null;
+
+    return [
+        'ok'        => true,
+        'source'    => 'local',
+        'terms'     => count($terms),
+        'last_sync' => $last,
+        'detail'    => 'Grades are held in this office\'s own tables, written by '
+            . 'the Faculty sync. No remote call was made. Last received: '
+            . ($last ?? 'never'),
+    ];
+}
 
 /**
  * The office these term records belong to.

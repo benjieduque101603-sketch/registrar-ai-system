@@ -76,3 +76,12 @@ logs/*.log
 tests/preview_qr.svg
 tests/*.svg
 node_modules/
+
+# Screenshots written to the repo ROOT by a headless probe run. These land
+# wherever the command was invoked from, so a bare *.png rule would also
+# swallow the icons and logos under assets/images. Named explicitly instead.
+academic_print.png
+insights_print.png
+insights_print_page1.png
+ah_design_*.png
+ah_print*.png

@@ -1,20 +1,33 @@
 <?php
 // ============================================================
+// ============================================================
 //  REGISTRAR/ACADEMIC-HISTORY.PHP
-//  Term grading workspace.
+//  Read-only view of term records, and the printable grade template.
 //
-//  This page used to import previous schools. That was wrong twice
-//  over. academic_history is consumed as TERMS by the TOR, Form 137 and
-//  the student grade views, and the save-academic endpoint behind it
-//  could not record a semester subject, a final rating, or a computed
-//  GWA at all. So the page described records nobody was making.
+//  BOUNDARY CHANGE 2026-10-02. Grades are owned by Faculty Management #296;
+//  this office reads them. The grading editor is gone: addGradeRow(),
+//  removeGradeRow(), readGrid(), saveGrades(), the Add-subject and Remove
+//  controls, and the whole save-academic/delete-academic API path. See
+//  DEPARTMENTS.md.
 //
-//  It is now the workspace for grading a term: pick the term, filter the
-//  roster, enter final ratings, and check the term before closing it.
+//  History, kept because the shape of the mistake is the reason the current
+//  boundary matters. The page once imported previous schools, which was
+//  wrong twice over: academic_history is consumed as TERMS by the TOR, Form
+//  137 and the student grade views, and the save endpoint behind it could not
+//  record a semester subject, a final rating, or a computed GWA at all — so
+//  the page described records nobody was making. Then it became a grading
+//  workspace, which put a second, competing owner on a record that only one
+//  office can legitimately own. Two owners is how a GWA ends up typed twice
+//  and disagreeing.
 //
-//  The GWA is computed in shared/term_grades.php and stored by the save
-//  path from that same computation, so the status rules and the TOR read
-//  one number rather than two. Staff do not type it.
+//  What remains here is the Registrar's actual job: show the terms Faculty
+//  has sent, per student, with provenance and last-sync detail, and produce
+//  the printable grade record.
+//
+//  The GWA printed is OUR computation (shared/term_grades.php over the
+//  recorded ratings), not Faculty's reported figure. Both are stored, side
+//  by side, and a disagreement is printed rather than silently resolved.
+// ============================================================
 // ============================================================
 
 require_once __DIR__ . '/../shared/security_headers.php';
@@ -35,7 +48,7 @@ $db = Database::getInstance();
 require_once __DIR__ . '/../shared/csrf_guard.php';
 $csrfToken = csrfToken();
 
-// ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Which term? ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+// ── Which term? ──────────────────────────────────────────────
 // The term is chosen first and everything below is scoped to it, because
 // a term is the unit of work here. Grading one is not a per-student
 // action repeated 200 times; it is a single pass over a list.
@@ -114,7 +127,32 @@ if ($sy === '' && $years) {
 // actually resolve rather than echoing back a typo.
 $termCanonical = $sy . ' ' . $sem;
 
-// ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Roster filters ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/**
+ * Short form of a program for the roster's narrow column.
+ *
+ * The stored value is the full degree name, which runs to ~55 characters
+ * and pushes the figures off the side of a laptop screen. Where the name
+ * carries its own abbreviation in brackets — "…INFORMATION TECHNOLOGY
+ * (BSIT)" — that is what a registrar actually says at the counter, so it
+ * is shown. A name without one keeps its full text rather than being cut
+ * down to an initialism nobody recognises.
+ *
+ * @return string
+ */
+function ahProgramShort(string $program): string
+{
+    $program = trim($program);
+    if ($program === '') {
+        return '';
+    }
+    if (preg_match('/\(([A-Za-z0-9]{2,10})\)\s*$/', $program, $m)) {
+        return strtoupper($m[1]);
+    }
+    return $program;
+}
+
+
+// ── Roster filters ───────────────────────────────────────────
 // Grouped by program and year level, with section as an optional filter.
 // Section is a within-cohort detail; defaulting to it would split the
 // pass into fragments that have to be stitched back together before the
@@ -149,7 +187,7 @@ foreach ($roster as $r) {
 }
 
 
-// ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ What has been recorded for this term? ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+// ── What has been recorded for this term? ────────────────────
 // Joined in one query rather than per student. The page shows a grid for
 // every visible student, and fetching subjects one at a time is the
 // difference between one round trip and two hundred.
@@ -173,7 +211,7 @@ if ($sy !== '' && $visible) {
     }
 }
 
-// ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Per-student picture, and the audit over it ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+// ── Per-student picture, and the audit over it ───────────────
 $rosterForAudit = [];
 $rows = [];
 $termComplete = 0;
@@ -344,10 +382,81 @@ function ah_initials(string $name): string
     return $init;
 }
 
+// ── Career records for the printable template ──────────────────
+//
+// Batched deliberately. The payload maps over every roster row, and a
+// per-student query inside that map would be three round trips per student
+// — 60 queries for a 20-student page, all of it to fill a document only
+// one person at a time will ever print. Two queries serve the whole page,
+// indexed by student id.
+$careerTerms    = [];
+$careerSubjects = [];
+$careerGwas     = [];
+
+if ($rows) {
+    $ids = array_column($rows, 'id');
+    $in  = implode(',', array_fill(0, count($ids), '?'));
+
+    foreach ($db->fetchAll(
+        "SELECT h.student_id, h.school_year, h.semester, h.gwa,
+                h.gwa_computed, h.gwa_reported, h.credits
+           FROM academic_history h
+          WHERE h.student_id IN ($in)
+          ORDER BY COALESCE(h.school_year, ''), COALESCE(h.semester, ''), h.id",
+        $ids
+    ) as $t) {
+        $sid = (int) $t['student_id'];
+        $careerTerms[$sid][] = [
+            'school_year'  => $t['school_year'],
+            'semester'     => $t['semester'],
+            'gwa_stored'   => $t['gwa'],
+            'gwa_computed' => $t['gwa_computed'],
+            'gwa_reported' => $t['gwa_reported'],
+            'credits'      => $t['credits'],
+        ];
+        // The last row in this ordering is the most recently graded term,
+        // so its stored GWA is the cumulative figure the rest of the system
+        // already shows. Kept rather than recomputed, so the template
+        // cannot print a number the screen disagrees with.
+        $careerGwas[$sid] = $t['gwa'];
+    }
+
+    // Keyed "SY|SEM" so the template can pair each heading with its rows.
+    foreach ($db->fetchAll(
+        "SELECT h.student_id, h.school_year, h.semester,
+                g.subject, g.subject_code, g.units, g.final_rating,
+                g.grade, g.grade_status, g.instructor
+           FROM academic_grades g
+           JOIN academic_history h ON h.id = g.academic_history_id
+          WHERE h.student_id IN ($in)
+          ORDER BY COALESCE(h.school_year, ''), COALESCE(h.semester, ''), g.id",
+        $ids
+    ) as $g) {
+        $sid   = (int) $g['student_id'];
+        $syKey = (string) ($g['school_year'] ?? '') . '|'
+               . (string) ($g['semester'] ?? '');
+        $careerSubjects[$sid][$syKey][] = [
+            'subject'      => (string) $g['subject'],
+            'subject_code' => (string) ($g['subject_code'] ?? ''),
+            'units'        => $g['units'],
+            'final_rating' => $g['final_rating'],
+            'grade'        => (string) ($g['grade'] ?? ''),
+            'grade_status' => (string) ($g['grade_status'] ?? ''),
+            'instructor'   => (string) ($g['instructor'] ?? ''),
+        ];
+    }
+}
+
 $payload = json_encode([
     'sy'       => $sy,
     'sem'      => $sem,
+    // Kept in the payload even though the page no longer writes. The CSRF
+    // token is still needed by anything on the page that posts, and the
+    // print action is the one remaining thing a registrar may trigger.
     'csrf'     => $csrfToken,
+    'logoUrl'  => '../assets/images/BCP_LOGO.png',
+    'school'   => 'College of Computer Studies',
+    'printedOn'=> date('F j, Y'),
     // Initials are computed here rather than in JS so the dialog tile and
     // the roster use one helper, the same one the other registrar pages
     // call, instead of two implementations of "first and last letter".
@@ -375,6 +484,14 @@ $payload = json_encode([
         'units'    => $r['units'],
         'state'    => $r['state'],
         'missing'  => $r['missing'],
+        // The student's whole record, not just the term on screen. The
+        // printable template is a career document: it lists every term
+        // Faculty has sent, with a cumulative GWA. Printing only the term
+        // in view would make it useless as the transcript-shaped artefact
+        // it is meant to be.
+        'career'   => $careerTerms[(int) $r['id']] ?? [],
+        'careerGwa' => $careerGwas[(int) $r['id']] ?? null,
+        'careerSubjects' => $careerSubjects[(int) $r['id']] ?? [],
     ], $rows),
 ], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
 
@@ -386,6 +503,10 @@ $APP_ROOT = '../';
 // carries no inline CSS, which is what keeps it looking like the rest
 // of the portal rather than like a separate application.
 $extra_css = ['academic-history.css'];
+// bcp-letterhead.js supplies BCPPrint.printDocument(), which
+// printGradeTemplate() calls. It must load before the inline script below
+// runs. footer.php cache-busts each by mtime.
+$page_scripts = ['bcp-letterhead.js'];
 $ACTIVE_NAV = 'academic';
 include '../includes/header.php';
 include '../includes/sidebar.php';
@@ -394,106 +515,100 @@ include '../includes/sidebar.php';
 <main class="dashboard-main">
 <div class="dashboard-container">
 
-<header class="ah-header">
+<?php
+// ── Head ──────────────────────────────────────────────────────
+// The house header: kicker, title, one plain sentence, and the actions on
+// the right. The rating scale rides along as a chip rather than a second
+// paragraph, because it is reference information and the description is
+// the page's subject.
+//
+// The header also states ownership. That is the fact a registrar most needs
+// confirmed here: grades are maintained by Faculty, this office reads them
+// and issues the printed record.
+?>
+<header class="ah-head">
     <div>
-        <div class="ah-kicker"><i class="fa-solid fa-clipboard-check"></i> Term grading</div>
+        <div class="ah-kicker">
+            <i class="fa-solid fa-clipboard-list"></i> Term records
+        </div>
         <h1>Academic History</h1>
         <p>
-            Record final ratings by term. The GWA is computed from the ratings you enter and
-            stored with the term, so the transcript, the TOR and the status rules all read the
-            same figure.
+            Term grades maintained by Faculty Management. The Registrar reads them and
+            issues the printed record. Select a student to open their term.
         </p>
     </div>
     <div class="header-actions">
         <span class="ah-scale-chip">
-            <i class="fa-solid fa-arrow-down-wide-short"></i> 1.00 is best, 5.00 is worst
+            <i class="fa-solid fa-arrow-down-wide-short"></i> 1.00 best, 5.00 worst
         </span>
-        <button class="btn btn-light" type="button" onclick="openAudit()">
-            <i class="fa-solid fa-stethoscope"></i> Check before closing
+        <button class="btn btn-light" type="button" data-audit>
+            <i class="fa-solid fa-stethoscope"></i> Check this term
         </button>
     </div>
 </header>
 
 <?php
-// The term and the search are not a bar of their own. They are the
-// roster's own controls, so they live inside the roster panel: the term
-// says which term this table is, and the search says which rows of it
-// you are looking at. Sitting them between the header and the summary
-// made them read as a separate thing, and it is not one.
-//
-// The term still submits as a GET, so the URL names the term: one
-// term's roster can be shared, and Back returns to the previous one.
+// "Awaiting grades" is the actionable figure, so it is the one metric whose
+// value carries a tone. A mean is shown only once there is something to
+// average: the average of nothing is not 0.00, it is absent, and the metric
+// says so rather than reporting a number.
 ?>
-<?php // "Awaiting" is the actionable figure, so it is the only cell that does
-// not sit in the default blue. A mean is only shown once there is
-// something to average: the average of nothing is not 0.00, it is
-// absent, and the cell says so rather than reporting a number.
-//
-// Every card keeps its own tone whether or not it currently has something
-// to report. Awaiting used to swap its tone for the neutral empty
-// treatment, which made it the one card in the row that could go grey
-// while the others stayed coloured - and the tone is the whole point of
-// the row, because it is what tells you which figure you must act on. An
-// empty card now steps back in weight instead of stepping out of colour.
-?>
-<section class="ah-stats" aria-label="Term summary">
-    <div class="ah-stat" data-tone="view">
-        <span class="ah-stat-icon"><i class="fa-solid fa-users"></i></span>
-        <div>
-            <p class="ah-stat-value"><?= count($visible) ?></p>
-            <p class="ah-stat-label">In view</p>
-            <p class="ah-stat-note"><?= $program !== '' ? htmlspecialchars($program) : 'All programs' ?></p>
-        </div>
+<section class="ah-strip" aria-label="Term summary">
+    <div class="ah-metric is-view">
+        <p class="ah-label">In view</p>
+        <p class="ah-value"><?= count($visible) ?></p>
+        <p class="ah-note"><?= $program !== '' ? htmlspecialchars($program) : 'All programs' ?></p>
     </div>
-    <div class="ah-stat" data-tone="done"<?= $termComplete === 0 ? ' data-empty="true"' : '' ?>>
-        <span class="ah-stat-icon"><i class="fa-solid fa-circle-check"></i></span>
-        <div>
-            <p class="ah-stat-value"><?= $termComplete ?></p>
-            <p class="ah-stat-label">Complete</p>
-            <p class="ah-stat-note"><?= $termComplete === 0 ? 'none graded yet' : 'every subject has a final rating' ?></p>
-        </div>
+    <div class="ah-metric is-done"<?= $termComplete === 0 ? ' data-empty="true"' : '' ?>>
+        <p class="ah-label">Complete</p>
+        <p class="ah-value"><?= $termComplete ?></p>
+        <p class="ah-note"><?= $termComplete === 0 ? 'none graded yet' : 'every subject rated' ?></p>
     </div>
-    <div class="ah-stat" data-tone="wait"<?= $termMissing === 0 ? ' data-empty="true"' : '' ?>>
-        <span class="ah-stat-icon"><i class="fa-solid fa-hourglass-half"></i></span>
-        <div>
-            <p class="ah-stat-value"><?= $termMissing ?></p>
-            <p class="ah-stat-label">Awaiting grades</p>
-            <p class="ah-stat-note"><?= $termMissing > 0 ? 'not started or incomplete' : 'nothing outstanding' ?></p>
-        </div>
+    <div class="ah-metric is-wait"<?= $termMissing === 0 ? ' data-empty="true"' : '' ?>>
+        <p class="ah-label">Awaiting grades</p>
+        <p class="ah-value"><?= $termMissing ?></p>
+        <p class="ah-note"><?= $termMissing > 0 ? 'not started or incomplete' : 'nothing outstanding' ?></p>
     </div>
-    <div class="ah-stat" data-tone="mean"<?= $termMeanGwa === null ? ' data-empty="true"' : '' ?>>
-        <span class="ah-stat-icon"><i class="fa-solid fa-chart-simple"></i></span>
-        <div>
-            <p class="ah-stat-value"><?= $termMeanGwa === null ? '&mdash;' : number_format($termMeanGwa, 2) ?></p>
-            <p class="ah-stat-label">Mean term GWA</p>
-            <p class="ah-stat-note"><?= $termMeanGwa === null ? 'nothing recorded' : 'across recorded terms' ?></p>
-        </div>
+    <div class="ah-metric is-mean"<?= $termMeanGwa === null ? ' data-empty="true"' : '' ?>>
+        <p class="ah-label">Mean term GWA</p>
+        <p class="ah-value"><?= $termMeanGwa === null ? '&mdash;' : number_format($termMeanGwa, 2) ?></p>
+        <p class="ah-note"><?= $termMeanGwa === null ? 'nothing recorded' : 'across recorded terms' ?></p>
     </div>
-    <div class="ah-stat" data-tone="violet"<?= $career === null ? ' data-empty="true"' : '' ?>>
-        <span class="ah-stat-icon"><i class="fa-solid fa-graduation-cap"></i></span>
-        <div>
-            <p class="ah-stat-value"><?= $career === null ? '&mdash;' : number_format($career, 2) ?></p>
-            <p class="ah-stat-label">Career GWA</p>
-            <p class="ah-stat-note">
-                <?= $career === null
-                    ? 'no ratings on file'
-                    : 'over ' . rtrim(rtrim(number_format($careerUnits, 0), '0'), '.') . ' units' ?>
-            </p>
-        </div>
+    <div class="ah-metric is-career"<?= $career === null ? ' data-empty="true"' : '' ?>>
+        <p class="ah-label">Career GWA</p>
+        <p class="ah-value"><?= $career === null ? '&mdash;' : number_format($career, 2) ?></p>
+        <p class="ah-note">
+            <?= $career === null
+                ? 'no ratings on file'
+                : 'over ' . rtrim(rtrim(number_format($careerUnits, 0), '0'), '.') . ' units' ?>
+        </p>
     </div>
 </section>
 
-<?php // The roster. The GWA shown is the one the server computed and stored, not a figure typed here. ?>
-<section class="ah-panel">
-    <form class="ah-panel-controls" method="get" action="academic-history.php" id="termForm">
-        <div class="ah-term-field">
-            <label for="fltTerm">Term</label>
-            <?php // The input and its submit button share one control. The
-                  // button is inside the form and inside the field, so
-                  // pressing Enter in the box submits, and the grid still
-                  // has three cells and one row. See the note on
-                  // ah-term-control in the stylesheet. ?>
-            <div class="ah-term-control">
+<?php if ($termProblem !== ''): ?>
+    <p class="ah-notice" role="status">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <?= $termProblem ?>
+    </p>
+<?php endif; ?>
+
+<?php // The roster panel. The term and the find box live in its toolbar,
+        // where the other registrar pages put their filters.
+//
+// The form carries NO submit button. It commits itself when a value is
+// committed (change, or Enter), which removes a control without removing
+// the ability to change term — two separate problems, one of which needed
+// a control. ?>
+<section class="panel">
+    <form class="panel-toolbar" method="get" action="academic-history.php" id="termForm">
+        <div class="panel-title">
+            <i class="fa-solid fa-list-check" aria-hidden="true"></i>
+            Roster
+        </div>
+
+        <div class="header-actions">
+            <div class="form-group" style="margin:0">
+                <label class="ah-sr-only" for="fltTerm">Term</label>
                 <input
                     class="form-control"
                     type="text"
@@ -503,301 +618,153 @@ include '../includes/sidebar.php';
                     placeholder="2026-2028 1st"
                     autocomplete="off"
                     spellcheck="false"
-                    list="termHints"
+                    style="width:190px"
                     aria-describedby="termHelp"
                 >
-                <button class="ah-term-submit" type="submit" aria-label="Load this term">
-                    <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
-                </button>
             </div>
-            <?php // Real terms, as suggestions. Not a dropdown: the box
-                  // accepts anything and resolves it, and this only saves
-                  // typing the years that already exist. ?>
-            <datalist id="termHints">
-                <?php foreach ($years as $y): ?>
-                    <?php foreach ($SEMESTERS as $s): ?>
-                        <option value="<?= htmlspecialchars($y . ' ' . $s) ?>"></option>
-                    <?php endforeach; ?>
-                <?php endforeach; ?>
-            </datalist>
-            <?php // Sighted readers get the placeholder and the
-                  // suggestions; this is here so the box is not silent
-                  // about what it accepts. Kept out of the flow: a third
-                  // line under one cell is what broke the row alignment
-                  // the first time round. ?>
             <span class="ah-sr-only" id="termHelp">
                 School year and semester, in any order. For example 2026-2028 1st.
             </span>
-        </div>
 
-        <div class="ah-term-readout">
-            <strong><?= htmlspecialchars(termLabel($sy, $sem)) ?></strong>
-            <span id="ahCountReadout"><?= count($visible) ?> student<?= count($visible) === 1 ? '' : 's' ?> in view</span>
-        </div>
-
-        <div class="ah-search">
-            <label class="ah-search-label" for="rosterSearch">Find in this term</label>
-            <div class="ah-search-box">
-                <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            <div class="form-group" style="margin:0;position:relative">
+                <label class="ah-sr-only" for="rosterSearch">Find in this term</label>
                 <input
+                    class="form-control"
                     type="search"
                     id="rosterSearch"
-                    placeholder="Name, number, program, section"
+                    placeholder="Search by name, number, program…"
                     autocomplete="off"
                     spellcheck="false"
+                    style="width:260px"
                 >
-                <button class="ah-search-clear" type="button" id="ahSearchClear" hidden aria-label="Clear search">
-                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
-                </button>
             </div>
         </div>
     </form>
 
-    <?php if ($termProblem !== ''): ?>
-        <p class="ah-term-warning" role="status">
-            <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-            <?= $termProblem ?>
-        </p>
-    <?php endif; ?>
-
-    <div class="ah-panel-head">
-        <h2>Roster</h2>
-        <?php if ($visible): ?>
-            <span class="ah-sub">
-                <?= $termComplete ?> complete &middot; <?= $termMissing ?> still to grade
-            </span>
-        <?php endif; ?>
-        <div class="spacer"></div>
-        <?php if ($visible): ?>
-            <span class="ah-sub">GWA is computed from the ratings you enter.</span>
-        <?php endif; ?>
-    </div>
-
-    <?php if (!$visible): ?>
-        <div class="ah-empty">
-            <span class="ah-empty-icon"><i class="fa-solid fa-folder-open"></i></span>
-            <?php if ($program !== '' || $section !== ''): ?>
-                <h3>No students match these filters</h3>
-                <p>
-                    The program and section together match nobody. Clearing them shows the
-                    whole roster.
-                </p>
-                <a class="btn btn-light" href="academic-history.php?term=<?= urlencode($termCanonical) ?>">
-                    <i class="fa-solid fa-filter-circle-xmark"></i> Clear filters
-                </a>
-            <?php else: ?>
-                <h3>No active students to grade</h3>
-                <p>Archived students are left out of this page on purpose.</p>
-            <?php endif; ?>
-        </div>
-    <?php else: ?>
-        <div class="ah-table-wrap">
+<?php if (!$visible): ?>
+        <div class="table-responsive">
             <table class="table">
-                <thead>
-                    <tr>
-                        <th scope="col">Student</th>
-                        <th scope="col">Program</th>
-                        <th scope="col">Level</th>
-                        <th scope="col">Section</th>
-                        <th scope="col">Subjects</th>
-                        <th scope="col">Units</th>
-                        <th scope="col">Term GWA</th>
-                        <th scope="col">State</th>
-                        <th scope="col"><span class="ah-sr">Actions</span></th>
-                    </tr>
-                </thead>
                 <tbody>
-                <?php foreach ($rows as $r): ?>
-                    <?php
-                    // Lower is better on this scale, so the bands run the
-                    // opposite way round from a school average.
-                    $band = 'none';
-                    if ($r['gwa'] !== null) {
-                        $band = $r['gwa'] < GWA_AT_RISK - 0.5 ? 'good'
-                              : ($r['gwa'] < GWA_AT_RISK ? 'warn' : 'poor');
-                    }
-                    $stateLabel = [
-                        'complete' => 'Complete',
-                        'partial'  => $r['missing'] . ' missing',
-                        'none'     => 'Not started',
-                    ][$r['state']];
-                    $initials = ah_initials($r['name']);
-                    ?>
-                    <tr data-ah-search="<?= htmlspecialchars(strtolower(implode(' ', [
+                <tr><td>
+                    <div class="ah-empty-state">
+                        <i class="fa-solid fa-folder-open" aria-hidden="true"></i>
+                        <?php if ($program !== '' || $section !== ''): ?>
+                            <p>No students match these filters</p>
+                            <span>The program and section together match nobody.</span>
+                        <?php else: ?>
+                            <p>No active students in this term</p>
+                            <span>Archived students are left out of this page on purpose.</span>
+                        <?php endif; ?>
+                    </div>
+                </td></tr>
+                </tbody>
+            </table>
+        </div>
+<?php else: ?>
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th scope="col">Student</th>
+                    <th scope="col" class="ah-col-opt">Program</th>
+                    <th scope="col" class="ah-col-sec" data-num>Units</th>
+                    <th scope="col" class="ah-col-sec" data-num>Subjects</th>
+                    <th scope="col" data-num>Term GWA</th>
+                    <th scope="col">Record</th>
+                </tr>
+            </thead>
+<?php foreach ($rows as $r): ?>
+                <?php
+                // Lower is better on this scale, so the bands run the
+                // opposite way round from a school average.
+                $band = 'none';
+                if ($r['gwa'] !== null) {
+                    $band = $r['gwa'] < GWA_AT_RISK - 0.5 ? 'good'
+                          : ($r['gwa'] < GWA_AT_RISK ? 'warn' : 'poor');
+                }
+                $stateLabel = [
+                    'complete' => 'Complete',
+                    'partial'  => $r['missing'] . ' missing',
+                    'none'     => 'Not received',
+                ][$r['state']];
+                ?>
+                <tr data-ah-row
+                    data-student="<?= (int) $r['id'] ?>"
+                    data-search="<?= htmlspecialchars(strtolower(implode(' ', [
                         $r['name'], $r['number'], $r['program'],
                         $r['level'], $r['section'],
                     ]))) ?>">
-                        <td>
-                            <div class="ah-name"><?= htmlspecialchars($r['name']) ?></div>
-                            <div class="ah-num"><?= htmlspecialchars($r['number']) ?></div>
-                        </td>
-                        <td><?= htmlspecialchars($r['program'] ?: '—') ?></td>
-                        <td><?= htmlspecialchars($r['level'] ?: '—') ?></td>
-                        <td><?= htmlspecialchars($r['section'] ?: '—') ?></td>
-                        <td class="ah-num"><?= count($r['subjects']) ?: '—' ?></td>
-                        <td class="ah-num">
-                            <?= $r['units'] > 0
-                                ? rtrim(rtrim(number_format($r['units'], 2), '0'), '.')
-                                : '—' ?>
-                        </td>
-                        <td>
-                            <span class="ah-gwa" data-band="<?= $band ?>">
-                                <?= $r['gwa'] === null ? 'no data' : number_format($r['gwa'], 2) ?>
-                            </span>
-                        </td>
-                        <td>
-                            <span class="badge ah-state" data-state="<?= $r['state'] ?>"><?= $stateLabel ?></span>
-                        </td>
-                        <td>
-                            <div class="ah-actions">
-                                <button class="btn btn-light" type="button" onclick="openView(<?= (int) $r['id'] ?>)">
-                                    <i class="fa-solid fa-eye"></i> View
-                                </button>
-                                <button class="btn btn-light" type="button" onclick="openGrades(<?= (int) $r['id'] ?>)">
-                                    <i class="fa-solid fa-pen"></i> Grades
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-                <tbody class="ah-search-empty" id="ahSearchEmpty" hidden>
-                    <tr>
-                        <td colspan="8">
-                            <h3>No student matches that</h3>
-                            <p id="ahSearchEmptyText">Check the spelling, or clear the search to see the whole term.</p>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="ah-panel-foot">
-            <?= count($visible) ?> student<?= count($visible) === 1 ? '' : 's' ?> in
-            <?= htmlspecialchars(termLabel($sy, $sem)) ?>.
-            Open a student's grades to enter final ratings; the GWA updates as you type.
-        </div>
-    <?php endif; ?>
+
+                    <td>
+                        <div class="ah-id-cell">
+                            <?php // The forward step. A real <button> so the row
+                            // is keyboard reachable and correctly announced,
+                            // with no chrome of its own — the whole row is
+                            // the target. ?>
+                            <button class="ah-open" type="button" aria-expanded="false"
+                                    aria-controls="rec-<?= (int) $r['id'] ?>">
+                                <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+                                <?= htmlspecialchars($r['name']) ?>
+                            </button>
+                            <span class="ah-num"><?= htmlspecialchars($r['number'] !== '' ? $r['number'] : 'No number on file') ?></span>
+                        </div>
+                    </td>
+
+                    <td class="ah-muted ah-col-opt">
+                        <?= htmlspecialchars(ahProgramShort($r['program']) ?: '—') ?>
+                    </td>
+                    <td data-num class="ah-fig ah-col-sec">
+                        <?= $r['units'] > 0
+                            ? rtrim(rtrim(number_format($r['units'], 2), '0'), '.')
+                            : '—' ?>
+                    </td>
+                    <td data-num class="ah-fig ah-col-sec">
+                        <?= count($r['subjects']) ?: '—' ?>
+                    </td>
+                    <td data-num>
+                        <span class="ah-gwa" data-band="<?= $band ?>">
+                            <?= $r['gwa'] === null ? '—' : number_format($r['gwa'], 2) ?>
+                        </span>
+                    </td>
+                    <td>
+                        <span class="status-badge ah-state" data-state="<?= $r['state'] ?>">
+                            <span class="status-dot"></span><?= $stateLabel ?>
+                        </span>
+                    </td>
+                </tr>
+
+                <?php // The record. Hidden until its row is opened, filled by
+                // openRecord(), and printed from here rather than from a
+                // per-row button repeated on every line. ?>
+                <tr class="ah-detail" id="rec-<?= (int) $r['id'] ?>" data-ah-detail hidden>
+                    <td colspan="6">
+                        <div class="ah-record" data-ah-record></div>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="ah-panel-foot">
+        Showing <?= count($visible) ?> of <?= count($visible) ?>
+        student<?= count($visible) === 1 ? '' : 's' ?> in
+        <?= htmlspecialchars(termLabel($sy, $sem)) ?>.
+    </div>
+
+    <div class="ah-empty-state" data-ah-nomatch hidden>
+        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+        <p>No student matches that</p>
+        <span></span>
+    </div>
+<?php endif; ?>
 </section>
+
+<?php // The panel and the container close here, before the modal, which
+// lives outside the page flow so it is not announced until it is opened. ?>
 </div>
 </main>
-
-<?php
-// ah_initials() is defined above, next to the payload that uses it.
-//
-// Grade entry: one student's term. The GWA preview below the grid is
-// recomputed as the user types, using the same weighting the server will
-// apply, so what they see before saving is what gets stored.
-?>
-<div class="modal-overlay ah-dialog" id="gradeModal" role="dialog" aria-modal="true" aria-labelledby="gradeModalTitle">
-    <div class="modal-content">
-        <div class="ah-dialog-head">
-            <div>
-                <div class="ah-dialog-kicker">Final ratings</div>
-                <h3 id="gradeModalTitle">Grade this term</h3>
-            </div>
-            <button class="modal-close" type="button" onclick="closeGrades()" aria-label="Close">
-                <i class="fa-solid fa-xmark"></i>
-            </button>
-        </div>
-
-        <div class="ah-dialog-body">
-            <div class="ah-who">
-                <span class="ah-who-avatar" id="gradeInitials">—</span>
-                <span class="ah-who-copy">
-                    <strong id="gradeName">—</strong>
-                    <span id="gradeMeta">—</span>
-                </span>
-                <span class="ah-who-term" id="gradeTerm">—</span>
-            </div>
-
-            <p class="ah-key">
-                <span>Ratings run <b>1.00 to 5.00</b>, lower is better.</span>
-                <span class="ah-key-item"><i class="ah-key-dot" data-band="good"></i> under 2.50</span>
-                <span class="ah-key-item"><i class="ah-key-dot" data-band="warn"></i> 2.50 to 2.99</span>
-                <span class="ah-key-item"><i class="ah-key-dot" data-band="poor"></i> 3.00 and above</span>
-            </p>
-
-            <table class="ah-grid">
-                <thead>
-                    <tr>
-                        <th scope="col">Subject</th>
-                        <th scope="col" class="ah-col-units">Units</th>
-                        <th scope="col" class="ah-col-rating">Final rating</th>
-                        <th scope="col" class="ah-col-result">Result</th>
-                        <th scope="col" class="ah-col-drop"><span class="ah-sr">Remove</span></th>
-                    </tr>
-                </thead>
-                <tbody id="gradeRows"></tbody>
-            </table>
-        </div>
-
-        <div class="ah-dialog-foot">
-            <button class="btn btn-light" type="button" onclick="addGradeRow()">
-                <i class="fa-solid fa-plus"></i> Add subject
-            </button>
-            <div class="spacer"></div>
-            <span class="ah-save-status" id="gradeGwaPreview"></span>
-            <button class="btn btn-primary" type="button" id="btnSaveGrades" onclick="saveGrades()">
-                <i class="fa-solid fa-floppy-disk"></i> Save term
-            </button>
-        </div>
-    </div>
-</div>
-
-<?php
-// The read-only view of the same term. It exists because "look at what
-// is recorded" and "change what is recorded" are different jobs, and
-// sharing one dialog makes the first one feel like a draft.
-//
-// It is read-only by construction, not by convention: there is not a
-// single input in here. Nothing to save, no Add subject, no Remove,
-// and the only control is Close. A registrar can open a term to check
-// it without touching it, which is what checking a closed term means.
-//
-// It reads from the same payload the roster and the editor do, so the
-// figures here are the stored ones, not a second computation.
-?>
-<div class="modal-overlay ah-dialog" id="viewModal" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
-    <div class="modal-content">
-        <div class="ah-dialog-head">
-            <div>
-                <div class="ah-dialog-kicker">Recorded</div>
-                <h3 id="viewModalTitle" tabindex="-1">Grade record</h3>
-            </div>
-            <button class="modal-close" type="button" onclick="closeView()" aria-label="Close">
-                <i class="fa-solid fa-xmark"></i>
-            </button>
-        </div>
-
-        <div class="ah-dialog-body">
-            <div class="ah-who">
-                <span class="ah-who-avatar" id="viewInitials">—</span>
-                <span class="ah-who-copy">
-                    <strong id="viewName">—</strong>
-                    <span id="viewMeta">—</span>
-                </span>
-                <span class="ah-who-term" id="viewTerm">—</span>
-            </div>
-
-            <table class="ah-view-grid">
-                <thead>
-                    <tr>
-                        <th scope="col">Subject</th>
-                        <th scope="col" class="ah-col-units">Units</th>
-                        <th scope="col" class="ah-col-rating">Final rating</th>
-                        <th scope="col" class="ah-col-result">Result</th>
-                    </tr>
-                </thead>
-                <tbody id="viewRows"></tbody>
-            </table>
-        </div>
-
-        <div class="ah-dialog-foot">
-            <div class="spacer"></div>
-            <button class="btn btn-light" type="button" onclick="closeView()">Close</button>
-        </div>
-    </div>
-</div>
+            <tbody>
 
 <?php
 // The pre-close audit. Read-only: it reports what is missing or
@@ -823,22 +790,20 @@ include '../includes/sidebar.php';
 <script>
 'use strict';
 // Server-computed figures. termGwa() in shared/term_grades.php is the
-// reference; the preview below re-implements only the arithmetic so it can
-// run on every keystroke, and tests/term_gwa_parity.js pins the two
-// against the same cases. If one changes, the other has to.
+// reference. Nothing here recomputes a GWA for display: the page shows the
+// number the server stored, so the ledger cannot disagree with the
+// printable record it produces.
 const AH = <?= $payload ?>;
 
 // The audit is computed server-side and rendered here. Findings arrive as
-// data, not as prose written in JS, so the drawer and the save-time
-// validation cannot drift apart.
+// data, not as prose written in JS, so the drawer and the validation
+// cannot drift apart.
 const AH_AUDIT = <?= json_encode([
     'blocking' => $audit['blocking'],
     'advisory' => $audit['advisory'],
     'summary'  => $audit['summary'],
     'stats'    => $audit['stats'],
 ], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>;
-
-let gradeStudent = null;
 
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
@@ -850,529 +815,454 @@ function rowById(id) {
     return AH.rows.find(r => r.id === id) || null;
 }
 
-// ── Search within the term ──────────────────────────────────────
-// Program and section used to be dropdowns that reloaded the page on
-// every change. Searching the roster in place is faster for the way
-// this screen is actually used: a registrar is looking for one
-// student in a term they are already on, not browsing a taxonomy.
-//
-// All the words are OR'd rather than AND'd, so "bsit a" finds every
-// BSIT student in section A. AND-ing them is the behaviour people
-// expect from a file dialog and never what they expect from a name
-// box, where "mendoza" alone has to work.
-(function () {
-    const input    = document.getElementById('rosterSearch');
-    const clearBtn = document.getElementById('ahSearchClear');
-    const empty    = document.getElementById('ahSearchEmpty');
-    const readout  = document.getElementById('ahCountReadout');
-    const table    = document.querySelector('.ah-panel .table');
-    if (!input || !table) return;
-
-    const rows = Array.from(table.querySelectorAll('tbody tr[data-ah-search]'));
-    const total = rows.length;
-
-    function apply() {
-        const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
-        let shown = 0;
-        rows.forEach(row => {
-            // The haystack is precomputed server-side, so this stays
-            // off the row's own text - which would break the moment a
-            // cell contained markup.
-            const hay = row.dataset.ahSearch || '';
-            const hit = terms.length === 0 || terms.some(t => hay.includes(t));
-            row.hidden = !hit;
-            if (hit) shown++;
-        });
-
-        if (empty) {
-            empty.hidden = shown !== 0;
-            const text = document.getElementById('ahSearchEmptyText');
-            if (text && terms.length) {
-                // Name what was looked for. "No results" alone leaves the
-                // reader guessing whether the term is empty or the search
-                // is wrong, and those need opposite responses.
-                text.textContent = 'No student in this term matches “'
-                    + input.value.trim() + '”. Clear the search to see all '
-                    + total + '.';
-            }
-        }
-        if (readout) {
-            readout.textContent = shown === total
-                ? total + (total === 1 ? ' student' : ' students') + ' in view'
-                : shown + ' of ' + total + ' in view';
-        }
-        if (clearBtn) clearBtn.hidden = input.value === '';
-    }
-
-    input.addEventListener('input', apply);
-    input.addEventListener('search', apply);
-    if (clearBtn) {
-        clearBtn.addEventListener('click', () => {
-            input.value = '';
-            apply();
-            input.focus();
-        });
-    }
-    // The term box is a form control, so Enter navigates. The search
-    // box filters what is already on screen, so Enter there should
-    // hand the caret to the first match rather than reload the page.
-    input.addEventListener('keydown', e => {
-        if (e.key !== 'Enter') return;
-        e.preventDefault();
-        const first = rows.find(r => !r.hidden);
-        if (!first) return;
-        const btn = first.querySelector('button');
-        if (btn) btn.focus();
-    });
-    apply();
-})();
-
-/* Weighted term GWA, mirroring termGwa() on the server.
-   A subject with no rating, no units, or an out-of-scale rating cannot
-   contribute: that is missing data, not a zero. */
-function previewGwa(subjects) {
-    let weighted = 0, units = 0;
-    for (const s of subjects) {
-        const u = parseFloat(s.units);
-        const r = s.final_rating === '' ? NaN : parseFloat(s.final_rating);
-        if (!isFinite(u) || u <= 0) continue;
-        if (!isFinite(r) || r < 1 || r > 5) continue;
-        weighted += r * u;
-        units += u;
-    }
-    return units > 0 ? Math.round((weighted / units) * 100) / 100 : null;
-}
-
-/* The 1.00-5.00 bands. Lower is better, so the tints read the same way
-   round here as they do in the roster column and the stat strip. */
-function band(r) {
-    if (!isFinite(r)) return null;
-    if (r < 2.5) return 'good';
-    if (r < 3.0) return 'warn';
-    return 'poor';
-}
-
-// The shared overlay in registrar.css is display:none and toggled with
-// .active, so the closed state is the absence of a class.
-//
-// Focus is handled here rather than at each call site, because the three
-// requirements the WAI-ARIA dialog pattern puts on a modal are properties
-// of "a modal is open", not of any one dialog. The page was carrying
-// aria-modal="true" on dialogs that did not honour any of them, which is
-// the specific combination the pattern warns about: assistive technology
-// is told the rest of the page is inert, and the keyboard disagrees.
-//
-// js/confirm.js already returns focus the same way. Two dialogs that
-// behave differently from the third is how this drifted.
-let lastDialogFocus = null;
-
-function dialogFocusables(dialog) {
-    return Array.from(dialog.querySelectorAll(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), ' +
-        'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )).filter(el => el.offsetParent !== null || el === document.activeElement);
-}
-
-// Where focus lands depends on what the dialog is for, so the caller says
-// rather than the helper guessing. A form wants its first field; a report
-// wants a static element it can announce, because focusing its close
-// button tells a screen reader nothing about what the dialog contains.
-function openDialog(id, initialFocus) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    lastDialogFocus = document.activeElement;
-    el.classList.add('active');
-    document.body.style.overflow = 'hidden';
-
-    const target = initialFocus === true
-        ? dialogFocusables(el)[0]
-        : (typeof initialFocus === 'string' ? el.querySelector(initialFocus) : null);
-    if (target) target.focus();
-}
-
-function closeDialog(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('active');
-    document.body.style.overflow = '';
-    // Return focus to whatever opened the dialog, so a keyboard user is
-    // not dropped at the top of the document and has to re-navigate the
-    // roster. The element is re-checked because the roster is re-rendered
-    // by the reload that follows a save.
-    if (lastDialogFocus && document.contains(lastDialogFocus)) lastDialogFocus.focus();
-    lastDialogFocus = null;
-}
-
-// Tab must not walk out of an open dialog. A modal is declared inert
-// outside itself, so letting focus escape to the filters behind the
-// scrim contradicts the declaration and strands a keyboard user in a part
-// of the page they cannot see.
-document.addEventListener('keydown', e => {
-    if (e.key !== 'Tab') return;
-    const open = document.querySelector('.modal-overlay.active');
-    if (!open) return;
-    const items = dialogFocusables(open);
-    if (!items.length) return;
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-    }
-});
-
-function openGrades(studentId) {
-    const r = rowById(studentId);
-    if (!r) return;
-    gradeStudent = r;
-
-    document.getElementById('gradeInitials').textContent = AH.initials[studentId] || '—';
-    document.getElementById('gradeName').textContent = r.name;
-    document.getElementById('gradeMeta').textContent =
-        r.number + (r.program ? ' · ' + r.program : '') + (r.section ? ' · Section ' + r.section : '');
-    document.getElementById('gradeTerm').textContent = AH.sem + ' · ' + AH.sy;
-
-    const body = document.getElementById('gradeRows');
-    body.innerHTML = '';
-    if (!r.subjects.length) {
-        // One blank row rather than an empty table. A term nobody has
-        // started is the state this page exists to move away from, and an
-        // empty grid offers nowhere to type.
-        body.insertAdjacentHTML('beforeend', gradeRowHtml({subject:'', units:'', final_rating:'', grade_status:''}));
-    } else {
-        r.subjects.forEach(s => body.insertAdjacentHTML('beforeend', gradeRowHtml(s)));
-    }
-    updatePreview();
-    // The grid is filled before the dialog opens, so the helper can find
-    // the first field itself. Focus is the helper's job now, not this
-    // function's: the pattern's requirement belongs to "a modal is open".
-    openDialog('gradeModal', '#gradeRows input');
-}
-
-function closeGrades() { closeDialog('gradeModal'); }
-
-// ── Read-only view ──────────────────────────────────────────────
-// Opens the same term the editor opens, with no way to change it. The
-// figures come from AH.rows, which is the payload the roster table and
-// the editor both read, so this cannot show a different term or a
-// different GWA than the row you clicked.
+/* Rating banding. The same numbers term_js_check.js pins against the
+   server's, because a rating that changes colour but not meaning is worse
+   than one that never changes. GWA_AT_RISK is 3.00 and the good band stops
+   half a point under it. */
 function ratingBand(v) {
-    // Mirrors the roster's banding: GWA_AT_RISK is 3.00 and the good
-    // band stops half a point under it. term_js_check.js pins these
-    // numbers against the server's, because a rating that changes
-    // colour but not meaning is worse than one that never changes.
     if (v === null || v === undefined || v === '') return 'none';
     const n = Number(v);
     if (!isFinite(n)) return 'none';
     return n < 2.5 ? 'good' : (n < 3 ? 'warn' : 'poor');
 }
 
-function openView(studentId) {
+const na = v => (v === null || v === undefined || v === '') ? 'N/A' : v;
+
+// ── The record ────────────────────────────────────────────────
+// Built once per student, on first open, then cached on the element. It is
+// static data — nothing on this page changes a grade — so rebuilding it on
+// every toggle would be pure waste.
+function recordHtml(r) {
+    if (!r.subjects.length) {
+        return '<p class="ah-empty-state" style="padding:1.5rem 0;border:0">'
+            + '<strong>No grades received from Faculty for this term.</strong></p>';
+    }
+
+    const rows = r.subjects.map(s => {
+        const rated = s.final_rating !== null && s.final_rating !== undefined
+            && s.final_rating !== '';
+        return '<tr>'
+            + '<td>' + esc(na(s.subject)) + '</td>'
+            + '<td class="ah-fig">' + esc(na(s.subject_code)) + '</td>'
+            + '<td data-num class="ah-fig">' + esc(na(s.units)) + '</td>'
+            + '<td data-num class="ah-fig">'
+            + (rated ? Number(s.final_rating).toFixed(2) : '<span class="ah-muted">not rated</span>')
+            + '</td>'
+            + '<td>' + esc(na(s.grade)) + '</td>'
+            + '<td>' + esc(na(s.grade_status)) + '</td>'
+            + '</tr>';
+    }).join('');
+
+    return ''
+        + '<div class="ah-record-head">'
+        + '<p class="ah-record-title"><i class="fa-solid fa-book-open"></i>'
+    + esc(AH.sem) + ' Semester &middot; ' + esc(AH.sy) + '</p>'
+        + '<span class="ah-record-meta">' + r.subjects.length + ' subject'
+        + (r.subjects.length === 1 ? '' : 's') + '</span>'
+        + '</div>'
+        + '<table class="table"><thead><tr>'
+        + '<th>Subject</th><th>Code</th><th data-num>Units</th>'
+        + '<th data-num>Final rating</th><th>Grade</th><th>Result</th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table>'
+        + '<div class="ah-record-foot">'
+        // The class is what stands the pairs side by side as figures. A bare
+        // <dl> stacks each label above its value, which reads as a list of
+        // orphaned words rather than two measurements.
+        + '<dl class="ah-record-facts">'
+        + '<div><dt>Term GWA</dt><dd>' + (r.gwa === null ? '—' : Number(r.gwa).toFixed(2)) + '</dd></div>'
+        + '<div><dt>Units</dt><dd>' + (r.units > 0 ? r.units : '—') + '</dd></div>'
+        + '</dl>'
+        + '<button class="ah-print-btn btn btn-light" type="button" data-print="' + r.id + '">'
+        + '<i class="fa-solid fa-print"></i> Print this record</button>'
+        + '</div>';
+}
+
+/* Opens or closes the record under a row.
+
+   Only one is open at a time. Two at once turns the ledger into a stack of
+   panels and you lose the thing you were comparing against, which is the
+   only reason to have a table. */
+function toggleRecord(studentId) {
+    const row = document.querySelector('tr[data-student="' + studentId + '"]');
+    if (!row) return;
+    const detail = document.getElementById('rec-' + studentId);
+    const btn = row.querySelector('.ah-open');
+    if (!detail || !btn) return;
+
+    const isOpen = btn.getAttribute('aria-expanded') === 'true';
+
+    if (isOpen) {
+        detail.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+        return;
+    }
+
     const r = rowById(studentId);
     if (!r) return;
+    const host = detail.querySelector('[data-ah-record]');
+// ── Term box: self-submitting ─────────────────────────────────
+// The page has no submit button anywhere, so this form commits itself.
+// Enter still works (it is a real form), and committing a term reloads the
+// roster for it. Debounced because typing "2026-2028 1st" fires a change on
+// every intermediate value, and reloading five times to render one term is
+// worse than a short wait.
+(function () {
+    const form = document.getElementById('termForm');
+    const input = document.getElementById('fltTerm');
+    if (!form || !input) return;
 
-    document.getElementById('viewInitials').textContent = AH.initials[studentId] || '—';
-    document.getElementById('viewName').textContent = r.name;
-    document.getElementById('viewMeta').textContent =
-        r.number + (r.program ? ' · ' + r.program : '') + (r.section ? ' · Section ' + r.section : '');
-    document.getElementById('viewTerm').textContent = AH.sem + ' · ' + AH.sy;
-
-    const body = document.getElementById('viewRows');
-    body.innerHTML = '';
-
-    if (!r.subjects.length) {
-        // Say so rather than showing an empty ruled table. A term with
-        // no subjects is a real state and it is the reason this row is
-        // in the roster at all.
-        body.insertAdjacentHTML('beforeend',
-            '<tr><td colspan="4" class="ah-view-blank">' +
-            'No subjects recorded for this term yet.' +
-            '</td></tr>');
-    } else {
-        r.subjects.forEach(s => body.insertAdjacentHTML('beforeend', viewRowHtml(s)));
-        // The transcript's bottom line. A ledger has to end in a total,
-        // otherwise the reader is left adding the column up by hand.
-        const shown = r.units === null || r.units === undefined
-            ? ''
-            : ' · ' + String(r.units).replace(/\.00$/, '') + ' units';
-        body.insertAdjacentHTML('beforeend',
-            '<tr class="ah-view-total"><td>' + r.subjects.length + ' subject' +
-            (r.subjects.length === 1 ? '' : 's') + shown + '</td>' +
-            '<td class="ah-col-units"></td>' +
-            '<td class="ah-col-rating"><span class="ah-gwa" data-band="' +
-            ratingBand(r.gwa) + '">' +
-            (r.gwa === null || r.gwa === undefined ? 'no data' : Number(r.gwa).toFixed(2)) +
-            '</span></td>' +
-            '<td class="ah-col-result"><span class="badge ah-state" data-state="' +
-            esc(r.state) + '">' + esc(viewStateLabel(r)) + '</span></td></tr>');
+    let timer = null;
+    function commit() {
+        clearTimeout(timer);
+        timer = setTimeout(() => form.submit(), 700);
     }
 
-    // The title, not a control: this dialog has nothing to fill in, and
-    // focusing its Close button tells a screen reader nothing about what
-    // it contains. Same reasoning as the audit drawer.
-    openDialog('viewModal', '#viewModalTitle');
-}
-
-function viewStateLabel(r) {
-    if (r.state === 'complete') return 'Complete';
-    if (r.state === 'partial') return r.missing + ' missing';
-    return 'Not started';
-}
-
-function viewRowHtml(s) {
-    const rated = s.final_rating !== null && s.final_rating !== undefined && s.final_rating !== '';
-    const result = s.grade_status || '';
-    // An unrated subject says "not rated" in words. A blank cell in a
-    // ledger is read as "nothing to see here", which is the opposite of
-    // what an empty final rating means.
-    // A ledger column of ratings has to line up, so every figure is
-    // written to two decimals. The stored value is 1.5, 2 and 1.75
-    // depending on who typed it, and "1.5" sitting next to "1.75" in
-    // the same column reads as two different precisions rather than
-    // two different grades.
-    const rating = rated
-        ? '<span class="ah-view-rating" data-band="' + ratingBand(s.final_rating) + '">' +
-            Number(s.final_rating).toFixed(2) + '</span>'
-        : '<span class="ah-view-rating" data-band="none">not rated</span>';
-    return '<tr>' +
-        '<td>' + (esc(s.subject) || '<span class="ah-view-blank-inline">Untitled subject</span>') +
-            (s.subject_code ? ' <span class="ah-view-code">' + esc(s.subject_code) + '</span>' : '') +
-        '</td>' +
-        '<td class="ah-col-units ah-num">' + (Number(s.units) > 0 ? esc(s.units) : '—') + '</td>' +
-        '<td class="ah-col-rating">' + rating + '</td>' +
-        '<td class="ah-col-result">' + (result
-            ? '<span class="ah-view-result" data-result="' + esc(result) + '">' + esc(result) + '</span>'
-            : '<span class="ah-view-blank-inline">—</span>') + '</td>' +
-        '</tr>';
-}
-
-function closeView() { closeDialog('viewModal'); }
-
-function gradeRowHtml(s) {
-    const st = s.grade_status || '';
-    const result = ['passed', 'failed', 'dropped', ''].map(o =>
-        '<option value="' + o + '"' + (st === o ? ' selected' : '') + '>' +
-        (o === '' ? 'Not set' : o.charAt(0).toUpperCase() + o.slice(1)) + '</option>').join('');
-    return '<tr>' +
-        '<td><input class="form-control" type="text" data-f="subject" value="' + esc(s.subject) + '" placeholder="Subject name"></td>' +
-        '<td class="ah-col-units"><input class="form-control ah-in-num" type="number" data-f="units" min="0" max="12" step="0.5" value="' + esc(s.units) + '"></td>' +
-        '<td class="ah-col-rating"><input class="form-control ah-in-num" type="number" data-f="final_rating" min="1" max="5" step="0.01" value="' +
-            esc(s.final_rating === null ? '' : s.final_rating) + '"></td>' +
-        '<td class="ah-col-result"><select class="form-control" data-f="grade_status">' + result + '</select></td>' +
-        '<td class="ah-col-drop"><button class="ah-drop" type="button" onclick="removeGradeRow(this)" aria-label="Remove subject">' +
-            '<i class="fa-solid fa-trash-can"></i></button></td>' +
-    '</tr>';
-}
-
-function readGrid() {
-    return Array.from(document.querySelectorAll('#gradeRows tr')).map(tr => {
-        const o = {};
-        tr.querySelectorAll('[data-f]').forEach(el => { o[el.dataset.f] = el.value.trim(); });
-        return o;
-    }).filter(s => s.subject !== '');
-}
-
-function addGradeRow() {
-    const body = document.getElementById('gradeRows');
-    body.insertAdjacentHTML('beforeend', gradeRowHtml({subject:'', units:'', final_rating:'', grade_status:''}));
-    const rows = body.querySelectorAll('tr');
-    rows[rows.length - 1].querySelector('input').focus();
-}
-
-function removeGradeRow(btn) {
-    btn.closest('tr').remove();
-    updatePreview();
-}
-
-/* Recompute the preview and repaint the rating cells.
-   Out-of-scale and missing values are marked here, so the grid says the
-   save will fail before the user presses it rather than after. */
-function updatePreview() {
-    const subjects = readGrid();
-    const gwa = previewGwa(subjects);
-
-    document.querySelectorAll('#gradeRows tr').forEach(tr => {
-        const input = tr.querySelector('[data-f="final_rating"]');
-        const raw = input.value.trim();
-        input.removeAttribute('aria-invalid');
-        input.removeAttribute('data-band');
-        if (raw === '') return;
-        const v = parseFloat(raw);
-        if (!isFinite(v) || v < 1 || v > 5) {
-            // Named on the cell itself, not only in the bar below, so the
-            // reason travels with the field the user is looking at.
-            input.setAttribute('aria-invalid', 'true');
-            input.title = 'Ratings run from 1.00 to 5.00. This value cannot be averaged.';
-            return;
-        }
-        const b = band(v);
-        if (b) input.setAttribute('data-band', b);
+    input.addEventListener('change', commit);
+    input.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        clearTimeout(timer);
+        form.submit();
     });
+})();
 
-    const bad = subjects.filter(s => {
-        if (s.final_rating === '') return true;
-        const v = parseFloat(s.final_rating);
-        return !isFinite(v) || v < 1 || v > 5;
-    });
+// ── Search within the term ────────────────────────────────────
+// Program and section used to be dropdowns that reloaded the page on every
+// change. Searching the roster in place is faster for the way this screen is
+// actually used: a registrar is looking for one student in a term they are
+// already on, not browsing a taxonomy.
+//
+// Words are OR'd rather than AND'd, so "bsit a" finds every BSIT student in
+// section A. AND-ing is what people expect from a file dialog and never what
+// they expect from a name box, where "mendoza" alone must work.
+(function () {
+    const input = document.getElementById('rosterSearch');
+    const nomatch = document.querySelector('[data-ah-nomatch]');
+    const table = document.querySelector('.table');
+    if (!input || !table) return;
 
-    const out = document.getElementById('gradeGwaPreview');
-    if (bad.length) {
-        out.dataset.tone = 'bad';
-        out.textContent = bad.length + ' subject' + (bad.length === 1 ? '' : 's') +
-            ' still need' + (bad.length === 1 ? 's' : '') + ' a valid rating before saving.';
-    } else if (gwa === null) {
-        out.dataset.tone = '';
-        out.textContent = subjects.length ? 'No units to average yet.' : 'Add the subjects taken this term.';
-    } else {
-        out.dataset.tone = 'good';
-        out.textContent = subjects.length + ' subject' + (subjects.length === 1 ? '' : 's') +
-            ' · term GWA ' + gwa.toFixed(2);
-    }
-}
+    const rows = Array.from(table.querySelectorAll('tr[data-ah-row]'));
+    const total = rows.length;
 
-/* Saving posts the term and lets the server decide. The GWA is not sent
-   from here: it is computed server-side from the same ratings, so there is
-   no value on the wire for a stale client to overwrite. */
-async function saveGrades() {
-    if (!gradeStudent) return;
-    const subjects = readGrid();
-    const btn = document.getElementById('btnSaveGrades');
-    const out = document.getElementById('gradeGwaPreview');
-    btn.disabled = true;
-    out.dataset.tone = '';
-    out.textContent = 'Saving…';
+    function apply() {
+        const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
 
-    try {
-        const res = await fetch('../api/students.php?action=save-academic', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                // Required by shared/csrf_guard.php. The token is bound to
-                // the session, so a save from a stale tab is refused and the
-                // user is told to reload rather than silently losing work.
-                'X-CSRF-Token': AH.csrf || '',
-            },
-            body: JSON.stringify({
-                student_id: gradeStudent.id,
-                school_year: AH.sy,
-                semester: AH.sem,
-                grade_level: gradeStudent.level,
-                grades: subjects,
-            }),
+        rows.forEach(row => {
+            // The haystack is precomputed server-side, so this stays off the
+            // row's own text - which would break the moment a cell contained
+            // markup.
+            const hay = row.dataset.search || '';
+            const hit = terms.length === 0 || terms.some(t => hay.includes(t));
+            row.hidden = !hit;
+
+            // The record belongs to its row. Hiding one without hiding the
+            // other leaves an expanded record with no name above it.
+            const detail = document.getElementById('rec-' + row.dataset.student);
+            if (detail && !hit) detail.hidden = true;
+
+            if (hit) shown++;
         });
-        const data = await res.json();
 
-        if (data.success) {
-            out.dataset.tone = 'good';
-            out.textContent = data.message;
-            // Reload rather than patching the table in place: the stored
-            // GWA, the completion state and the audit all derive from the
-            // saved row, and a partial client-side update would leave them
-            // disagreeing until the next refresh.
-            setTimeout(() => window.location.reload(), 700);
-            return;
+        if (nomatch) {
+            nomatch.hidden = shown !== 0;
+            const p = nomatch.querySelector('p');
+            if (p && terms.length) {
+                // Name what was looked for. "No results" alone leaves the
+                // reader guessing whether the term is empty or the search is
+                // wrong, and those need opposite responses.
+                p.textContent = 'No student in this term matches "'
+                    + input.value.trim() + '". Clear the search to see all '
+                    + total + '.';
+            }
         }
+    }
 
-        btn.disabled = false;
-        out.dataset.tone = 'bad';
-        const problems = Array.isArray(data.problems) ? data.problems : [];
-        out.textContent = problems.length
-            ? data.message + ' ' + problems.join(' ')
-            : (data.message || 'The term was not saved.');
-    } catch (err) {
-        btn.disabled = false;
-        out.dataset.tone = 'bad';
-        out.textContent = 'The term was not saved. The server did not respond; check the connection and try again.';
+    input.addEventListener('input', apply);
+    input.addEventListener('search', apply);
+
+    // Enter in the search box filters what is already on screen, so it hands
+    // the caret to the first match rather than reloading the page.
+    input.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const first = rows.find(r => !r.hidden);
+        if (!first) return;
+        const btn = first.querySelector('.ah-open');
+        if (btn) btn.focus();
+    });
+
+    apply();
+})();
+    if (host && !host.dataset.filled) {
+        host.innerHTML = recordHtml(r);
+        host.dataset.filled = '1';
+    }
+
+    detail.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+
+    // Close whatever else is open, now that ours is.
+    document.querySelectorAll('tr[data-ah-row]').forEach(other => {
+        if (other === row) return;
+        const d = document.getElementById('rec-' + other.dataset.student);
+        if (d && !d.hidden) {
+            d.hidden = true;
+            const b = other.querySelector('.ah-open');
+            if (b) b.setAttribute('aria-expanded', 'false');
+        }
+    });
+}
+
+// ── The one dialog: the term audit ────────────────────────────
+// openDialog/closeDialog used to be called here but were defined nowhere in
+// the project, so the audit silently did nothing when it was opened. They
+// are defined now, locally, because there is exactly one dialog left and a
+// shared abstraction for a single caller is indirection without benefit.
+//
+// The audit is not a per-student view — it is a check over the whole term —
+// which is why it stays a dialog while the student record does not.
+function openDialog(id, focusSelector) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('active');
+    el.setAttribute('aria-hidden', 'false');
+    const focusTarget = focusSelector ? el.querySelector(focusSelector) : null;
+    if (focusTarget) focusTarget.focus();
+    else {
+        const heading = el.querySelector('h3');
+        if (heading) heading.focus();
     }
 }
 
-/* The pre-close audit. Rendered from the server's findings. The drawer
-   only presents them; it decides nothing, and nothing in this path
-   writes a record. */
+function closeDialog(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('active');
+    el.setAttribute('aria-hidden', 'true');
+}
+
 function findingHtml(f, sev) {
     const icon = sev === 'blocking' ? 'fa-circle-exclamation' : 'fa-circle-info';
-    return '<div class="ah-finding" data-sev="' + sev + '">' +
-        '<i class="fa-solid ' + icon + '"></i>' +
-        '<div class="ah-finding-body">' +
-            '<p class="ah-finding-title">' + esc(f.title) + '</p>' +
-            '<p class="ah-finding-detail">' + esc(f.detail) + '</p>' +
-            '<p class="ah-finding-action">' + esc(f.action) + '</p>' +
-        '</div>' +
-    '</div>';
+    return '<div class="ah-finding" data-sev="' + sev + '">'
+        + '<i class="fa-solid ' + icon + '"></i>'
+        + '<div class="ah-finding-body">'
+        + '<p class="ah-finding-title">' + esc(f.title) + '</p>'
+        + '<p class="ah-finding-detail">' + esc(f.detail) + '</p>'
+        + '<p class="ah-finding-action">' + esc(f.action) + '</p>'
+        + '</div>'
+        + '</div>';
 }
 
 function openAudit() {
     const body = document.getElementById('auditBody');
     const a = AH_AUDIT;
 
-    // What the check is and is not, stated on the surface rather than in
-    // a tooltip. Someone about to close a term should not have to guess
-    // whether this thing is allowed to act.
+    // What the check is and is not, stated on the surface rather than in a
+    // tooltip. Someone reading a term audit should not have to guess whether
+    // this thing is allowed to act.
     let html =
-        '<p class="ah-audit-note">' +
-            '<i class="fa-solid fa-circle-info"></i>' +
-            '<span>This check reads the records and reports. It assigns no grade, changes no ' +
-            'status, and saves nothing. A finding about a GWA at 3.00 or above is a prompt to ' +
-            'look; any status decision stays with you, on the status page.</span>' +
-        '</p>' +
-        '<p class="ah-audit-lead">' + esc(a.summary) + ' <strong>' +
-        a.stats.students + '</strong> student' + (a.stats.students === 1 ? '' : 's') + ' in view, ' +
-        '<strong>' + a.stats.with_grades + '</strong> with grades recorded.</p>';
+        '<p class="ah-audit-note">'
+        + '<i class="fa-solid fa-circle-info"></i>'
+        + 'This reads the term and reports. It does not change a grade, close a '
+        + 'term, or write anything.'
+        + '</p>';
 
-    if (a.blocking.length) {
-        html += '<p class="ah-findings-head" data-sev="blocking">' +
-            '<i class="fa-solid fa-circle-exclamation"></i> Resolve before closing' +
-            '<span class="ah-findings-count">' + a.blocking.length + '</span></p>';
-        html += a.blocking.map(f => findingHtml(f, 'blocking')).join('');
-    }
-    if (a.advisory.length) {
-        html += '<p class="ah-findings-head" data-sev="advisory">' +
-            '<i class="fa-solid fa-circle-info"></i> Worth a look' +
-            '<span class="ah-findings-count">' + a.advisory.length + '</span></p>';
-        html += a.advisory.map(f => findingHtml(f, 'advisory')).join('');
-    }
+    const groups = [
+        ['Blocking', a.blocking],
+        ['Advisory', a.advisory],
+    ];
+    groups.forEach(function (g) {
+        const list = g[1] || [];
+        if (!list.length) return;
+        html += '<h4 class="ah-audit-group">' + g[0] + '</h4>';
+        list.forEach(f => { html += findingHtml(f, g[0] === 'Blocking' ? 'blocking' : 'advisory'); });
+    });
+
     if (!a.blocking.length && !a.advisory.length) {
-        // A clean term says so plainly. Silence would read as "the check
-        // did not run", which is the one conclusion this drawer must not
-        // leave someone with.
-        html += '<div class="ah-empty">' +
-            '<i class="fa-solid fa-circle-check ah-clear-icon"></i>' +
-            '<h3>Nothing to resolve</h3>' +
-            '<p style="margin-bottom:0">Every student in view has a final rating for every ' +
-            'subject, and the stored figures agree with them.</p></div>';
+        html += '<p class="ah-audit-empty">Nothing to report. Every subject in this '
+            + 'term has a final rating, and the stored figures agree with the '
+            + 'recorded ones.</p>';
     }
+
     body.innerHTML = html;
-    // A report, not a form. Focus goes to the heading rather than the
-    // close button: the drawer is built from findings and paragraphs that
-    // need to be read in order, and a focusable heading lets a screen
-    // reader start at the top and walk out from there. tabindex="-1"
-    // makes it programmatically focusable without adding it to the tab
-    // sequence, and the pattern asks that aria-describedby be left off
-    // when the content is structured this way.
     openDialog('auditModal', '#auditModalTitle');
 }
 
 function closeAudit() { closeDialog('auditModal'); }
 
-// Repaint the preview as the user types. A change event is also needed:
-// the result dropdown does not fire input, and picking a status has to
-// update the count in the foot bar.
-document.addEventListener('input', e => {
-    if (e.target.closest && e.target.closest('#gradeRows')) updatePreview();
-});
-document.addEventListener('change', e => {
-    if (e.target.closest && e.target.closest('#gradeRows')) updatePreview();
+// ── Wiring ────────────────────────────────────────────────────
+// One delegated listener for the whole page. Rows are created and hidden
+// constantly by the filter, so per-element listeners would have to be
+// re-bound after every keystroke.
+document.addEventListener('click', e => {
+    const open = e.target.closest('.ah-open');
+    if (open) {
+        toggleRecord(parseInt(open.closest('tr').dataset.student, 10));
+        return;
+    }
+    const print = e.target.closest('[data-print]');
+    if (print) {
+        printGradeTemplate(parseInt(print.dataset.print, 10));
+        return;
+    }
+    const audit = e.target.closest('[data-audit]');
+    if (audit) { openAudit(); return; }
+    const closer = e.target.closest('[data-close-dialog]');
+    if (closer) { closeDialog(closer.dataset.closeDialog); }
 });
 
-// Escape closes the topmost dialog, and only that one.
+// Escape closes the dialog, and only when one is actually open.
 document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
-    if (document.getElementById('gradeModal').classList.contains('active')) closeGrades();
-    else if (document.getElementById('auditModal').classList.contains('active')) closeAudit();
+    const audit = document.getElementById('auditModal');
+    if (audit && audit.classList.contains('active')) closeAudit();
 });
+
+// The printable grade template.
+//
+// This is the artefact the Registrar still owns after grades moved to
+// Faculty: a formal career record on the BCP letterhead, read from
+// whatever has populated academic_grades.
+//
+// GWA policy — the Registrar's own figure prints. gwa_computed is derived
+// from the ratings held here by shared/term_grades.php; gwa_reported is
+// Faculty's. The computed figure is what appears on the record, and a
+// disagreement is shown rather than silently resolved: a document that
+// quietly picks one of two conflicting numbers is the failure mode these
+// two columns exist to prevent.
+function printGradeTemplate(studentId) {
+    const r = rowById(studentId);
+    if (!r) return;
+
+    const na = v => (v === null || v === undefined || v === '') ? 'N/A' : v;
+
+    // ── Identity block ──────────────────────────────────────────
+    let body = '<div class="doc-h2">Student</div>'
+        + '<table class="gt-ident">'
+        + '<tr><td class="gt-k">Student Number</td><td>' + esc(na(r.number)) + '</td>'
+        + '<td class="gt-k">Program</td><td>' + esc(na(r.program)) + '</td></tr>'
+        + '<tr><td class="gt-k">Name</td><td>' + esc(na(r.name)) + '</td>'
+        + '<td class="gt-k">Year / Section</td><td>' + esc(na(r.level))
+        + (r.section ? ' · ' + esc(r.section) : '') + '</td></tr>'
+        + '</table>';
+
+    // ── Per-term grades ─────────────────────────────────────────
+    const career = r.career || [];
+    const byTerm = r.careerSubjects || {};
+
+    if (!career.length) {
+        body += '<p class="gt-empty">No academic records have been received '
+            + 'from Faculty for this student yet.</p>';
+    } else {
+        career.forEach((t, i) => {
+            const key = (t.school_year || '') + '|' + (t.semester || '');
+            const subs = byTerm[key] || [];
+
+            body += '<div class="gt-term-head">' + esc(na(t.semester))
+                + ' Semester · ' + esc(na(t.school_year)) + '</div>';
+
+            if (!subs.length) {
+                body += '<p class="gt-empty">No grades recorded for this term.</p>';
+            } else {
+                body += '<table class="gt-grid">'
+                    + '<thead><tr><th>Subject</th><th>Code</th><th class="gt-u">Units</th>'
+                    + '<th class="gt-n">Final Rating</th><th>Grade</th><th>Result</th>'
+                    + '<th>Instructor</th></tr></thead><tbody>';
+                subs.forEach(s => {
+                    const rated = s.final_rating !== null && s.final_rating !== undefined
+                        && s.final_rating !== '';
+                    body += '<tr>'
+                        + '<td>' + esc(na(s.subject)) + '</td>'
+                        + '<td>' + esc(na(s.subject_code)) + '</td>'
+                        + '<td class="gt-u">' + esc(na(s.units)) + '</td>'
+                        + '<td class="gt-n">'
+                        + (rated ? Number(s.final_rating).toFixed(2) : 'Not rated') + '</td>'
+                        + '<td>' + esc(na(s.grade)) + '</td>'
+                        + '<td>' + esc(na(s.grade_status)) + '</td>'
+                        + '<td>' + esc(na(s.instructor)) + '</td>'
+                        + '</tr>';
+                });
+                body += '</tbody></table>';
+            }
+// Term summary: the computed figure is printed; a mismatch with
+            // Faculty's own number is stated, not quietly dropped.
+            const computed = t.gwa_computed !== null && t.gwa_computed !== undefined
+                ? Number(t.gwa_computed) : null;
+            const reported = t.gwa_reported !== null && t.gwa_reported !== undefined
+                ? Number(t.gwa_reported) : null;
+            const disagree = computed !== null && reported !== null
+                && Math.abs(computed - reported) > 0.005;
+
+            body += '<div class="gt-term-sum">'
+                + '<span>Term GWA</span><b>'
+                + (computed === null ? 'N/A' : computed.toFixed(2)) + '</b>'
+                + '<span>Credits</span><b>' + esc(na(t.credits)) + '</b>'
+                + '</div>';
+            if (disagree) {
+                body += '<div class="gt-flag">Faculty reports a term GWA of '
+                    + reported.toFixed(2) + ' for this term; the figure computed from '
+                    + 'the recorded ratings is ' + computed.toFixed(2)
+                    + '. Please confirm with Faculty before issuing this record.</div>';
+            }
+            if (i < career.length - 1) body += '<div class="gt-rule"></div>';
+        });
+
+        body += '<div class="gt-career"><span>Cumulative GWA</span><b>'
+            + (r.careerGwa === null || r.careerGwa === undefined
+                ? 'N/A' : Number(r.careerGwa).toFixed(2))
+            + '</b></div>';
+    }
+
+    body += '<div class="sig"><div class="box"><div class="line">Certified by:<br>Registrar</div></div>'
+        + '<div class="box"><div class="line">Noted by:<br>School Head / President</div></div></div>'
+        + '<div class="foot-note">Grade records are maintained by Faculty Management '
+        + 'and issued here for reference.<br>Printed ' + esc(AH.printedOn || '') + '.</div>';
+
+    BCPPrint.printDocument({
+        title: 'GRADE RECORD',
+        css: BCPPrint.letterheadCss() + GRADE_TEMPLATE_CSS,
+        body: BCPPrint.headerHtml({
+            logoUrl: AH.logoUrl,
+            title: 'GRADE RECORD — ' + String(r.name || '').toUpperCase()
+        }) + body
+    });
+}
+
+// Layout for the template only. The letterhead itself comes from
+// BCPPrint, so it cannot drift from the AI Insight report.
+const GRADE_TEMPLATE_CSS = [
+    '.doc-h2 { font-size:11pt; font-weight:700; letter-spacing:.5px;',
+    '           margin:16px 0 6px; text-align:center; }',
+    '.gt-ident { width:100%; border-collapse:collapse; margin-bottom:6px; }',
+    '.gt-ident td { padding:3px 6px; font-size:10pt; vertical-align:top; }',
+    '.gt-k { font-weight:700; width:22%; white-space:nowrap; }',
+    '.gt-term-head { font-size:10.5pt; font-weight:700; text-align:center;',
+    '                margin:14px 0 5px; padding:3px 0;',
+    '                border-top:1px solid #000; border-bottom:1px solid #000; }',
+    '.gt-grid { width:100%; border-collapse:collapse; margin-bottom:4px;',
+    '           font-size:9.5pt; page-break-inside:avoid; }',
+    '.gt-grid th { border-bottom:1px solid #000; padding:3px 4px;',
+    '              font-size:8.5pt; text-transform:uppercase; letter-spacing:.3px; }',
+    '.gt-grid td { padding:3px 4px; border-bottom:1px dotted #999; }',
+    '.gt-u, .gt-n { text-align:right; white-space:nowrap; }',
+    '.gt-empty { font-size:10pt; font-style:italic; text-align:center; margin:4px 0; }',
+    '.gt-term-sum { font-size:10pt; margin:4px 0 0; }',
+    // Each label/value pair is a unit, separated by a wide gap. Run
+    // together as "Term GWA 1.00 Credits 12.00" the reader cannot tell where
+    // one figure ends and the next begins.
+    '.gt-term-sum span, .gt-term-sum b { margin-right:4px; }',
+    '.gt-term-sum b { margin-right:26px; }',
+    '.gt-career span { margin-right:6px; }',
+    // A disagreement between our figure and Faculty's is printed, never
+    // resolved silently. A record that quietly picks one of two numbers is
+    // worse than one that admits there are two.
+    '.gt-flag { border:1px solid #000; padding:5px 7px; margin:6px 0;',
+    '           font-size:9pt; line-height:1.4; }',
+    '.gt-rule { border-top:1px solid #000; margin:10px 0 0; }',
+    '.gt-career { font-size:11pt; font-weight:700; text-align:center;',
+    '             margin:16px 0 0; padding-top:6px; border-top:2px solid #000; }'
+].join('\n');
 </script>
 
 <?php include '../includes/footer.php'; ?>

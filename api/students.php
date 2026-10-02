@@ -371,159 +371,28 @@ try {
     // choice by studentPhotoUrl(), so historical rows that predate File Storage
     // keep showing their picture. Nothing is dropped by removing this.
 
-    // ─── SAVE TERM GRADES ───────────────────────────────────────
+    // ─── GRADE WRITES ARE REFUSED ──────────────────────────────────
     //
-    // Rewritten from "save academic history". Two changes matter.
+    // Removed 2026-10-02. Grades are owned by Faculty Management #296; the
+    // Registrar reads them and prints the grade template. The editor that
+    // posted here is gone from registrar/academic-history.php.
     //
-    // The GWA is computed here from the subject ratings rather than
-    // accepted from the request. It used to be whatever the client typed,
-    // while document_templates.php computed its own figure for the TOR and
-    // status_evidence.php read the stored one - three sources, two
-    // numbers. Now there is one.
-    //
-    // The school name is fixed to this office. The page is a term-grades
-    // page for this school; the field was only ever required to satisfy a
-    // NOT NULL column, and leaving it free let a term row be filed against
-    // a previous school, which is what made the "Previous schools"
-    // framing wrong in the first place.
-    if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'save-academic') {
-        require_once __DIR__ . '/../shared/term_grades.php';
-
-        $input    = json_decode(file_get_contents('php://input'), true);
-        $studentId = intval($input['student_id'] ?? 0);
-        $sy       = trim((string) ($input['school_year'] ?? ''));
-        $sem      = trim((string) ($input['semester'] ?? ''));
-        if (!$studentId) {
-            echo json_encode(['success' => false, 'message' => 'Student is required.']);
-            exit;
-        }
-        if ($sy === '' || $sem === '') {
-            echo json_encode(['success' => false, 'message' => 'School year and semester are required.']);
-            exit;
-        }
-        $student = $db->fetchOne("SELECT id, student_number FROM students WHERE id = ?", [$studentId]);
-        if (!$student) {
-            echo json_encode(['success' => false, 'message' => 'Student not found.']);
-            exit;
-        }
-
-        $subjects = is_array($input['grades'] ?? null) ? $input['grades'] : [];
-
-        // Validation before anything is written. A rating outside the
-        // scale cannot be averaged, so storing it would put a number in
-        // the record that the TOR could never reproduce.
-        $problems = [];
-        foreach ($subjects as $g) {
-            $label = trim((string) ($g['subject'] ?? ''));
-            if ($label === '') {
-                continue;
-            }
-            $rating = $g['final_rating'] ?? null;
-            if ($rating !== null && $rating !== '' && !termRatingValid($rating)) {
-                $problems[] = $label . ' has a rating of ' . $rating . ', which is outside 1.00-5.00.';
-            }
-            $units = (float) ($g['units'] ?? 0);
-            if ($units < 0 || $units > 12) {
-                $problems[] = $label . ' has ' . $units . ' units. Unit counts run from 0 to 12.';
-            }
-        }
-        if ($problems) {
-            echo json_encode([
-                'success' => false,
-                'message' => 'Nothing was saved. Fix these first:',
-                'problems' => $problems,
-            ]);
-            exit;
-        }
-
-        // One row per student per term. The old code matched on
-        // school_name, which could not tell two terms of this school
-        // apart and so would overwrite the first semester with the
-        // second. The term is school_year + semester.
-        $existing = $db->fetchOne(
-            "SELECT id FROM academic_history
-              WHERE student_id = ? AND school_year = ? AND semester = ?",
-            [$studentId, $sy, $sem]
-        );
-        $recordId = $existing ? (int) $existing['id'] : 0;
-
-        // Normalise the subjects once: strip empties, coerce numbers.
-        $clean = [];
-        $totalUnits = 0.0;
-        foreach ($subjects as $g) {
-            $label = trim((string) ($g['subject'] ?? ''));
-            if ($label === '') {
-                continue;
-            }
-            $units  = ($g['units'] ?? '') !== '' ? (float) $g['units'] : 0.0;
-            $rating = ($g['final_rating'] ?? '') !== '' ? (float) $g['final_rating'] : null;
-            $totalUnits += max(0.0, $units);
-            $clean[] = [
-                'subject'        => $label,
-                'subject_code'   => trim((string) ($g['subject_code'] ?? '')) ?: null,
-                'units'          => $units,
-                'final_rating'   => $rating,
-                'grade'          => trim((string) ($g['grade'] ?? '')) ?: null,
-                'remarks'        => trim((string) ($g['remarks'] ?? '')) ?: null,
-                'grade_status'   => trim((string) ($g['grade_status'] ?? '')) ?: null,
-            ];
-        }
-
-        // The GWA, computed here. Nothing downstream can be asked for a
-        // figure it has to take on trust.
-        $computedGwa = termGwa($clean);
-
-        $data = [
-            'student_id'         => $studentId,
-            // Fixed to this office. The column is NOT NULL and the TOR
-            // labels a term row with it; leaving it free is what allowed a
-            // term to be filed against a previous school.
-            'school_name'        => TERM_SCHOOL_NAME,
-            'school_year'        => $sy,
-            'semester'           => $sem,
-            'grade_level'        => trim((string) ($input['grade_level'] ?? '')) ?: null,
-            'gwa'                => $computedGwa,
-            'credits'            => $totalUnits > 0 ? round($totalUnits, 2) : null,
-            'subjects_completed' => count($clean) ?: null,
-            'remarks'            => trim((string) ($input['remarks'] ?? '')) ?: null,
-        ];
-
-        if ($recordId) {
-            $db->update('academic_history', $data, 'id = ?', [$recordId]);
-        } else {
-            $recordId = (int) $db->insert('academic_history', $data);
-        }
-
-        // Rewrite the term's subjects. A delete-then-insert is right
-        // here: the term as submitted IS the truth, and a removed subject
-        // must not linger as an orphan row.
-        $db->delete('academic_grades', 'academic_history_id = ?', [$recordId]);
-        foreach ($clean as $g) {
-            $db->insert('academic_grades', [
-                'academic_history_id' => $recordId,
-                'subject'      => $g['subject'],
-                'subject_code' => $g['subject_code'],
-                'units'        => $g['units'] ?: null,
-                'final_rating' => $g['final_rating'],
-                'grade'        => $g['grade'],
-                'remarks'      => $g['remarks'],
-                'grade_status' => $g['grade_status'],
-            ]);
-        }
-
+    // These branches now refuse loudly rather than 404ing. A 404 would read
+    // as "unknown action" and look like a bug in whatever called it; a 409
+    // with a stated reason tells an integrator the endpoint exists, that the
+    // boundary moved, and where the data comes from now.
+    if ($method === 'POST' && isset($_GET['action'])
+        && in_array($_GET['action'], ['save-academic', 'delete-academic'], true)) {
+        http_response_code(409);
         echo json_encode([
-            'success' => true,
-            'message' => 'Term saved. ' . count($clean) . ' subject(s), GWA '
-                       . ($computedGwa === null ? 'not available' : number_format($computedGwa, 2)) . '.',
-            'data' => [
-                'id'    => $recordId,
-                'gwa'   => $computedGwa,
-                'units' => $totalUnits,
-            ],
+            'success' => false,
+            'message' => 'Grade records are maintained by Faculty Management and '
+                . 'read-only in the Registrar. This endpoint no longer writes.',
+            'owner'   => 'Faculty Management #296',
+            'reads'   => 'api/students.php?action=grades&record_id=',
         ]);
         exit;
     }
-
     // ─── GET ACADEMIC GRADES (Subsystem 3) ─────────────────────
     if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'grades' && isset($_GET['record_id'])) {
         $grades = $db->fetchAll(
@@ -533,20 +402,8 @@ try {
         exit;
     }
 
-    // ─── DELETE ACADEMIC HISTORY ───────────────────────────────
-    if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'delete-academic') {
-        $input = json_decode(file_get_contents('php://input'), true);
-        $recordId = intval($input['id'] ?? 0);
-        if (!$recordId) {
-            echo json_encode(['success' => false, 'message' => 'Record ID required.']);
-            exit;
-        }
-        $db->delete('academic_history', 'id = ?', [$recordId]);
-        echo json_encode(['success' => true, 'message' => 'Academic record deleted.']);
-        exit;
-    }
-
     // Import previous-school records from the enrollment intake into
+    // academic_history (idempotent: existing schools are skipped).
     // academic_history (idempotent: existing schools are skipped).
     if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'import-academic') {
         $input = json_decode(file_get_contents('php://input'), true);
