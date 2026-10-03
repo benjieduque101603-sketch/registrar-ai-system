@@ -109,8 +109,16 @@ $fail = 0;
 // all on document_requests. Pointing this at document_walkin_only.sql then
 // "fails" on sla_days, graduation_date and file_sha256 - all real columns,
 // just not on that table. That is a broken test, not a broken migration.
+//
+// `[^;]*?` rather than `.*?`, for the same reason from the other direction:
+// TABLE_NAME and its own COLUMN_NAME always sit in ONE statement, but with
+// `.*?` the scan happily crossed a `;` and paired a table with the NEXT
+// guard's column. Pointing this at grades_faculty_source.sql asserted
+// academic_grades.gwa_reported - a column that belongs to academic_history,
+// so it reported MISSING and the real gwa columns were never checked. One
+// character class, and the false failure is gone.
 preg_match_all(
-    "/TABLE_NAME\s*=\s*'([a-z0-9_]+)'.*?COLUMN_NAME\s*=\s*'([a-z0-9_]+)'/is",
+    "/TABLE_NAME\s*=\s*'([a-z0-9_]+)'[^;]*?COLUMN_NAME\s*=\s*'([a-z0-9_]+)'/is",
     file_get_contents($file),
     $mm,
     PREG_SET_ORDER
