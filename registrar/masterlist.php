@@ -1272,10 +1272,12 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                     <tr>
                         <th class="mlf-c-name">Folder / Student</th>
                         <th class="mlf-c-type">Type</th>
+                        <th class="mlf-c-program">Program</th>
+                        <th class="mlf-c-tok">Section</th>
+                        <th class="mlf-c-num">Year Level</th>
+                        <th class="mlf-c-tok">Semester</th>
                         <th class="mlf-c-num">Students</th>
                         <th class="mlf-c-sub">Inside</th>
-                        <th class="mlf-c-num">Year</th>
-                        <th class="mlf-c-tok">Section</th>
                         <th class="mlf-c-status">Status</th>
                         <th class="mlf-c-contact">Contact</th>
                         <th class="mlf-c-email">Email</th>
@@ -1290,6 +1292,51 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                         $isOpen   = isset($folderOpen[$row['path']]);
                         $hidden   = !mlf_row_visible($row, $folderOpen);
                         $parent   = (string) $row['parent'];
+
+                        // Program / Section / Year Level / Semester, per row.
+                        //
+                        // The folder PATH already encodes three of them -
+                        // "PROGRAM/Year 1/11001" - so they are read off it
+                        // rather than stored twice. Semester is the one the
+                        // path cannot carry (a section code encodes year and
+                        // term, but the tree does not keep the term), so it
+                        // comes from the student data on a student row and is
+                        // a dash on a folder row that has no students to ask.
+                        //
+                        // Every row shows them, not just the level that owns
+                        // the value. A section row is only meaningful beside
+                        // its program and year, and the whole point of this
+                        // table is that it reads as one inventory.
+                        $segs = explode('/', trim(str_replace('\\', '/', (string) $row['path']), '/'));
+                        $rProgram = $segs[0] ?? '';
+                        $rYear    = $segs[1] ?? '';
+                        $rSection = $segs[2] ?? '';
+                        $rSemester = '';
+                        if ($isFolder) {
+                            // A program row IS the program; a year or section
+                            // row already carries its own value in $row['name'].
+                            if ($level === 0) {
+                                $rProgram = trim((string) $row['name']);
+                            }
+                            if ($level === 1) {
+                                $rYear = trim((string) $row['name']);
+                            }
+                            if ($level === 2) {
+                                $rSection = trim((string) $row['name']);
+                            }
+                            // A program or year row has no section of its own:
+                            // it holds them. Left blank rather than repeated.
+                            if ($level < 2) {
+                                $rSection = '';
+                            }
+                            // Likewise no term: the tree does not carry one.
+                            $rSemester = '';
+                        } else {
+                            $s         = (array) $row['student'];
+                            $rSemester = trim((string) ($s['semester'] ?? ''));
+                        }
+                        $rProgramShort = courseDisplay($rProgram);
+                        $rProgramTitle = courseDisplayTitle($rProgram);
                         ?>
                         <tr class="mlf-row mlf-row-<?= $isFolder ? 'folder' : 'student' ?>"
                             data-parent="<?= htmlspecialchars($parent) ?>"
@@ -1337,6 +1384,13 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                         : 'Student' ?>
                                 </span>
                             </td>
+                            <td class="mlf-c-program"
+                                <?php if ($rProgramTitle !== ''): ?>
+                                    title="<?= htmlspecialchars($rProgramTitle) ?>"
+                                <?php endif; ?>><?= htmlspecialchars($rProgramShort !== '' ? $rProgramShort : '—') ?></td>
+                            <td class="mlf-c-tok"><?= htmlspecialchars($rSection !== '' ? $rSection : '—') ?></td>
+                            <td class="mlf-c-num"><?= htmlspecialchars($rYear !== '' ? $rYear : '—') ?></td>
+                            <td class="mlf-c-tok"><?= htmlspecialchars($rSemester !== '' ? $rSemester : '—') ?></td>
                             <td class="mlf-c-num"><?= $isFolder ? (int) $row['count'] : '' ?></td>
                             <td class="mlf-c-sub">
                                 <?= $isFolder && $row['subfolders'] > 0
@@ -1344,8 +1398,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                     : '&mdash;' ?>
                             </td>
                             <?php if ($isFolder): ?>
-                                <td class="mlf-c-num">&mdash;</td>
-                                <td class="mlf-c-tok"><?= $level === 2 ? htmlspecialchars((string) $row['name']) : '&mdash;' ?></td>
                                 <td class="mlf-c-status">&mdash;</td>
                                 <td class="mlf-c-contact">&mdash;</td>
                                 <td class="mlf-c-email">&mdash;</td>
@@ -1362,8 +1414,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                 $contact = trim((string) ($s['contact_number'] ?? ''));
                                 $email   = trim((string) ($s['email'] ?? ''));
                                 ?>
-                                <td class="mlf-c-num"><?= htmlspecialchars(trim((string) ($s['year_level'] ?? '')) ?: 'N/A') ?></td>
-                                <td class="mlf-c-tok"><?= htmlspecialchars(trim((string) ($s['section'] ?? '')) ?: 'N/A') ?></td>
                                 <td class="mlf-c-status"><?= htmlspecialchars(trim((string) ($s['status'] ?? '')) ?: 'N/A') ?></td>
                                 <td class="mlf-c-contact"><?= htmlspecialchars($contact !== '' ? $contact : 'N/A') ?></td>
                                 <td class="mlf-c-email"><?= htmlspecialchars($email !== '' ? $email : 'N/A') ?></td>
@@ -2955,6 +3005,11 @@ async function sendList() {
 .mlf-table tbody tr:last-child td { border-bottom:none; }
 .mlf-c-num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .mlf-c-tok { font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* Program. A short acronym with the full name on hover, so it needs
+   neither a wide track nor a wrap - it is the one column here that is
+   guaranteed to fit, and letting it breathe would push the section
+   codes off the right. */
+.mlf-c-program { white-space:nowrap; font-weight:600; color:#1d4ed8; width:1%; }
 
 /* A folder row is heavier than a student row, so the shape of the
    tree is legible before you read any of it. */

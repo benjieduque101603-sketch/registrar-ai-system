@@ -231,6 +231,27 @@ The masterlist reads three ways:
   those, and the student rows inside a section. A caret opens and closes what
   is under a folder; `Expand all` / `Collapse all` are there for when
   someone wants the whole tree.
+
+  Its columns lead with **Program · Section · Year Level · Semester**,
+  because those four are what say *which cohort* a row is. The other
+  columns (name, type, counts, status, contact, email, download) follow.
+
+  Three of those four are **derived from the row's folder path**
+  (`PROGRAM/Year 1/11001`) rather than stored again — a second copy of
+  the same fact is a second thing to fall out of step. **Semester is the
+  exception**: a section code encodes year and term, but the tree does
+  not keep the term, so it comes from the student data on a student row
+  and is a dash on a folder row that has no students to ask.
+
+  A program or year row leaves Section and Semester blank rather than
+  repeating its own name — it *contains* sections, it is not one.
+
+  The header and the cells are written in two separate blocks, which is
+  a trap worth naming: adding a column to one and not the other raises
+  no error and no warning. It silently shifts every cell after the gap
+  one place left, and a registrar reads a status as a phone number.
+  `tests/explore_render_check.php` therefore asserts **one cell per
+  column on every row**, not just that the columns exist.
 - **Browse** (`?view=explore`) — a **folder browser**, the shape a shared
   drive has. It is not the table with folders removed; it stands at exactly
   one folder at a time. Click **BSIT** and you go *into* BSIT and see its

@@ -422,6 +422,73 @@ check('the folder table did not grow a second browser',
     strpos($table, 'mlx-browser') === false);
 check('the folder table\'s expand/collapse controls are present',
     strpos($table, 'mlfExpandAll') !== false);
+
+// ── THE FOLDER TABLE'S COLUMNS ─────────────────────────────────
+// The header leads with Program / Section / Year Level / Semester,
+// because those four are what say WHICH cohort a row is. The cells are
+// derived from each row's folder path rather than stored twice.
+//
+// The check that matters most is the last one. A header and its cells
+// are written in two separate blocks, so adding a column to one and
+// not the other does not error, does not warn, and does not look
+// broken - it silently shifts every cell after the gap one place to
+// the left. The registrar reads a status as a phone number.
+echo "\nthe folder table columns\n";
+preg_match('#<table class="mlf-table".*?</table>#s', $table, $fm);
+$ftab = $fm[0] ?? '';
+preg_match_all('#<th[^>]*>(.*?)</th>#s', $ftab, $fh);
+$heads = array_map(fn($h) => trim(strip_tags($h)), $fh[1]);
+foreach (['Program', 'Section', 'Year Level', 'Semester'] as $want) {
+    check("the table has a $want column", in_array($want, $heads, true),
+        'headers: ' . implode(',', $heads));
+}
+// Program, Section, Year Level, Semester must come FIRST among the
+// data columns - after the name and the type, which identify the row.
+$want = ['Program', 'Section', 'Year Level', 'Semester'];
+$dataStart = array_search('Type', $heads, true);
+check('those four lead the data columns, in order',
+    $dataStart !== false
+    && array_slice($heads, $dataStart + 1, 4) === $want,
+    'after Type: ' . implode(',', array_slice($heads, $dataStart + 1, 4)));
+
+// Every row must have exactly as many cells as the header has columns.
+preg_match_all('#<tr class="mlf-row[^"]*"[^>]*>(.*?)</tr>#s', $ftab, $fr);
+$misaligned = [];
+foreach ($fr[1] as $tr) {
+    preg_match_all('#<td[^>]*>.*?</td>#s', $tr, $tc);
+    if (count($tc[0]) !== count($heads)) {
+        $misaligned[] = count($tc[0]) . ' cells vs ' . count($heads) . ' headers';
+    }
+}
+check('every row has one cell per column', $misaligned === [],
+    implode(' | ', array_slice($misaligned, 0, 3)));
+
+// And the Program cell must hold the acronym, with the full name on
+// hover - the same rule the tiles and the roster follow.
+$progBad = [];
+$progNoTitle = [];
+foreach ($fr[1] as $tr) {
+    preg_match_all('#<td([^>]*)>(.*?)</td>#s', $tr, $tc);
+    $i = array_search('Program', $heads, true);
+    if ($i === false || !isset($tc[2][$i])) {
+        continue;
+    }
+    $text = trim(html_entity_decode(strip_tags($tc[2][$i]), ENT_QUOTES, 'UTF-8'));
+    if ($text === '—' || $text === '&mdash;') {
+        continue;   // a row with no program of its own
+    }
+    $expect = courseDisplay($prog);
+    if ($text !== $expect) {
+        $progBad[] = $text . ' (wanted ' . $expect . ')';
+    }
+    if (strpos($tc[1][$i], 'title="' . $prog . '"') === false) {
+        $progNoTitle[] = $text;
+    }
+}
+check('the Program cell shows the acronym', $progBad === [],
+    'wrong: ' . implode(' | ', array_slice($progBad, 0, 3)));
+check('and carries the full name on hover', $progNoTitle === [],
+    'no title on: ' . implode(', ', array_slice($progNoTitle, 0, 3)));
 check('and it grew no header toggle of its own',
     strpos($table, 'masterlist-views') === false);
 
