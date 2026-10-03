@@ -1,7 +1,7 @@
 <?php
 // login.php - Phase 5 hardened sign-in:
 //   Step 1: ID number / username + password
-//   Step 2: one-time code (OTP)
+//   Step 2: one-time code (OTP) try lang muna
 //   Forgot password: reveal email → OTP → set new password
 //   10-min lockout after 5 failed attempts (handled server-side).
 //   CSRF tokens are enforced on every POST (see shared/csrf_guard.php).
