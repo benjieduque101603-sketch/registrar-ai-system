@@ -275,6 +275,18 @@ answers "what is this folder" from the tiles themselves.
 `tests/explore_render_check.php` pins the tooltip down, so the
 abbreviations can never become undecodable by accident.
 
+The one surface that needed its own handling is the **section roster**
+(`mlx-table`), whose fourteen cells are written in one generic loop
+over `mlf_roster_row()`. The Program cell is special-cased by locating
+its index with `array_search('Program', mlf_roster_columns())` rather
+than counting to it, so inserting a column later cannot silently shift
+the abbreviation onto the wrong field.
+
+That loop is also what the ZIP export is built from — but the export
+calls `mlf_roster_row()` in `shared/`, not this markup, so the export
+still writes the **full** program name. A handoff must carry what was
+filed; only the screen is abbreviated.
+
 Why both folder views exist: the Table answers "show me everything, I will
 find BSIT in the middle of it", and it does not scale — a college with eight
 programs and four years each is hundreds of rows nobody will scroll. The

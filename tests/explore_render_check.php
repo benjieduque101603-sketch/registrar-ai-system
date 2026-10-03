@@ -310,6 +310,70 @@ check('the roster has a body with rows',
 check('the section\'s own students are the rows shown',
     strpos($inSec, htmlspecialchars($sec)) !== false);
 
+// The roster's Program column prints the acronym. Every OTHER column
+// is data written straight from mlf_roster_row(), so this one cell is
+// the only thing rewritten here - and the thing that could go wrong is
+// that "rewritten" quietly starts rewriting the wrong column.
+echo "\nthe roster's Program column\n";
+preg_match('#<div class="mlx-roster-scroll">.*?</table>#s', $inSec, $rm);
+$roster = $rm[0] ?? '';
+preg_match_all('#<tr>\s*<td class="mlx-x-no">(.*?)</tr>#s', $roster, $rows);
+preg_match_all('#<th[^>]*>(.*?)</th>#s', $roster, $heads);
+$heads = array_map(fn($h) => trim(strip_tags($h)), $heads[1]);
+// Index within the <td>s of a row: the first td is the row number.
+$progIdx = array_search('Program', $heads, true);
+check('the Program column can be located', $progIdx !== false,
+    'heads: ' . implode(',', $heads));
+
+$wrongCell = [];
+$noTooltip = [];
+foreach ($rows[0] as $tr) {
+    preg_match_all('#<td([^>]*)>(.*?)</td>#s', $tr, $tds);
+    // The header list starts with the row-number column, and so does
+    // this row's <td> list, so the indexes line up directly. The
+    // earlier version subtracted one for a row number that is already
+    // counted on both sides, and read a column to its left.
+    $cellIdx = $progIdx;
+    if (!isset($tds[2][$cellIdx])) {
+        continue;
+    }
+    $attrs = $tds[1][$cellIdx];
+    $text  = trim(html_entity_decode(strip_tags($tds[2][$cellIdx]), ENT_QUOTES, 'UTF-8'));
+    // It must show the acronym of the program this section belongs to.
+    $want = courseDisplay($prog);
+    if ($text !== $want && $text !== '—') {
+        $wrongCell[] = $text . ' (wanted ' . $want . ')';
+    }
+    // And keep the full name reachable on hover. A cell with no
+    // abbreviation to carry (the em dash for "not recorded") has
+    // nothing to reveal and is not asked for one.
+    if ($text !== '—' && strpos($attrs, 'title="' . $prog . '"') === false) {
+        $noTooltip[] = $text;
+    }
+}
+check('the Program cell shows the acronym', $wrongCell === [],
+    'wrong: ' . implode(' | ', array_slice($wrongCell, 0, 3)));
+check('and still carries the full name on hover', $noTooltip === [],
+    'no title on: ' . implode(', ', array_slice($noTooltip, 0, 3)));
+
+// No OTHER column may have been abbreviated by mistake. The section
+// code and the student number are data and must survive verbatim - a
+// rewrite that leaked one column over would corrupt them.
+//
+// Asserted against the row cells only, not the whole markup: the
+// program's own full name and the section code both appear in titles
+// and in the JSON payload the page ships, and matching those would let
+// a genuinely missing cell pass.
+$lost = [];
+$rowText = html_entity_decode(strip_tags($rows[0][0] ?? ''), ENT_QUOTES, 'UTF-8');
+foreach ([$sec] as $token) {
+    if (strpos($rowText, html_entity_decode($token, ENT_QUOTES, 'UTF-8')) === false) {
+        $lost[] = $token;
+    }
+}
+check('the section code survives in the row data', $lost === [],
+    'lost: ' . implode(', ', $lost));
+
 echo "\nlinks\n";
 preg_match_all('/masterlist\.php\?view=explore[^"\']*/', $inSec, $links);
 check('navigation is plain links to this view', ($links[0] ?? []) !== []);

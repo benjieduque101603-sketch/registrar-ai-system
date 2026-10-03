@@ -1178,11 +1178,35 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                             </tr>
                         </thead>
                         <tbody>
-                            <?php $rowNo = 1; foreach ($node['students'] as $student): ?>
+                            <?php
+                            // The Program column is printed as its acronym.
+                            // It is the only cell of this roster that is
+                            // rewritten: the other thirteen are data, and
+                            // the row loop below is what writes them. The
+                            // full name moves into the cell's title, so the
+                            // acronym compresses rather than replaces - and
+                            // the ZIP export is untouched, because that is
+                            // written by mlf_roster_row() in shared/, not
+                            // here. A handoff must carry what was filed.
+                            $rosterCols    = mlf_roster_columns();
+                            $rosterProgram = array_search('Program', $rosterCols, true);
+                            $rowNo = 1;
+                            foreach ($node['students'] as $student):
+                                $colNo = 0;
+                                ?>
                                 <tr>
                                     <td class="mlx-x-no"><?= (int) $rowNo++ ?></td>
                                     <?php foreach (mlf_roster_row((array) $student) as $fieldValue): ?>
-                                        <td><?= htmlspecialchars(trim((string) $fieldValue)) ?: '<span class="mlx-na">&mdash;</span>' ?></td>
+                                        <?php if ($colNo === $rosterProgram):
+                                            $progFull = trim((string) $fieldValue);
+                                            ?>
+                                            <td<?php $progTitle = courseDisplayTitle($progFull);
+                                                if ($progTitle !== ''): ?>
+                                                title="<?= htmlspecialchars($progTitle) ?>"<?php endif; ?>><?= htmlspecialchars(courseDisplay($progFull)) ?: '<span class="mlx-na">&mdash;</span>' ?></td>
+                                        <?php else: ?>
+                                            <td><?= htmlspecialchars(trim((string) $fieldValue)) ?: '<span class="mlx-na">&mdash;</span>' ?></td>
+                                        <?php endif; ?>
+                                        <?php $colNo++; ?>
                                     <?php endforeach; ?>
                                 </tr>
                             <?php endforeach; ?>
