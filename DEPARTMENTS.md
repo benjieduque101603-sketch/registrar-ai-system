@@ -267,42 +267,13 @@ each call site. Two things it will not do:
 
 The full name is never discarded. Wherever a name is shortened, it
 becomes the `title` (hover) and the `aria-label` (screen readers), so
-the acronym is a compression rather than a replacement.
-
-### The Program legend — the key to the acronyms
-
-Abbreviating every program is only half the decision. The **legend**
-(`mlx-legend`) is the other half: a reference table at the foot of the
-Masterlist listing every program as
-
-| Acronym | Program | Students |
-|---|---|---|
-| BSIT | Bachelor of Science in Information Technology (BSIT) | 1 |
-| BSCS | Bachelor of Science in Computer Science (BSCS) | 3 |
-
-Without it the abbreviation is a **barrier** rather than a compression,
-which is the failure mode the status tracker's listbox avoided by
-putting the full name in a tooltip — a tooltip nobody opens when they
-are simply looking for what `BSIT` means.
-
-Three decisions that are not obvious:
-
-1. **The count is the program's size across the whole table, not the
-   filtered count.** A legend answers "what is BSIT and how many are in
-   it". A number that moved with the filter would answer a different
-   question every time it was looked at, and the reader could not tell
-   which one they were reading.
-2. **It renders on every view**, not just the browser. The roster and
-   the folder table abbreviate too, so a reader decoding an acronym on
-   those pages needs the same key.
-3. **It is `display:none` when printing.** It is a reading aid on
-   screen; printing it would add a page of reference material under a
-   sheet that gets signed and handed off.
-
-The work-queue pseudo-programs (`Unassigned Program`) are excluded —
-not programs, and no acronym to decode. `tests/explore_render_check.php`
-checks that every program printed on the page appears in the legend,
-and that each acronym is decoded to the exact full name behind it.
+the acronym is a compression rather than a replacement. That tooltip
+is now the **only** way back to the full name: a legend table decoding
+every acronym was built and then removed, on the grounds that the
+acronyms are the office's own vocabulary and the browser already
+answers "what is this folder" from the tiles themselves.
+`tests/explore_render_check.php` pins the tooltip down, so the
+abbreviations can never become undecodable by accident.
 
 Why both folder views exist: the Table answers "show me everything, I will
 find BSIT in the middle of it", and it does not scale — a college with eight

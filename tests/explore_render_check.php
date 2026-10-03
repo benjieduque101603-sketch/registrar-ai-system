@@ -233,65 +233,44 @@ check('unassigned work folders are never abbreviated',
     courseDisplay('Unassigned Program') === 'Unassigned Program',
     'got: ' . courseDisplay('Unassigned Program'));
 
-// ── THE LEGEND ─────────────────────────────────────────────────
-// Abbreviating every program is only half a decision. The legend is
-// the other half: it is where a reader looks up what an acronym
-// MEANS. Without it the abbreviation is a barrier rather than a
-// compression, so its absence is a real defect and not a cosmetic one.
-echo "\nthe program legend\n";
-check('the legend is rendered', strpos($root, 'mlx-legend') !== false);
-preg_match('#<section class="mlx-legend.*?</section>#s', $root, $lg);
-$legend = $lg[0] ?? '';
-check('the legend has a body', $legend !== '');
-
-// Every program that appears as a tile must appear in the legend.
-// Compared by acronym, because that is what both surfaces print -
-// deriving one from the other is what makes the two provably agree.
-preg_match_all('#mlx-legend-tag">(.*?)</span>#s', $legend, $legendTags);
-$legendShorts = array_map('trim', $legendTags[1]);
-$missing = [];
-foreach ($tileMatch as $tile) {
+// ── NO LEGEND ─────────────────────────────────────────────────
+// The program legend was added and then removed: the acronyms stayed,
+// the reference table that decoded them did not. So the full name
+// lives in the tile's title/aria-label, which is what these two checks
+// pin down - without them, removing the legend would silently leave
+// the acronyms undecodable rather than deliberately so.
+echo "\nthe full name is still reachable\n";
+preg_match_all('#<a class="mlx-tile[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)</a>#s', $root, $tileWithTitle, PREG_SET_ORDER);
+$noExpansion = [];
+foreach ($tileWithTitle as $tile) {
     preg_match('#mlx-tile-name">(.*?)</span>#s', $tile[2], $nm);
-    $short = trim((string) ($nm[1] ?? ''));
-    if ($short !== '' && !in_array($short, $legendShorts, true)) {
-        $missing[] = $short;
+    $label = trim((string) ($nm[1] ?? ''));
+    $href  = html_entity_decode((string) $tile[1], ENT_QUOTES, 'UTF-8');
+    $real  = (string) (preg_match('#path=([^&]+)#', $href, $pm) ? rawurldecode($pm[1]) : '');
+    // Only programs that were actually abbreviated need an expansion.
+    if ($real === '' || courseDisplayTitle($real) === '') {
+        continue;
+    }
+    // Compared against the RAW full name, not htmlspecialchars() of it.
+    // The tile's href is a query string, so it holds &amp; where the
+    // program name has an ampersand; escaping the needle too would
+    // look for a name that no longer occurs anywhere on the page.
+    // The title attribute is the plain text it needs to match.
+    if (strpos($tile[0], 'title="' . $real . '"') === false) {
+        $noExpansion[] = $label;
     }
 }
-check('every program on the page is in the legend', $missing === [],
-    'not in the legend: ' . implode(', ', array_slice($missing, 0, 3)));
+check('every abbreviated tile can be expanded on hover', $noExpansion === [],
+    'no title on: ' . implode(', ', array_slice($noExpansion, 0, 3)));
 
-// The legend's whole purpose is decoding, so the full name has to be
-// PRINTED in it - not hidden behind a hover the way the tiles are.
-$fullMissing = [];
-foreach ($legendShorts as $short) {
-    // Resolve the tile href back to the real course name and require
-    // that exact string to appear somewhere in the legend markup.
-    $found = false;
-    foreach ($tileMatch as $tile) {
-        preg_match('#mlx-tile-name">(.*?)</span>#s', $tile[2], $nm);
-        if (trim((string) ($nm[1] ?? '')) !== $short) {
-            continue;
-        }
-        $href = html_entity_decode((string) $tile[1], ENT_QUOTES, 'UTF-8');
-        $real = (string) (preg_match('#path=([^&]+)#', $href, $pm) ? rawurldecode($pm[1]) : '');
-        if ($real !== '' && strpos($legend, htmlspecialchars($real)) !== false) {
-            $found = true;
-        }
-    }
-    if (!$found) {
-        $fullMissing[] = $short;
-    }
-}
-check('each acronym is decoded to its full name', $fullMissing === [],
-    'no full name for: ' . implode(', ', array_slice($fullMissing, 0, 3)));
-
-// It is a reference, so it must not print on a sheet that gets signed.
-// Checked against the RAW page, not markup(): the rule lives in the
-// <style> block, and markup() strips that before anything else, so
-// asserting on it there would pass whatever the CSS said.
+// And there is no legend left behind. Asserting its absence is what
+// makes this a change rather than an addition - a presence check
+// would have passed the whole time the table was there.
+check('the program legend is gone',
+    strpos($root, 'mlx-legend') === false);
 $rootRaw = page('view=explore', $sessId);
-check('the legend is hidden when printing',
-    preg_match('/@media print\s*\{(?:[^{}]|\{[^{}]*\})*?\.mlx-legend\s*\{[^}]*display\s*:\s*none/s', $rootRaw) === 1);
+check('and so is its CSS',
+    strpos($rootRaw, '.mlx-legend') === false);
 
 echo "\ninside a program\n";
 $inProg = markup(page('view=explore&path=' . rawurlencode($prog), $sessId));
