@@ -644,6 +644,27 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
             <h1>Masterlist</h1>
             <p>Search, filter, and send the full student list. Open a section chip in a block heading to rename it or change who is in it. Codes follow the format 11001 (year 1, 1st semester, section 1).</p>
         </div>
+
+        <!-- THE TWO VIEWS OF THE SAME RECORDS, side by side.
+             One module, two ways to read it: this flat list is what
+             gets printed and signed, and Folders is the same records
+             filed program / year / section for filing on a shared
+             drive and handing to another system.
+
+             A toggle in the header rather than a second sidebar
+             entry, because they are two views of one thing and a
+             user looking for the masterlist should not have to
+             guess which of two identically-named nav items holds it. -->
+        <div class="masterlist-views" role="group" aria-label="Choose how the masterlist is displayed">
+            <a class="mlv-btn is-active" href="masterlist.php"
+               title="One flat, printable list (this view)">
+                <i class="fas fa-table-list"></i> List
+            </a>
+            <a class="mlv-btn" href="masterlist-folders.php"
+               title="Browse the same records as folders: program, year level, section">
+                <i class="fas fa-folder-tree"></i> Folders
+            </a>
+        </div>
     </header>
 
     <!-- Action bar: one group. Both section-creation entry points (auto-assign
@@ -661,12 +682,6 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 <button type="button" class="btn btn-primary" onclick="sendList()" title="Send the masterlist to the Academic Strand / Course Assignment module (CMS)">
                     <i class="fas fa-paper-plane"></i> Send List
                 </button>
-                <!-- Folders is the other way to read the same records:
-                     the drive, opened one folder at a time. -->
-                <a class="btn btn-secondary" href="masterlist-folders.php"
-                   title="Browse the masterlist as folders: program, year level, section">
-                    <i class="fas fa-folder-tree"></i> Folders
-                </a>
                 <div class="export-wrap" style="position:relative;">
                     <button class="btn btn-secondary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
                     <div class="export-menu" id="exportMenu" style="position:absolute;top:100%;right:0;z-index:50;background:white;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.1);min-width:160px;padding:4px;margin-top:4px;display:none;">
@@ -2123,6 +2138,16 @@ async function sendList() {
 }</script>
 
 <style>
+/* The List / Folders view toggle. Identical rules to the ones on
+   masterlist-folders.php, on purpose: a toggle that looked
+   different on each view would read as two separate features
+   rather than two ways of reading one set of records. */
+.masterlist-views { display:flex; gap:6px; align-items:center; }
+.mlv-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border:1px solid #e2e8f0; border-radius:9px; background:#fff; color:#475569; font-size:13px; font-weight:600; text-decoration:none; white-space:nowrap; }
+.mlv-btn:hover { border-color:#93c5fd; color:#1d4ed8; background:#eff6ff; }
+.mlv-btn.is-active { background:#1a3a8c; border-color:#1a3a8c; color:#fff; }
+.mlv-btn.is-active:hover { background:#1a3a8c; color:#fff; }
+
 .bulk-bar a { text-decoration: none; }
 /* Filter dropdowns should look clickable */
 #filterCourse, #filterYear, #filterSchoolYear, #filterSemester, #filterStatus, #filterSection,

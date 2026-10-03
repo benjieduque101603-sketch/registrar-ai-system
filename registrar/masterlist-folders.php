@@ -169,6 +169,21 @@ include '../includes/header.php';
                 <strong>11001</strong> (year 1, 1st semester, section 1).
             </p>
         </div>
+
+        <!-- The same two-view toggle the flat Masterlist carries, so
+             the switch is in the same place on both and neither page
+             has to be found through the nav. -->
+        <div class="mlf-views" role="group" aria-label="Choose how the masterlist is displayed">
+            <a class="mlv-btn" href="masterlist.php"
+               title="One flat, printable list">
+                <i class="fas fa-table-list"></i> List
+            </a>
+            <a class="mlv-btn is-active" href="masterlist-folders.php"
+               title="Browse the records as folders (this view)">
+                <i class="fas fa-folder-tree"></i> Folders
+            </a>
+        </div>
+
         <div class="mlf-header-actions">
             <?php if ($scopeSections): ?>
                 <a class="btn btn-primary" href="<?= htmlspecialchars($exportBase . '&' . http_build_query($exportQuery)) ?>">
@@ -176,9 +191,6 @@ include '../includes/header.php';
                     Download <?= $current['path'] === '' ? 'everything' : htmlspecialchars($current['name']) ?>
                 </a>
             <?php endif; ?>
-            <a class="btn btn-secondary" href="masterlist.php">
-                <i class="fas fa-table-list"></i> Flat masterlist
-            </a>
         </div>
     </header>
 
@@ -440,6 +452,26 @@ include '../includes/header.php';
 .mlf-header h1 { font-size:28px; font-weight:800; color:#0f172a; margin:0 0 6px; letter-spacing:-.02em; }
 .mlf-header p { margin:0; font-size:14px; color:#475569; max-width:70ch; line-height:1.6; }
 .mlf-header-actions { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* ── The List / Folders view toggle ─────────────────────────
+     Defined here and repeated on the flat Masterlist page, because
+     each page carries its own stylesheet and a toggle that looked
+     different on the two views would read as two different
+     features rather than two ways of looking at one.
+
+     It is a pair of links, not tabs with hidden panels: both views
+     are real pages with their own URLs, so Back works and a view
+     can be linked to. */
+.mlv-btn, .masterlist-views .mlv-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:8px 14px; border:1px solid #e2e8f0; border-radius:9px;
+    background:#fff; color:#475569; font-size:13px; font-weight:600;
+    text-decoration:none; white-space:nowrap;
+}
+.mlv-btn:hover { border-color:#93c5fd; color:#1d4ed8; background:#eff6ff; }
+.mlv-btn.is-active { background:#1a3a8c; border-color:#1a3a8c; color:#fff; }
+.mlv-btn.is-active:hover { background:#1a3a8c; color:#fff; }
+.mlf-views { display:flex; gap:6px; align-items:center; }
 
 .mlf-banner { display:flex; gap:12px; align-items:flex-start; padding:13px 16px; border-radius:12px; margin-bottom:14px; font-size:13.5px; line-height:1.6; border:1px solid; }
 .mlf-banner i { margin-top:2px; }
