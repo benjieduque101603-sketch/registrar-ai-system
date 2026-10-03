@@ -39,21 +39,47 @@ $filterStatus     = isset($_GET['status']) ? trim((string) $_GET['status']) : ''
 $filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
 
 // ─── WHICH VIEW? ───────────────────────────────────────────
-// 'list'    the flat, printable, signable blocks (the default)
+// 'list'    the flat, printable, signable blocks
 // 'folders' the same records as ONE table in which a folder is a
 //           row you expand
+// 'explore' the same records as a FOLDER BROWSER: you stand at
+//           exactly one folder at a time, click BSIT and go INTO
+//           it, and a section folder opens the roster it holds
 //
 // A query parameter rather than a JS flag, so the view is a real
 // address: the Back button works and either view can be linked to.
-// Anything unrecognised falls back to the list rather than
+//
+// 'explore' is the DEFAULT. It is the shape a registrar actually
+// reads the list in - open a program, open a year, open a section,
+// read the roster - and it needs no filter set to be useful, where
+// the flat list opens as one long sheet of every cohort on file.
+// The printable blocks are still one click away and are still what
+// gets signed; they were the default only because they were the
+// first thing built.
+//
+// Anything unrecognised falls back to the default rather than
 // rendering nothing, because a stale bookmark must not dead-end.
-$view = (isset($_GET['view']) && $_GET['view'] === 'folders') ? 'folders' : 'list';
+$defaultView = 'explore';
+$view = (isset($_GET['view']) && in_array($_GET['view'], ['list', 'folders', 'explore'], true))
+    ? (string) $_GET['view']
+    : $defaultView;
 
-// The folder to open on arrival. Its ancestors open too, so a link
-// to one section actually reveals that section instead of landing
-// on a collapsed tree that shows the reader nothing.
+// The folder to open on arrival in the FOLDERS TABLE. Its ancestors
+// open too, so a link to one section actually reveals that section
+// instead of landing on a collapsed tree that shows the reader
+// nothing.
 $focusPath = $view === 'folders' && isset($_GET['open'])
     ? trim((string) $_GET['open'])
+    : '';
+
+// Where the BROWSER is standing. This is a location, not a
+// disclosure: `?path=BSIT/Year 1/11001` means "open this folder",
+// and clicking BSIT in the browser rewrites it. mlf_resolve()
+// matches it against folders that already exist and never builds a
+// query from it, so a crafted path cannot reach rows the reader
+// could not already see.
+$explorePath = $view === 'explore' && isset($_GET['path'])
+    ? trim((string) $_GET['path'])
     : '';
 
 // The list below only holds students who HAVE a section.
@@ -108,25 +134,29 @@ $sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, l
 
 $students = $db->fetchAll($sql, $params);
 
-// ─── THE FOLDER TABLE ──────────────────────────────────────
+// ─── THE FOLDER VIEWS ───────────────────────────────────────
 //
-// The folders view needs a DIFFERENT set of rows from the blocks
-// above, and the difference is the whole point of having two views.
+// The two folder surfaces need a DIFFERENT set of rows from the
+// blocks above, and the difference is the whole point of having
+// them.
 //
 // $students above is the printable roster: it already dropped every
 // student with no section, because a row nobody could sign has no
-// place on a signed sheet. The folder table is an INVENTORY - it
-// must show those students too, filed under "Unassigned Section",
-// or a cohort would silently vanish the moment someone opened it.
+// place on a signed sheet. A folder view is an INVENTORY - it must
+// show those students too, filed under "Unassigned Section", or a
+// cohort would silently vanish the moment someone opened it.
 //
 // So it runs its own query WITHOUT the section predicate, reusing
-// the filters already parsed above. Only loaded in the folders
-// view; the list view pays nothing for it.
+// the filters already parsed above. Both folder views are driven
+// from ONE tree built from those rows: the table flattens it
+// (mlf_rows), the browser stands inside it (mlf_resolve). The list
+// view pays nothing for it.
 $folderRows  = [];
 $folderOpen  = [];
 $folderTotal = 0;
+$folderNode  = null;
 
-if ($view === 'folders') {
+if ($view === 'folders' || $view === 'explore') {
     $fsql = "SELECT id, student_number, first_name, middle_name, last_name,
                     name_suffix, course, year_level, section, school_year,
                     semester, gender, status, contact_number, email
@@ -162,24 +192,34 @@ if ($view === 'folders') {
     $fsql .= ' ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, last_name ASC, first_name ASC';
 
     $allStudents = $db->fetchAll($fsql, $fparams);
-    $folderRows  = mlf_rows(mlf_build_tree($allStudents), $focusPath);
+    $folderTree  = mlf_build_tree($allStudents);
     $folderTotal = count($allStudents);
+
+    // The BROWSER stands at one folder; the TABLE flattens the whole
+    // tree into rows. Both read the same tree, so the two views can
+    // never disagree about who is filed where.
+    if ($view === 'explore') {
+        $folderNode = mlf_resolve($folderTree, $explorePath);
+    }
 
     // Which folders start open: the focus and its ancestors, or -
     // with no focus - every PROGRAM. Starting on the programs is the
     // shape a drive opens in: the reader sees the programs without a
     // click, and the cohorts stay folded away until asked for.
-    foreach ($folderRows as $row) {
-        if ($row['type'] === 'folder' && (int) $row['level'] === 0) {
-            $folderOpen[$row['path']] = true;
+    if ($view === 'folders') {
+        $folderRows = mlf_rows($folderTree, $focusPath);
+        foreach ($folderRows as $row) {
+            if ($row['type'] === 'folder' && (int) $row['level'] === 0) {
+                $folderOpen[$row['path']] = true;
+            }
         }
-    }
-    if ($focusPath !== '') {
-        $parts = explode('/', trim(str_replace('\\', '/', $focusPath), '/'));
-        $walk  = '';
-        foreach ($parts as $part) {
-            $walk = $walk === '' ? $part : $walk . '/' . $part;
-            $folderOpen[$walk] = true;
+        if ($focusPath !== '') {
+            $parts = explode('/', trim(str_replace('\\', '/', $focusPath), '/'));
+            $walk  = '';
+            foreach ($parts as $part) {
+                $walk = $walk === '' ? $part : $walk . '/' . $part;
+                $folderOpen[$walk] = true;
+            }
         }
     }
 }
@@ -377,6 +417,39 @@ $courses = $db->fetchAll(
      WHERE course IS NOT NULL AND TRIM(course) != ''
      ORDER BY course"
 );
+
+// THE PROGRAM LEGEND.
+//
+// Programs are printed as acronyms everywhere they are listed - the
+// folder tiles, the breadcrumb, the roster. That is right for
+// scanning and wrong for reading: "BSIT" is a compression, and a
+// compression with nowhere to be decompressed is a barrier. So this
+// is the one place on the page where the full name is the point.
+//
+// It is derived from the same `course` values the tiles are, so a
+// program cannot appear in one and not the other. The count is per
+// program across the WHOLE table, not the current filter: this
+// answers "what is BSIT and how many are in it", and a count that
+// moved with the filter would answer a different question each time.
+//
+// The work-queue pseudo-programs (Unassigned Program) are excluded -
+// they are not programs and have no acronym to decode.
+$programLegend = [];
+foreach ($db->fetchAll(
+    "SELECT TRIM(course) AS course, COUNT(*) AS n
+     FROM students
+     WHERE course IS NOT NULL AND TRIM(course) != ''
+       AND TRIM(course) NOT LIKE 'Unassigned%'
+     GROUP BY TRIM(course)
+     ORDER BY TRIM(course)"
+) as $r) {
+    $programLegend[] = [
+        'full'   => (string) $r['course'],
+        'short'  => courseDisplay((string) $r['course']),
+        'count'  => (int) $r['n'],
+        'abbrev' => courseDisplayTitle((string) $r['course']) !== '',
+    ];
+}
 $years = $db->fetchAll(
     "SELECT DISTINCT year_level FROM students WHERE year_level IS NOT NULL ORDER BY year_level"
 );
@@ -742,26 +815,47 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
             <p>Search, filter, and send the full student list. Open a section chip in a block heading to rename it or change who is in it. Codes follow the format 11001 (year 1, 1st semester, section 1).</p>
         </div>
 
-        <!-- THE TWO VIEWS OF THE SAME RECORDS, side by side.
-             One module, two ways to read it: this flat list is what
-             gets printed and signed, and Folders is the same records
-             filed program / year / section for filing on a shared
-             drive and handing to another system.
+        <!-- THE VIEWS OF THE SAME RECORDS.
+             There are three: the flat list is what gets printed and
+             signed, the Folders table shows every folder on one
+             expandable page, and the Folders browser walks into one
+             folder at a time the way a shared drive does — click BSIT
+             and you are inside BSIT.
 
-             A toggle in the header rather than a second sidebar
-             entry, because they are two views of one thing and a
-             user looking for the masterlist should not have to
-             guess which of two identically-named nav items holds it. -->
-        <div class="masterlist-views" role="group" aria-label="Choose how the masterlist is displayed">
-            <a class="mlv-btn is-active" href="masterlist.php?view=list"
-               title="One flat, printable list (this view)">
-                <i class="fas fa-table-list"></i> List
-            </a>
-            <a class="mlv-btn" href="masterlist.php?view=folders"
-               title="Browse the same records as folders: program, year level, section">
-                <i class="fas fa-folder-tree"></i> Folders
-            </a>
-        </div>
+             There is NO view toggle in the header any more. All three
+             buttons are gone: Browse, Table, List. What replaced a
+             choice is a default — the browser is simply what this page
+             IS, and ?view=folders and ?view=list still render in full
+             for anyone holding the URL.
+
+             So the header no longer states which view you are in. That
+             is a real loss and it is deliberate: the one button that
+             was left said nothing the page did not already say, and
+             three buttons advertised two ways into a module that has
+             one. The view a reader is in is now visible from the page
+             itself — folder tiles, or a ledger.
+
+             $carryFilters stays. The toggle was its first caller, but
+             the BROWSER's folder links (below) are the second: without
+             it, clicking from a filtered folder tree into another
+             folder would silently drop the filters. -->
+        <?php
+        // The filter part of a link that changes WHERE you are looking:
+        // the dimensions the reader already chose, minus the
+        // view/location keys that are about to be replaced anyway.
+        //
+        // This used to be only the view toggle. That toggle is gone,
+        // so this closure looks vestigial at first glance and is not —
+        // the folder links further down are what still need it. Do not
+        // delete it on the grounds that "the toggle went away".
+        $carryFilters = static function (array $drop) use ($anyFilterActive): string {
+            if (!$anyFilterActive) {
+                return '';
+            }
+            $kept = array_diff_key($_GET, $drop);
+            return $kept ? '&amp;' . http_build_query($kept) : '';
+        };
+        ?>
     </header>
 
     <!-- Action bar: one group. Both section-creation entry points (auto-assign
@@ -814,11 +908,22 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
     <!-- Toolbar: the search box and Filter. Create Section is gone - a new
          section code is no longer minted from this page; the chips in the
          block headings still open Edit / Manage Students for sections that
-         already exist. -->
+         already exist.
+
+         "Select all shown" and the "Showing N student(s)" count describe the
+         PRINTABLE LIST, not a folder: they counted rows in every cohort on
+         file and fed the bulk bar, which acts on those rows. Leaving them on
+         the Browse view offered a checkbox that ticked nothing and a count
+         that did not describe the folder actually open, so they are shown
+         only where they are true. The search box is kept on both - it is
+         wired to whichever table the current view renders. -->
     <section class="masterlist-toolbar" aria-label="Masterlist filters">
         <div class="masterlist-search">
             <i class="fas fa-search"></i>
-            <input type="text" id="masterlistSearch" name="q" class="form-control" placeholder="Search by name, student no., course…">
+            <input type="text" id="masterlistSearch" name="q" class="form-control"
+                   placeholder="<?= $view === 'explore'
+                       ? 'Search this folder by name, student no., email…'
+                       : 'Search by name, student no., course…' ?>">
         </div>
         <button type="button" class="btn btn-primary masterlist-filter-btn" onclick="openFilterSearchModal()">
             <i class="fas fa-sliders"></i> Filter
@@ -826,10 +931,19 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 <span style="background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;">Active</span>
             <?php endif; ?>
         </button>
-        <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#475569;cursor:pointer;">
-            <input type="checkbox" id="selectAllPage" style="width:16px;height:16px;accent-color:#2563eb;"> Select all shown
-        </label>
-        <span style="font-size:13px;color:#64748b;">Showing <strong id="showingCount"><?= $totalStudents ?></strong> student(s)</span>
+        <?php if ($view === 'list'): ?>
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#475569;cursor:pointer;">
+                <input type="checkbox" id="selectAllPage" style="width:16px;height:16px;accent-color:#2563eb;"> Select all shown
+            </label>
+            <span style="font-size:13px;color:#64748b;">Showing <strong id="showingCount"><?= $totalStudents ?></strong> student(s)</span>
+        <?php else: ?>
+            <span style="font-size:13px;color:#64748b;">
+                <?php if ($view === 'explore' && $folderNode): ?>
+                    In <strong><?= htmlspecialchars((string) $folderNode['name']) ?></strong>:
+                    <strong id="showingCount"><?= $view === 'explore' ? count($folderNode['students']) : 0 ?></strong> student(s)
+                <?php endif; ?>
+            </span>
+        <?php endif; ?>
     </section>
 
     <!-- Bulk action bar -->
@@ -842,6 +956,354 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
     </div>
 
     <div id="masterlistContent">
+<?php if ($view === 'explore' && $folderNode): ?>
+        <?php
+        // THE FOLDER BROWSER.
+        //
+        // Not a table with folders in it — a real browser. The page
+        // is always standing at exactly ONE folder: the root holding
+        // program folders, or inside BSIT holding year folders, or
+        // inside a section holding the roster it contains. Clicking a
+        // folder goes INTO it.
+        //
+        // mlf_resolve() already decided what that one folder holds —
+        // its breadcrumbs, its sub-folders, and for a section, its
+        // students. This markup only places them. The alternative,
+        // rendering the whole tree on one long page, was tried and is
+        // the wrong shape: it cannot answer "show me BSIT" without
+        // making the reader find BSIT in the middle of everything.
+        //
+        // Navigation is real links, not JS. The location is the URL,
+        // so a folder can be bookmarked, pasted into an email to a
+        // department, and reached with Back.
+        $node       = $folderNode;
+        $isLeaf     = $node['level'] === 'section';
+        $carryQuery = $carryFilters(['view' => 1, 'open' => 1, 'path' => 1]);
+        $toFolder   = static function (string $path) use ($carryQuery): string {
+            return 'masterlist.php?view=explore'
+                 . ($path === '' ? '' : '&amp;path=' . rawurlencode($path))
+                 . $carryQuery;
+        };
+        // mlf_resolve() hands back breadcrumbs that END at the folder
+        // you are standing in. So the ancestors are the links and the
+        // LAST crumb is the one you are already on — it renders as
+        // plain text. Appending $node['name'] as well, as an earlier
+        // draft of this markup did, printed "BSIT / Year 1 / 11001 /
+        // 11001".
+        //
+        // The second branch is the stale-link case: mlf_resolve()
+        // returns the root with exists=false when the path names
+        // nothing. Showing that root as-is would render an empty
+        // folder screen under a message promising a list, so the root
+        // is re-resolved here and the programs are shown for real.
+        $nodeMissing = !$node['exists'];
+        if ($nodeMissing) {
+            $node = mlf_resolve(mlf_build_tree($allStudents), '');
+        }
+        $crumbs  = $node['breadcrumbs'];
+        $lastCrumb = array_key_last($crumbs);
+        ?>
+        <div class="mlx-browser card">
+            <!-- Where you are. The root crumb is always present so
+                 there is always one click back to the top, which is
+                 the thing a drive always gives you and a tree does
+                 not. -->
+            <nav class="mlx-crumbs" aria-label="Folder path">
+                <a class="mlx-crumb mlx-crumb-root" href="<?= $toFolder('') ?>">
+                    <i class="fas fa-hard-drive"></i> Masterlist
+                </a>
+                <?php foreach ($crumbs as $crumbIndex => $crumb): ?>
+                    <i class="fas fa-chevron-right mlx-crumb-sep" aria-hidden="true"></i>
+                    <?php
+                    // The program crumb is printed as its acronym. The
+                    // path in the URL keeps the full name - only the
+                    // label changes - so every link still resolves.
+                    // $crumbIndex 0 IS the program, by the shape
+                    // mlf_resolve() builds: program, year, section.
+                    $cIsProgram = ($crumbIndex === 0);
+                    $cLabel = $cIsProgram
+                        ? courseDisplay((string) $crumb['name'])
+                        : (string) $crumb['name'];
+                    $cTitle = $cIsProgram
+                        ? courseDisplayTitle((string) $crumb['name'])
+                        : '';
+                    ?>
+                    <?php if ($crumbIndex === $lastCrumb): ?>
+                        <span class="mlx-crumb mlx-crumb-here"
+                              <?php if ($cTitle !== ''): ?> title="<?= htmlspecialchars($cTitle) ?>"<?php endif; ?>>
+                            <?= htmlspecialchars($cLabel) ?>
+                        </span>
+                    <?php else: ?>
+                        <a class="mlx-crumb" href="<?= $toFolder((string) $crumb['path']) ?>"
+                           <?php if ($cTitle !== ''): ?>
+                               title="<?= htmlspecialchars($cTitle) ?>"
+                               aria-label="<?= htmlspecialchars((string) $crumb['name']) ?>"
+                           <?php endif; ?>>
+                            <?= htmlspecialchars($cLabel) ?>
+                        </a>
+                    <?php endif; ?>
+                <?php endforeach; ?>
+            </nav>
+
+            <?php if ($nodeMissing): ?>
+                <!-- The URL named a folder that is not there — a stale
+                     link, or a section that has since been renamed.
+                     Landing on the root and staying silent would look
+                     exactly like the link having worked, so the page
+                     says so, and then shows the root so the reader is
+                     not stranded. -->
+                <div class="mlx-missing">
+                    <i class="fas fa-folder-open"></i>
+                    <p><strong>That folder is not here.</strong></p>
+                    <p>It may have been renamed, or the link may be out of date. Everything on file is listed below.</p>
+                </div>
+            <?php endif; ?>
+
+            <div class="mlx-head">
+                <div>
+                    <div class="mlx-title">
+                        <i class="fas <?= $isLeaf ? 'fa-file-lines' : ($node['level'] === 'root' ? 'fa-hard-drive' : 'fa-folder-open') ?>"></i>
+                        <?php
+                        // The heading is the program name when the reader
+                        // is standing in a program. Shown as its acronym,
+                        // for the same reason the tile is: this is a
+                        // list of programs in the reader's mind, and the
+                        // full title is the tooltip.
+                        $hTitle = $node['level'] === 'program'
+                            ? courseDisplayTitle((string) $node['name'])
+                            : '';
+                        ?>
+                        <span <?php if ($hTitle !== ''): ?>
+                            title="<?= htmlspecialchars($hTitle) ?>"
+                            aria-label="<?= htmlspecialchars((string) $node['name']) ?>"
+                        <?php endif; ?>><?= htmlspecialchars(
+                            $node['level'] === 'program'
+                                ? courseDisplay((string) $node['name'])
+                                : (string) $node['name']
+                        ) ?></span>
+                    </div>
+                    <div class="mlx-sub">
+                        <?php if ($isLeaf): ?>
+                            <?= (int) $node['count'] ?> student<?= (int) $node['count'] === 1 ? '' : 's' ?>
+                            &middot; section <strong><?= htmlspecialchars((string) ($node['section'] ?? '')) ?></strong>
+                            &middot; <?php
+                                // The program named beside the section,
+                                // as its acronym - same rule as the tile
+                                // and the breadcrumb above.
+                                $pName  = (string) ($node['program'] ?? '');
+                                $pTitle = courseDisplayTitle($pName);
+                                ?><span <?php if ($pTitle !== ''): ?>
+                                    title="<?= htmlspecialchars($pTitle) ?>"
+                                    aria-label="<?= htmlspecialchars($pName) ?>"
+                                <?php endif; ?>><?= htmlspecialchars(courseDisplay($pName)) ?></span>
+                            / <?= htmlspecialchars((string) ($node['year'] ?? '')) ?>
+                        <?php elseif ($node['level'] === 'root'): ?>
+                            <?= count($node['folders']) ?> program folder<?= count($node['folders']) === 1 ? '' : 's' ?>
+                            &middot; <?= (int) $folderTotal ?> student<?= (int) $folderTotal === 1 ? '' : 's' ?> on file
+                        <?php else: ?>
+                            <?= count($node['folders']) ?> folder<?= count($node['folders']) === 1 ? '' : 's' ?>
+                            &middot; <?= (int) $node['count'] ?> student<?= (int) $node['count'] === 1 ? '' : 's' ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="mlx-actions">
+                    <?php if ((string) $node['path'] !== ''): ?>
+                        <a class="btn btn-secondary btn-sm" href="<?= $toFolder((string) $node['parent']) ?>">
+                            <i class="fas fa-arrow-left"></i> Up one level
+                        </a>
+                    <?php endif; ?>
+                    <?php if ((int) $node['count'] > 0): ?>
+                        <!-- The whole subtree, not just what is on screen. -->
+                        <a class="btn btn-secondary btn-sm"
+                           href="../api/masterlist-folders.php?action=export&amp;path=<?= rawurlencode((string) $node['path']) ?>">
+                            <i class="fas fa-file-zipper"></i> Download
+                        </a>
+                    <?php endif; ?>
+                </div>
+            </div>
+<?php if ($node['folders']): ?>
+                <!-- FOLDERS. Each one is a link to go INTO it, which is
+                     the whole interaction: there is no expand arrow
+                     here, because nothing on this screen reveals
+                     anything else on this screen. -->
+                <div class="mlx-folders">
+                    <?php foreach ($node['folders'] as $folder):
+                        $fCount  = (int) $folder['count'];
+                        $fInside = (int) $folder['subfolders'];
+                        // A PROGRAM tile is printed as its acronym -
+                        // "BSIT", not 55 characters of degree title.
+                        // Every list of programs is scanned for the
+                        // acronym, never read, and the root is exactly
+                        // that list.
+                        //
+                        // Year and section folders are NOT abbreviated.
+                        // "Year 1" has no shorter true form, and a
+                        // section code IS the name.
+                        $fIsProgram = ($folder['kind'] ?? '') === 'program';
+                        $fName   = $fIsProgram
+                            ? courseDisplay((string) $folder['name'])
+                            : (string) $folder['name'];
+                        $fTitle  = $fIsProgram
+                            ? courseDisplayTitle((string) $folder['name'])
+                            : '';
+                        ?>
+                        <a class="mlx-tile <?= $folder['unassigned'] ? 'is-unassigned' : '' ?>"
+                           href="<?= $toFolder((string) $folder['path']) ?>"
+                           <?php if ($fTitle !== ''): ?>
+                               title="<?= htmlspecialchars($fTitle) ?>"
+                               aria-label="<?= htmlspecialchars((string) $folder['name']) ?>"
+                           <?php endif; ?>>
+                            <i class="fas fa-folder mlx-tile-icon"></i>
+                            <span class="mlx-tile-body">
+                                <span class="mlx-tile-name"><?= htmlspecialchars($fName) ?></span>
+                                <span class="mlx-tile-meta">
+                                    <?= $fCount ?> student<?= $fCount === 1 ? '' : 's' ?>
+                                    <?php if ($fInside > 0): ?>
+                                        &middot; <?= $fInside ?> folder<?= $fInside === 1 ? '' : 's' ?> inside
+                                    <?php endif; ?>
+                                </span>
+                                <?php if ($folder['unassigned']): ?>
+                                    <span class="mlf-tag">not yet placed</span>
+                                <?php endif; ?>
+                            </span>
+                            <i class="fas fa-chevron-right mlx-tile-go" aria-hidden="true"></i>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+
+        <?php if ($isLeaf): ?>
+                <?php
+                // THE ROSTER THIS FOLDER HOLDS.
+                //
+                // Reached by clicking a section folder — this is the
+                // "show me the table of all the details" the reader
+                // asked for. Columns come from mlf_roster_columns(),
+                // the same set the ZIP export writes, so what is read
+                // here is exactly what gets handed off.
+                //
+                // These rows were NOT filtered by "has a section" —
+                // they are the inventory, so a student filed under
+                // "Unassigned Section" is visible and fixable rather
+                // than missing.
+                ?>
+                <div class="mlx-roster-scroll">
+                    <!-- Deliberately NOT .masterlist-table.
+                         That class is the printable List's ledger: it is
+                         table-layout:fixed with hand-measured per-column
+                         tracks (.c-name, .c-contact, .c-email …) and a
+                         1390px floor. This table sets none of those
+                         tracks, so every one of its fourteen columns
+                         fell to an equal share and the floor forced a
+                         needless sideways scroll. It also had the List's
+                         search, sort and CSV-export JavaScript attaching
+                         to it by class, which exported the roster through
+                         the List's column map. .mlx-table is its own
+                         thing and is styled below. -->
+                    <table class="mlx-table">
+                        <thead>
+                            <tr>
+                                <th class="mlx-x-no">#</th>
+                                <?php foreach (mlf_roster_columns() as $colLabel): ?>
+                                    <th><?= htmlspecialchars((string) $colLabel) ?></th>
+                                <?php endforeach; ?>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php $rowNo = 1; foreach ($node['students'] as $student): ?>
+                                <tr>
+                                    <td class="mlx-x-no"><?= (int) $rowNo++ ?></td>
+                                    <?php foreach (mlf_roster_row((array) $student) as $fieldValue): ?>
+                                        <td><?= htmlspecialchars(trim((string) $fieldValue)) ?: '<span class="mlx-na">&mdash;</span>' ?></td>
+                                    <?php endforeach; ?>
+                                </tr>
+                            <?php endforeach; ?>
+                            <?php if (!$node['students']): ?>
+                                <tr><td colspan="<?= 1 + count(mlf_roster_columns()) ?>" class="mlx-empty">This folder is empty.</td></tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php elseif ($node['exists'] && !$node['folders']): ?>
+                <div class="mlx-missing">
+                    <i class="fas fa-folder-open"></i>
+                    <p>This folder is empty.</p>
+                </div>
+            <?php endif; ?>
+
+            <p class="mlf-table-note">
+                <i class="fas fa-circle-info"></i>
+                Click a folder to open it. This browser shows <strong>every</strong> student on file, including any not yet
+                placed in a section; the <strong>List</strong> view is the printable roster and leaves those out.
+            </p>
+        </div>
+<?php endif; ?>
+
+<?php if ($programLegend): ?>
+        <?php
+        // THE PROGRAM LEGEND - the key to the acronyms.
+        //
+        // Every program above this point is printed as its acronym,
+        // which is what makes a list of fifteen scannable. This table
+        // is the other half of that decision: it is where a
+        // registrar looks up what one of those acronyms MEANS, and
+        // cannot be abbreviated without defeating the point.
+        //
+        // It sits below the browser rather than above it because it is
+        // a reference, not the work. The reader came to open a folder;
+        // the legend is what they consult once an acronym stops being
+        // obvious.
+        //
+        // The count is deliberately NOT the filtered count. It is each
+        // program's size across the whole table, because the question
+        // a legend answers is "what is BSIT and how many are in it",
+        // and a number that moved with the filter would answer a
+        // different question every time the reader looked at it.
+        //
+        // Rows whose program has no acronym (stored short already) are
+        // still listed - the reader needs to see that it is there, and
+        // the two columns simply read the same.
+        ?>
+        <section class="mlx-legend card" aria-labelledby="mlxLegendTitle">
+            <div class="mlx-legend-head">
+                <h2 id="mlxLegendTitle" class="mlx-legend-title">
+                    <i class="fas fa-book-open"></i> Programs
+                </h2>
+                <p class="mlx-legend-note">
+                    Programs are shown as acronyms above. This is what each one stands for.
+                </p>
+            </div>
+            <div class="mlx-legend-scroll">
+                <table class="mlx-legend-table">
+                    <thead>
+                        <tr>
+                            <th scope="col" class="mlx-legend-c-short">Acronym</th>
+                            <th scope="col" class="mlx-legend-c-full">Program</th>
+                            <th scope="col" class="mlx-legend-c-n">Students</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($programLegend as $p): ?>
+                            <tr>
+                                <td class="mlx-legend-c-short">
+                                    <span class="mlx-legend-tag"><?= htmlspecialchars($p['short']) ?></span>
+                                </td>
+                                <td class="mlx-legend-c-full">
+                                    <?php if ($p['abbrev']): ?>
+                                        <span title="<?= htmlspecialchars($p['full']) ?>"><?= htmlspecialchars($p['full']) ?></span>
+                                    <?php else: ?>
+                                        <?= htmlspecialchars($p['full']) ?>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="mlx-legend-c-n"><?= (int) $p['count'] ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+<?php endif; ?>
 <?php if ($view === 'folders' && $folderRows): ?>
         <?php
         // THE FOLDER TABLE.
@@ -921,7 +1383,23 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                                 <i class="fas <?= $isFolder
                                     ? ($level === 0 ? 'fa-folder' : ($level === 1 ? 'fa-calendar' : 'fa-users'))
                                     : 'fa-user' ?> mlf-row-icon<?= $row['unassigned'] ? ' is-unassigned' : '' ?>"></i>
-                                <span class="mlf-row-name"><?= htmlspecialchars(trim((string) $row['name']) ?: 'N/A') ?></span>
+                                <?php
+                                // A program row prints as its acronym. Level
+                                // 0 IS a program; years and sections are
+                                // left alone, because "Year 1" has no
+                                // shorter true form.
+                                $rowLabel = $isFolder && $level === 0
+                                    ? courseDisplay(trim((string) $row['name']))
+                                    : trim((string) $row['name']);
+                                $rowTitle = $isFolder && $level === 0
+                                    ? courseDisplayTitle(trim((string) $row['name']))
+                                    : '';
+                                ?>
+                                <span class="mlf-row-name"
+                                      <?php if ($rowTitle !== ''): ?>
+                                          title="<?= htmlspecialchars($rowTitle) ?>"
+                                          aria-label="<?= htmlspecialchars(trim((string) $row['name'])) ?>"
+                                      <?php endif; ?>><?= htmlspecialchars($rowLabel ?: 'N/A') ?></span>
                                 <?php if ($isFolder && $row['unassigned']): ?>
                                     <span class="mlf-tag">not yet placed</span>
                                 <?php endif; ?>
@@ -978,7 +1456,25 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
             </p>
         </div>
     <?php else: ?>
-    <?php endif; ?>        <?php if (empty($students)): ?>
+    <?php endif; ?>
+    <?php
+    // THE PRINTABLE LIST is the only thing below, and it is scoped to
+    // ?view=list deliberately.
+    //
+    // The chain above ends in an `else`, which made this branch the
+    // fallback for ANY view that is not the folder table - and the
+    // folder BROWSER is not that branch, it is an independent `if`
+    // above. So ?view=explore fell through to here and printed the
+    // whole printable ledger underneath the browser: two complete
+    // renderings of the same students on one page, the browser's
+    // roster sitting on top of a roster the reader never asked for.
+    //
+    // Gating on $view rather than on emptiness is what makes the
+    // three views mutually exclusive. tests/explore_render_check.php
+    // asserts the ledger class is absent from a browser page, because
+    // this class of bug is invisible in the markup until you render.
+    if ($view === 'list'): ?>
+        <?php if (empty($students)): ?>
             <div class="card" style="box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                 <div style="padding: 48px 24px; text-align: center; color: #64748b;">
                     <i class="fas fa-users-slash" style="font-size:40px;color:#e2e8f0;display:block;margin-bottom:14px;"></i>
@@ -1251,9 +1747,15 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 </div>
             <?php endforeach; ?>
         <?php endif; ?>
+    <?php endif; ?>
     </div>
 
-    <?php if (!empty($students)): ?>
+    <?php
+    // The footer's counts ($totalBlocks, $tableCount, $sectionCap) all
+    // describe the printable List. On a folder page it would quote block
+    // and table totals for a view that has no blocks, so it is scoped to
+    // the same view as the list itself.
+    if ($view === 'list' && !empty($students)): ?>
     <div class="card" style="margin-top: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
         <div class="table-footer">
             <div class="info-text">
@@ -1275,8 +1777,18 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                     <div class="form-group"><label>Course</label>
                         <select name="course" id="filterCourse" class="form-control">
                             <option value="">All courses</option>
-                            <?php foreach ($courses as $row): ?>
-                                <option value="<?= htmlspecialchars($row['course']) ?>" <?= $filterCourse === $row['course'] ? 'selected' : '' ?>><?= htmlspecialchars($row['course']) ?></option>
+                            <?php foreach ($courses as $row):
+                                // The dropdown prints the acronym; the option
+                                // VALUE stays the full course string,
+                                // because that is what the filter compares
+                                // against the `course` column. Abbreviating
+                                // the value would silently match nothing.
+                                $cFull  = (string) $row['course'];
+                                $cTitle = courseDisplayTitle($cFull);
+                                ?>
+                                <option value="<?= htmlspecialchars($row['course']) ?>"
+                                        <?= $cTitle !== '' ? 'title="' . htmlspecialchars($cTitle) . '"' : '' ?>
+                                        <?= $filterCourse === $row['course'] ? 'selected' : '' ?>><?= htmlspecialchars(courseDisplay($cFull)) ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -1379,7 +1891,16 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
                 <div class="form-group"><label>Section Code</label><input type="text" id="esSection" class="form-control" placeholder="11001" style="font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;"></div>
                 <div class="form-group"><label>School Year</label><input type="text" id="esSchoolYear" class="form-control" placeholder="2026-2027" list="csSyOptions"></div>
-                <div class="form-group"><label>Course</label><select id="esCourse" class="form-control"><option value="">Select course</option><?php foreach (array_keys($offeredCourses) as $cname): ?><option value="<?= htmlspecialchars($cname) ?>"><?= htmlspecialchars($cname) ?></option><?php endforeach; ?></select></div>
+                <div class="form-group"><label>Course</label><select id="esCourse" class="form-control"><option value="">Select course</option><?php
+                            // Printed as the acronym, with the full name in
+                            // the option title. The VALUE stays the full
+                            // course string because esCourse is submitted
+                            // and written back to the `course` column -
+                            // abbreviating it there would save a program
+                            // name no query would ever match again.
+                            foreach (array_keys($offeredCourses) as $cname): ?>
+                            <option value="<?= htmlspecialchars($cname) ?>"
+                                    <?= courseDisplayTitle($cname) !== '' ? 'title="' . htmlspecialchars(courseDisplayTitle($cname)) . '"' : '' ?>><?= htmlspecialchars(courseDisplay($cname)) ?></option><?php endforeach; ?></select></div>
                 <div class="form-group"><label>Year Level</label><select id="esYear" class="form-control"><option value="">Select</option><?php foreach ($years as $row): ?><option value="<?= (int)$row['year_level'] ?>">Year <?= (int)$row['year_level'] ?></option><?php endforeach; ?></select></div>
                 <div class="form-group"><label>Semester</label><select id="esSemester" class="form-control"><option value="">Select</option><option value="1st">1st Semester</option><option value="2nd">2nd Semester</option><option value="summer">Summer</option></select></div>
                 <div class="form-group"><label>Adviser</label><select id="esAdviser" class="form-control"><option value="">Not set</option><?php foreach ($advisers as $ad): ?><option value="<?= (int)$ad['id'] ?>"><?= htmlspecialchars($ad['full_name']) ?></option><?php endforeach; ?></select></div>
@@ -1794,11 +2315,20 @@ document.getElementById('btnPrepareList')?.addEventListener('click', function ()
 });
 
 // ─── SEARCH (client-side) ────────────────────────────────────
+//
+// Both tables are searched by one box, so the selector names whichever
+// one this view rendered: the printable List's ledger (.masterlist-table)
+// or the folder roster (.mlx-table). Scoping it to .masterlist-table
+// alone - as it was - left the box on the Browse view doing nothing at
+// all, silently, which is worse than not offering it.
+const searchRows = document.querySelectorAll(
+    '#masterlistContent .masterlist-table tbody tr, #masterlistContent .mlx-table tbody tr'
+);
 const searchInput = document.getElementById('masterlistSearch');
 searchInput?.addEventListener('input', function () {
     const q = this.value.trim().toLowerCase();
     let visible = 0;
-    document.querySelectorAll('#masterlistContent .masterlist-table tbody tr').forEach(row => {
+    searchRows.forEach(row => {
         // row.textContent reads the surname and given names with the markup
         // between them, so a search for "Cruz Juan" or "Cruz, Juan" would
         // silently find nobody. The whitespace is collapsed first, so the box
@@ -1822,7 +2352,11 @@ searchInput?.addEventListener('input', function () {
             .filter(r => r.style.display !== 'none').length;
         block.style.display = shown ? '' : 'none';
     });
-    document.getElementById('showingCount').textContent = visible;
+    // The counter only exists where the toolbar renders one, and it is
+    // optional-chained because a search must never throw on a view that
+    // does not show a count.
+    const counter = document.getElementById('showingCount');
+    if (counter) counter.textContent = visible;
 });
 
 // ─── SORT (within the table) ─────────────────────────────────
@@ -2467,17 +3001,18 @@ async function sendList() {
 })();</script>
 
 <style>
-/* The List / Folders view toggle. Identical rules to the ones on
-   masterlist-folders.php, on purpose: a toggle that looked
-   different on each view would read as two separate features
-   rather than two ways of reading one set of records. */
-.masterlist-views { display:flex; gap:6px; align-items:center; }
-.mlv-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border:1px solid #e2e8f0; border-radius:9px; background:#fff; color:#475569; font-size:13px; font-weight:600; text-decoration:none; white-space:nowrap; }
-.mlv-btn:hover { border-color:#93c5fd; color:#1d4ed8; background:#eff6ff; }
-.mlv-btn.is-active { background:#1a3a8c; border-color:#1a3a8c; color:#fff; }
-.mlv-btn.is-active:hover { background:#1a3a8c; color:#fff; }
+/* The List / Folders / Browse toggle is GONE from this page, and so is
+   its CSS (.masterlist-views, .mlv-btn). The header no longer offers a
+   choice of view.
 
-.mlv-btn.is-active:hover { background:#1a3a8c; color:#fff; }
+   These rules used to be duplicated from masterlist-folders.php so
+   that "the same toggle" would look identical on each view. That file
+   never grew its own copy of the markup - it kept its own styling and
+   the two had already drifted - so the "shared" rules were only ever
+   read here, by markup that no longer exists. They are deleted rather
+   than left behind, because dead CSS for a removed control is exactly
+   the kind of thing that gets "reused" the next time someone adds a
+   button and inherits rules written for a toggle that is not there. */
 
 /* The folder table: one table in which a folder is a row. The
    indentation is the only thing carrying the nesting, and it is set
@@ -2521,6 +3056,271 @@ async function sendList() {
 .mlf-dl { color:#64748b; text-decoration:none; font-size:13px; padding:4px 7px; border-radius:6px; }
 .mlf-dl:hover { background:#eff6ff; color:#2563eb; }
 .mlf-table-note { font-size:12.5px; color:#64748b; margin:0; padding:12px 16px; background:#fbfcfe; border-top:1px solid #eef2f7; line-height:1.6; }
+
+/* ─── THE FOLDER BROWSER (view=explore) ────────────────────────
+   A different shape from the folder TABLE on purpose: that one is a
+   spreadsheet you read top to bottom, this one is a drive you move
+   through. So the chrome here is a path bar and a grid of tiles,
+   not rows and carets. */
+.mlx-browser { padding:0; overflow:hidden; }
+
+.mlx-crumbs {
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    padding:11px 16px; background:#f8fafc; border-bottom:1px solid #e2e8f0;
+    font-size:13px;
+}
+.mlx-crumb { color:#475569; text-decoration:none; font-weight:600; display:inline-flex; align-items:center; gap:6px; padding:3px 7px; border-radius:7px; }
+.mlx-crumb:hover { background:#e0ecff; color:#1d4ed8; }
+.mlx-crumb-root { color:#1a3a8c; }
+.mlx-crumb-sep { color:#cbd5e1; font-size:10px; }
+/* Where you are, as opposed to where you can go. Not a link, so it
+   is visibly not clickable rather than silently doing nothing. */
+.mlx-crumb-here { color:#0f172a; font-weight:700; background:#e2e8f0; cursor:default; }
+.mlx-crumb-here:hover { background:#e2e8f0; color:#0f172a; }
+
+.mlx-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; padding:18px 20px 14px; }
+.mlx-title { display:flex; align-items:center; gap:10px; font-size:19px; font-weight:700; color:#0f172a; }
+.mlx-title i { color:#2563eb; font-size:17px; }
+.mlx-sub { margin-top:5px; font-size:12.5px; color:#64748b; }
+.mlx-actions { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* The grid. auto-fill with a minmax floor rather than a fixed
+   column count, so the tiles reflow on a narrow screen instead of
+   squeezing every one of them. */
+.mlx-folders { display:grid; grid-template-columns:repeat(auto-fill, minmax(248px, 1fr)); gap:12px; padding:6px 20px 20px; }
+.mlx-tile {
+    display:flex; align-items:center; gap:12px; text-decoration:none;
+    padding:14px 15px; border:1px solid #e2e8f0; border-radius:12px;
+    background:#fff; transition:border-color .12s, background .12s, box-shadow .12s;
+}
+.mlx-tile:hover { border-color:#93c5fd; background:#f8fbff; box-shadow:0 2px 8px rgba(30,64,175,.08); }
+.mlx-tile-icon { font-size:26px; color:#f0b429; flex:none; }
+.mlx-tile.is-unassigned .mlx-tile-icon { color:#d97706; }
+.mlx-tile-body { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
+.mlx-tile-name { font-size:14.5px; font-weight:700; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mlx-tile-meta { font-size:12px; color:#64748b; }
+.mlx-tile-go { color:#cbd5e1; font-size:12px; flex:none; }
+.mlx-tile:hover .mlx-tile-go { color:#2563eb; }
+
+.mlx-missing { padding:34px 20px; text-align:center; color:#64748b; }
+.mlx-missing i { font-size:30px; color:#cbd5e1; display:block; margin-bottom:12px; }
+.mlx-missing p { margin:0 0 5px; font-size:13.5px; }
+
+/* The roster inside a section folder.
+   This is its own table (.mlx-table), NOT the printable List's
+   ledger (.masterlist-table). That is deliberate. The ledger is
+   table-layout:fixed with hand-measured per-column tracks and a
+   1390px floor, sized for the List's own eleven columns; a
+   fourteen-column roster that borrowed the class set none of those
+   tracks, so every column fell to an equal share and the floor
+   forced a sideways scroll for no reason.
+
+   It also avoids inheriting the List's search, sort and CSV-export
+   handlers, which key off .masterlist-table and would otherwise
+   read this roster through the List's column map and write the
+   wrong headers over it.
+
+   These tracks are chosen by what each column CONTAINS rather than
+   by a fixed layout: the browser sizes them, so a table that fits
+   the window uses the space instead of scrolling, and the ones
+   that must not wrap (codes, dates, numbers) are pinned. */
+.mlx-roster-scroll {
+    margin:0 20px 20px;
+    border:1px solid #e2e8f0;
+    border-radius:12px;
+    overflow:auto;
+    max-height:min(70vh, 780px);
+}
+.mlx-table {
+    width:100%;
+    border-collapse:separate;
+    border-spacing:0;
+    font-size:13.5px;
+    color:#1e293b;
+}
+/* The heading band repeats on scroll (position:sticky), so the
+   columns stay identifiable however long the roster is - which is
+   the whole reason a 300-student section needs a scroll box. */
+.mlx-table thead th {
+    position:sticky; top:0; z-index:2;
+    background:#f1f5f9;
+    color:#334155;
+    font-size:11.5px; font-weight:700;
+    letter-spacing:.04em; text-transform:uppercase;
+    text-align:left; white-space:nowrap;
+    padding:11px 13px;
+    border-bottom:2px solid #cbd5e1;
+}
+.mlx-table td {
+    padding:10px 13px;
+    border-bottom:1px solid #eef2f6;
+    vertical-align:middle;
+    background:#fff;
+}
+/* Banding, and a hover that actually reads on a white row. */
+.mlx-table tbody tr:nth-child(even) td { background:#fafbfd; }
+.mlx-table tbody tr:hover td { background:#eff6ff; }
+.mlx-table tbody tr:last-child td { border-bottom:none; }
+
+/* The row number is furniture, not data: it is quiet and sits out
+   of the way so the eye starts at the student, not the count. */
+.mlx-x-no {
+    width:1%;
+    white-space:nowrap;
+    font-family:'JetBrains Mono',ui-monospace,monospace;
+    font-variant-numeric:tabular-nums;
+    font-size:12.5px;
+    color:#94a3b8;
+}
+/* Codes and numbers must never wrap: a section code broken across
+   two lines, or "2024-2025" split, reads as two different values.
+   tabular-nums keeps a column of digits vertically aligned. */
+.mlx-table td:nth-child(2),
+.mlx-table td:nth-child(7),
+.mlx-table td:nth-child(8),
+.mlx-table td:nth-child(9),
+.mlx-table td:nth-child(10),
+.mlx-table td:nth-child(11),
+.mlx-table td:nth-child(13) {
+    white-space:nowrap;
+    font-variant-numeric:tabular-nums;
+}
+/* The student number and the section code are monospaced, exactly
+   as they are on the printed sheet: 11001 and 11011 are hard to tell
+   apart in a proportional face. */
+.mlx-table td:nth-child(2),
+.mlx-table td:nth-child(8) {
+    font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:#334155;
+}
+/* Surname and first name are the anchor of the row and carry the
+   weight; the tokens around them stay quiet. */
+.mlx-table td:nth-child(3),
+.mlx-table td:nth-child(4) { font-weight:600; color:#0f172a; }
+/* "Not recorded" is a real state and is shown as a muted dash, so
+   it never reads as a value the registrar typed. */
+.mlx-na { color:#cbd5e1; }
+.mlx-empty {
+    text-align:center; color:#94a3b8;
+    padding:26px 14px !important;
+    font-size:13.5px;
+}
+/* An email is the one value long enough to need help. It truncates
+   from the START, because an address reads by its domain and
+   "…@school.edu" still identifies the account where
+   "roldanti…gmail.com" does not. direction:rtl is what puts the
+   ellipsis on the leading edge; text-align:left keeps the address
+   itself in normal reading order. */
+.mlx-table td:last-child {
+    max-width:230px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    direction:rtl;
+    text-align:left;
+    color:#334155;
+}
+
+/* THE PROGRAM LEGEND.
+   The key to every acronym printed above it. It is a quiet table at
+   the end of the page, not a card in the middle of the work: it is
+   consulted when a reader meets an acronym they do not know, and then
+   they go back to what they were doing. */
+.mlx-legend {
+    margin:0 20px 20px;
+    border:1px solid #e2e8f0;
+    border-radius:12px;
+    overflow:hidden;
+}
+.mlx-legend-head {
+    padding:14px 20px 12px;
+    border-bottom:1px solid #e2e8f0;
+    background:#f8fafc;
+}
+.mlx-legend-title {
+    margin:0;
+    font-size:13px;
+    font-weight:700;
+    color:#0f172a;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+}
+.mlx-legend-title i { color:#64748b; margin-right:4px; }
+.mlx-legend-note {
+    margin:5px 0 0;
+    font-size:12.5px;
+    color:#64748b;
+}
+/* The scroll box only matters if there are many programs; with three it
+   never engages, and the table simply sits at its natural height. */
+.mlx-legend-scroll { overflow:auto; max-height:min(50vh, 460px); }
+.mlx-legend-table {
+    width:100%;
+    border-collapse:separate;
+    border-spacing:0;
+    font-size:13.5px;
+    color:#1e293b;
+}
+/* Sticky for the same reason the roster's heading is: the point of a
+   legend is looking one acronym up, and it should not have to scroll
+   back to the header to read the next column. */
+.mlx-legend-table thead th {
+    position:sticky; top:0; z-index:1;
+    background:#f1f5f9;
+    color:#334155;
+    font-size:11.5px; font-weight:700;
+    letter-spacing:.04em; text-transform:uppercase;
+    text-align:left; white-space:nowrap;
+    padding:10px 14px;
+    border-bottom:2px solid #cbd5e1;
+}
+.mlx-legend-table td {
+    padding:9px 14px;
+    border-bottom:1px solid #eef2f6;
+    vertical-align:middle;
+    background:#fff;
+}
+.mlx-legend-table tbody tr:last-child td { border-bottom:none; }
+.mlx-legend-table tbody tr:hover td { background:#f8fafc; }
+/* The acronym is the key, so it is the thing that gets the weight and
+   the tint - the same pill language the roster's Program column uses,
+   so the two read as the same value. */
+.mlx-legend-tag {
+    display:inline-block;
+    padding:3px 10px;
+    border-radius:6px;
+    background:#e8effd;
+    color:#1d4ed8;
+    font-size:13px;
+    font-weight:800;
+    letter-spacing:.05em;
+    white-space:nowrap;
+}
+.mlx-legend-c-full { color:#334155; }
+/* The count is a number, not a word: tabular so a column of them lines
+   up, and right-aligned so the eye can compare magnitudes. */
+.mlx-legend-c-n {
+    text-align:right;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+    color:#475569;
+}
+
+@media print {
+    /* The legend is a reading aid on screen. It is not part of any
+       printed roster, and printing it would add a page of reference
+       material under a sheet that gets signed. */
+    .mlx-legend { display:none !important; }
+}
+
+@media print {
+    /* The browser chrome is not on the printed sheet. The roster
+       itself is: printing a section folder should print its roster. */
+    .mlx-crumbs, .mlx-actions, .mlx-head .btn { display:none !important; }
+    .mlx-roster-scroll { max-height:none; overflow:visible; border:none; margin:0; }
+    .mlx-table thead th { position:static; }
+    .mlx-table tbody tr { break-inside:avoid; }
+}
 
 .bulk-bar a { text-decoration: none; }
 /* Filter dropdowns should look clickable */

@@ -265,6 +265,20 @@ $b = $page['body'];
 check('no PHP error on the page',
     !str_contains($b, 'Fatal error') && !str_contains($b, 'Warning:') && !str_contains($b, 'Notice:'),
     substr($b, 0, 400));
+
+// Everything in this block is about the PRINTABLE LIST - the Section
+// column, the chips in the block headings, the signable roster. It is
+// fetched from ?view=list explicitly rather than from the bare URL.
+//
+// The bare URL now opens the folder browser, which is the module's
+// default. That made this whole block fail for the wrong reason: the
+// browser genuinely has no Section column, because it is a roster of
+// folders, not of students. Naming the view makes the test say what it
+// means, and stops it silently following whatever the default happens
+// to be - which is exactly the trap it fell into.
+$listPage = req('GET', "$BASE/registrar/masterlist.php?view=list");
+check('the printable list returns 200', $listPage['status'] === 200, 'got ' . $listPage['status']);
+$b = $listPage['body'];
 // Auto-assign was removed from the page. Checked on the button AND the handler,
 // because deleting the markup alone leaves working JS with nothing to fire
 // it, and the page still renders clean - the handler only fails on click.
@@ -363,7 +377,11 @@ check('no stale copy claiming sections belong elsewhere',
     && !str_contains($b, 'belong to other departments'));
 
 echo "\n== 12. SECTION FILTER ==\n";
-$f = req('GET', "$BASE/registrar/masterlist.php?section=" . urlencode($target));
+// ?view=list for the same reason as block 11: the assertion below reads
+// <td data-field="section">, which is the printable List's column. On
+// the default folder-browser view that cell does not exist, so the
+// filter would "pass" a request while proving nothing about the roster.
+$f = req('GET', "$BASE/registrar/masterlist.php?view=list&section=" . urlencode($target));
 check('filtering by section returns 200', $f['status'] === 200, 'got ' . $f['status']);
 check('the filtered page shows the code', str_contains($f['body'], $target), $target);
 // Counted from the rendered table only. The filter dropdown lists every

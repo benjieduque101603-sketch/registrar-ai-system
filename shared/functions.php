@@ -1117,6 +1117,74 @@ function courseAcronym($course) {
 
 
 /**
+ * The program name as it should be PRINTED in a list of programs.
+ *
+ * courseAcronym() answers "what is the short form of this?". This
+ * answers "what should the reader see?", which is not always the
+ * short form:
+ *
+ *   - "BACHELOR OF SCIENCE IN INFORMATION TECHNOLOGY (BSIT)" reads as
+ *     "BSIT". Printed in full it is 55 characters of a tile, a
+ *     breadcrumb, or a dropdown row, and every one of those lists is
+ *     scanned for the acronym rather than read.
+ *   - The work-queue folders ("Unassigned Program") are NOT programs
+ *     and must never be abbreviated: courseAcronym() would turn
+ *     "Unassigned Program" into "UP", which is a real degree
+ *     abbreviation and would be a lie.
+ *   - A value with no usable short form falls back to itself, so the
+ *     reader still sees the program rather than nothing.
+ *
+ * Always pair the result with courseDisplayTitle() so the full name
+ * stays one hover away, and never use this for a path, a query value,
+ * or anything else that has to match the `course` column exactly. This
+ * is DISPLAY ONLY - the stored value and the folder path keep the full
+ * name, which is what makes the abbreviation safe.
+ *
+ * @param string $course
+ * @return string
+ */
+function courseDisplay($course)
+{
+    $course = trim((string) $course);
+    if ($course === '') {
+        return '';
+    }
+    // Not a program: the work-queue folders. Abbreviating these turns
+    // "Unassigned Program" into "UP", and "UP" means something else
+    // entirely to a registrar.
+    if (stripos($course, 'Unassigned') === 0) {
+        return $course;
+    }
+    $short = courseAcronym($course);
+    if ($short === '') {
+        return $course;
+    }
+    // If the abbreviation is not actually shorter, it has compressed
+    // nothing and only costs the reader a trip to the tooltip.
+    if (strlen($short) >= strlen($course)) {
+        return $course;
+    }
+    return $short;
+}
+
+/**
+ * The full program name, for the title/aria of something printed as its
+ * acronym. Returns '' when there is nothing extra to say - a program
+ * already stored as "BSIT" has no longer form to reveal, and an empty
+ * title attribute is worse than none.
+ *
+ * @param string $course
+ * @return string
+ */
+function courseDisplayTitle($course)
+{
+    $course = trim((string) $course);
+    $short  = courseDisplay($course);
+    return ($short !== '' && $short !== $course) ? $course : '';
+}
+
+
+/**
  * Canonical student-status label for the student portal.
  *
  * Now a thin alias of studentStatusLabel(). It used to carry its own 5-value
