@@ -21,6 +21,9 @@ require_once __DIR__ . '/../shared/functions.php';
 // another way on the other. normalize.php is already pulled in by functions.php,
 // but it is required by name so this page's dependency on it is visible.
 require_once __DIR__ . '/../shared/normalize.php';
+// mlf_rows() / mlf_row_visible() - the folder table below. Pure
+// helpers, so the grouping rules are unit tested without a browser.
+require_once __DIR__ . '/../shared/masterlist_folders.php';
 // studentQualityNormalizePhone(), which formats 09XXXXXXXXX as 09XX-XXX-XXXX for
 // the Contact column. Without it the raw stored digits ship in the export.
 require_once __DIR__ . '/../shared/student_quality.php';
@@ -34,6 +37,24 @@ $filterSchoolYear = isset($_GET['school_year']) ? trim((string) $_GET['school_ye
 $filterSemester   = isset($_GET['semester']) ? trim((string) $_GET['semester']) : '';
 $filterStatus     = isset($_GET['status']) ? trim((string) $_GET['status']) : '';
 $filterSection    = isset($_GET['section']) ? trim((string) $_GET['section']) : '';
+
+// ─── WHICH VIEW? ───────────────────────────────────────────
+// 'list'    the flat, printable, signable blocks (the default)
+// 'folders' the same records as ONE table in which a folder is a
+//           row you expand
+//
+// A query parameter rather than a JS flag, so the view is a real
+// address: the Back button works and either view can be linked to.
+// Anything unrecognised falls back to the list rather than
+// rendering nothing, because a stale bookmark must not dead-end.
+$view = (isset($_GET['view']) && $_GET['view'] === 'folders') ? 'folders' : 'list';
+
+// The folder to open on arrival. Its ancestors open too, so a link
+// to one section actually reveals that section instead of landing
+// on a collapsed tree that shows the reader nothing.
+$focusPath = $view === 'folders' && isset($_GET['open'])
+    ? trim((string) $_GET['open'])
+    : '';
 
 // The list below only holds students who HAVE a section.
 //
@@ -86,6 +107,82 @@ if ($filterSection !== '') {
 $sql .= " ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, last_name ASC, first_name ASC";
 
 $students = $db->fetchAll($sql, $params);
+
+// ─── THE FOLDER TABLE ──────────────────────────────────────
+//
+// The folders view needs a DIFFERENT set of rows from the blocks
+// above, and the difference is the whole point of having two views.
+//
+// $students above is the printable roster: it already dropped every
+// student with no section, because a row nobody could sign has no
+// place on a signed sheet. The folder table is an INVENTORY - it
+// must show those students too, filed under "Unassigned Section",
+// or a cohort would silently vanish the moment someone opened it.
+//
+// So it runs its own query WITHOUT the section predicate, reusing
+// the filters already parsed above. Only loaded in the folders
+// view; the list view pays nothing for it.
+$folderRows  = [];
+$folderOpen  = [];
+$folderTotal = 0;
+
+if ($view === 'folders') {
+    $fsql = "SELECT id, student_number, first_name, middle_name, last_name,
+                    name_suffix, course, year_level, section, school_year,
+                    semester, gender, status, contact_number, email
+             FROM students";
+    $fwhere  = [];
+    $fparams = [];
+
+    // The same dimensions as the blocks, under the same names, so a
+    // filter set means the same thing in both views.
+    if ($filterCourse !== '') {
+        $fwhere[]  = 'TRIM(course) = ?';
+        $fparams[] = $filterCourse;
+    }
+    if ($filterYear !== '' && is_numeric($filterYear)) {
+        $fwhere[]  = 'year_level = ?';
+        $fparams[] = (int) $filterYear;
+    }
+    if ($filterSchoolYear !== '') {
+        $fwhere[]  = 'school_year = ?';
+        $fparams[] = $filterSchoolYear;
+    }
+    if ($filterSemester !== '') {
+        $fwhere[]  = 'semester = ?';
+        $fparams[] = $filterSemester;
+    }
+    if ($filterSection !== '') {
+        $fwhere[]  = 'TRIM(section) = ?';
+        $fparams[] = $filterSection;
+    }
+    if ($fwhere) {
+        $fsql .= ' WHERE ' . implode(' AND ', $fwhere);
+    }
+    $fsql .= ' ORDER BY TRIM(course) ASC, COALESCE(year_level, 0) ASC, section ASC, last_name ASC, first_name ASC';
+
+    $allStudents = $db->fetchAll($fsql, $fparams);
+    $folderRows  = mlf_rows(mlf_build_tree($allStudents), $focusPath);
+    $folderTotal = count($allStudents);
+
+    // Which folders start open: the focus and its ancestors, or -
+    // with no focus - every PROGRAM. Starting on the programs is the
+    // shape a drive opens in: the reader sees the programs without a
+    // click, and the cohorts stay folded away until asked for.
+    foreach ($folderRows as $row) {
+        if ($row['type'] === 'folder' && (int) $row['level'] === 0) {
+            $folderOpen[$row['path']] = true;
+        }
+    }
+    if ($focusPath !== '') {
+        $parts = explode('/', trim(str_replace('\\', '/', $focusPath), '/'));
+        $walk  = '';
+        foreach ($parts as $part) {
+            $walk = $walk === '' ? $part : $walk . '/' . $part;
+            $folderOpen[$walk] = true;
+        }
+    }
+}
 
 // Adviser names are NOT joined here any more. The Adviser column reads N/A
 // because naming an adviser is Faculty Management's (#296) to do, not the
@@ -656,11 +753,11 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
              user looking for the masterlist should not have to
              guess which of two identically-named nav items holds it. -->
         <div class="masterlist-views" role="group" aria-label="Choose how the masterlist is displayed">
-            <a class="mlv-btn is-active" href="masterlist.php"
+            <a class="mlv-btn is-active" href="masterlist.php?view=list"
                title="One flat, printable list (this view)">
                 <i class="fas fa-table-list"></i> List
             </a>
-            <a class="mlv-btn" href="masterlist-folders.php"
+            <a class="mlv-btn" href="masterlist.php?view=folders"
                title="Browse the same records as folders: program, year level, section">
                 <i class="fas fa-folder-tree"></i> Folders
             </a>
@@ -745,7 +842,143 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
     </div>
 
     <div id="masterlistContent">
-        <?php if (empty($students)): ?>
+<?php if ($view === 'folders' && $folderRows): ?>
+        <?php
+        // THE FOLDER TABLE.
+        //
+        // ONE table. A program is a row, its years are rows inside
+        // it, its sections are rows inside those, and the students
+        // are rows inside a section. Clicking a folder row expands
+        // or collapses whatever is under it.
+        //
+        // The rows arrive pre-flattened from mlf_rows(), which is
+        // unit tested, so the ordering and the nesting are decided
+        // once in shared code rather than re-decided by this markup.
+        $folderDlBase = '../api/masterlist-folders.php?action=export';
+        $folderCount  = count(array_filter($folderRows, static fn($r) => $r['type'] === 'folder'));
+        ?>
+        <div class="card mlf-table-card">
+            <div class="mlf-table-toolbar">
+                <div class="mlf-table-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" id="mlfExpandAll">
+                        <i class="fas fa-angle-double-down"></i> Expand all
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="mlfCollapseAll">
+                        <i class="fas fa-angle-double-up"></i> Collapse all
+                    </button>
+                    <?php if ($focusPath !== ''): ?>
+                        <a class="btn btn-secondary btn-sm"
+                           href="masterlist.php?view=folders<?= $anyFilterActive ? '&amp;' . http_build_query(array_diff_key($_GET, ['view' => 1, 'open' => 1])) : '' ?>">
+                            <i class="fas fa-times"></i> Show whole drive
+                        </a>
+                    <?php endif; ?>
+                </div>
+                <span class="mlf-table-count">
+                    <strong><?= (int) $folderTotal ?></strong> student<?= (int) $folderTotal === 1 ? '' : 's' ?>
+                    in <strong><?= $folderCount ?></strong> folder<?= $folderCount === 1 ? '' : 's' ?>
+                </span>
+            </div>
+
+            <table class="mlf-table" id="mlfTable">
+                <thead>
+                    <tr>
+                        <th class="mlf-c-name">Folder / Student</th>
+                        <th class="mlf-c-type">Type</th>
+                        <th class="mlf-c-num">Students</th>
+                        <th class="mlf-c-sub">Inside</th>
+                        <th class="mlf-c-num">Year</th>
+                        <th class="mlf-c-tok">Section</th>
+                        <th class="mlf-c-status">Status</th>
+                        <th class="mlf-c-contact">Contact</th>
+                        <th class="mlf-c-email">Email</th>
+                        <th class="mlf-c-dl">Download</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($folderRows as $row):
+                        $isFolder = $row['type'] === 'folder';
+                        $level    = $isFolder ? (int) $row['level'] : 3;
+                        $hasKids  = $isFolder && ($row['subfolders'] > 0 || $row['count'] > 0);
+                        $isOpen   = isset($folderOpen[$row['path']]);
+                        $hidden   = !mlf_row_visible($row, $folderOpen);
+                        $parent   = (string) $row['parent'];
+                        ?>
+                        <tr class="mlf-row mlf-row-<?= $isFolder ? 'folder' : 'student' ?>"
+                            data-parent="<?= htmlspecialchars($parent) ?>"
+                            data-path="<?= htmlspecialchars((string) $row['path']) ?>"
+                            data-open="<?= $isOpen ? '1' : '0' ?>"
+                            <?= $hidden ? 'style="display:none"' : '' ?>><td class="mlf-c-name" style="padding-left:<?= 12 + ($level * 22) ?>px">
+                                <?php if ($hasKids): ?>
+                                    <button type="button" class="mlf-caret<?= $isOpen ? ' is-open' : '' ?>"
+                                            data-caret="<?= htmlspecialchars((string) $row['path']) ?>"
+                                            aria-expanded="<?= $isOpen ? 'true' : 'false' ?>"
+                                            title="<?= $isOpen ? 'Collapse' : 'Expand' ?> this folder">
+                                        <i class="fas fa-chevron-right"></i>
+                                    </button>
+                                <?php else: ?>
+                                    <span class="mlf-caret mlf-caret-none" aria-hidden="true"></span>
+                                <?php endif; ?>
+                                <i class="fas <?= $isFolder
+                                    ? ($level === 0 ? 'fa-folder' : ($level === 1 ? 'fa-calendar' : 'fa-users'))
+                                    : 'fa-user' ?> mlf-row-icon<?= $row['unassigned'] ? ' is-unassigned' : '' ?>"></i>
+                                <span class="mlf-row-name"><?= htmlspecialchars(trim((string) $row['name']) ?: 'N/A') ?></span>
+                                <?php if ($isFolder && $row['unassigned']): ?>
+                                    <span class="mlf-tag">not yet placed</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="mlf-c-type">
+                                <span class="mlf-type mlf-type-<?= $isFolder ? $level : 'student' ?>">
+                                    <?= $isFolder
+                                        ? ($level === 0 ? 'Program' : ($level === 1 ? 'Year' : 'Section'))
+                                        : 'Student' ?>
+                                </span>
+                            </td>
+                            <td class="mlf-c-num"><?= $isFolder ? (int) $row['count'] : '' ?></td>
+                            <td class="mlf-c-sub">
+                                <?= $isFolder && $row['subfolders'] > 0
+                                    ? (int) $row['subfolders'] . ' folder' . ($row['subfolders'] === 1 ? '' : 's')
+                                    : '&mdash;' ?>
+                            </td>
+                            <?php if ($isFolder): ?>
+                                <td class="mlf-c-num">&mdash;</td>
+                                <td class="mlf-c-tok"><?= $level === 2 ? htmlspecialchars((string) $row['name']) : '&mdash;' ?></td>
+                                <td class="mlf-c-status">&mdash;</td>
+                                <td class="mlf-c-contact">&mdash;</td>
+                                <td class="mlf-c-email">&mdash;</td>
+                                <td class="mlf-c-dl">
+                                    <?php if ((int) $row['count'] > 0): ?>
+                                        <a class="mlf-dl" title="Download this folder and everything under it"
+                                           href="<?= htmlspecialchars($folderDlBase . '&path=' . rawurlencode((string) $row['path'])) ?>">
+                                            <i class="fas fa-file-zipper"></i>
+                                        </a>
+                                    <?php endif; ?>
+                                </td>
+                            <?php else:
+                                $s       = (array) $row['student'];
+                                $contact = trim((string) ($s['contact_number'] ?? ''));
+                                $email   = trim((string) ($s['email'] ?? ''));
+                                ?>
+                                <td class="mlf-c-num"><?= htmlspecialchars(trim((string) ($s['year_level'] ?? '')) ?: 'N/A') ?></td>
+                                <td class="mlf-c-tok"><?= htmlspecialchars(trim((string) ($s['section'] ?? '')) ?: 'N/A') ?></td>
+                                <td class="mlf-c-status"><?= htmlspecialchars(trim((string) ($s['status'] ?? '')) ?: 'N/A') ?></td>
+                                <td class="mlf-c-contact"><?= htmlspecialchars($contact !== '' ? $contact : 'N/A') ?></td>
+                                <td class="mlf-c-email"><?= htmlspecialchars($email !== '' ? $email : 'N/A') ?></td>
+                                <td class="mlf-c-dl">&mdash;</td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <p class="mlf-table-note">
+                <i class="fas fa-circle-info"></i>
+                This view is an <strong>inventory</strong> &mdash; it lists every student on file, including
+                any not yet placed in a section. The <strong>List</strong> view is the printable roster and
+                leaves those out, because a row nobody could sign has no place on a signed sheet.
+            </p>
+        </div>
+    <?php else: ?>
+    <?php endif; ?>        <?php if (empty($students)): ?>
             <div class="card" style="box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                 <div style="padding: 48px 24px; text-align: center; color: #64748b;">
                     <i class="fas fa-users-slash" style="font-size:40px;color:#e2e8f0;display:block;margin-bottom:14px;"></i>
@@ -769,8 +1002,7 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                     <?php endif; ?>
                 </div>
             </div>
-        <?php else: ?>
-            <?php foreach ($blocks as $block): ?>
+    <?php else: ?>            <?php foreach ($blocks as $block): ?>
                 <div class="card masterlist-section-block" style="margin-bottom: 16px;">
                     <!-- Names the program, the year, the term and the academic
                          year - everything the key groups by. It must show them
@@ -2135,7 +2367,104 @@ async function sendList() {
     handoffApi({ program: '' }).then(d => {
         showToast(d.message || (d.success ? 'Sent.' : 'Failed.'), d.success ? 'success' : 'error');
     }).catch(() => { showToast('Network error.', 'error'); });
-}</script>
+}
+// ─── FOLDER TABLE: expand / collapse ─────────────────────────
+//
+// A row's visibility is decided entirely by whether the folder named
+// in its data-parent is open, so showing, hiding, expanding all and
+// collapsing all are one operation rather than four. The server has
+// already rendered which folders start open (the focus and its
+// ancestors, or every program); this only changes it afterwards.
+(function () {
+    var table = document.getElementById('mlfTable');
+    if (!table) return;
+
+    var rows = Array.prototype.slice.call(table.querySelectorAll('tr.mlf-row'));
+    var open = {};
+    rows.forEach(function (r) {
+        if (r.dataset.open === '1') open[r.dataset.path] = true;
+    });
+
+    function render() {
+        rows.forEach(function (r) {
+            var parent = r.dataset.parent || '';
+            var level = r.classList.contains('mlf-row-folder') && !r.querySelector('.mlf-caret-none');
+            // A program row has no parent, so it is always visible.
+            var show = parent === '' || !!open[parent];
+            r.style.display = show ? '' : 'none';
+
+            var caret = r.querySelector('.mlf-caret');
+            if (caret && !caret.classList.contains('mlf-caret-none')) {
+                var isOpen = !!open[r.dataset.path];
+                caret.classList.toggle('is-open', isOpen);
+                caret.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+                caret.title = (isOpen ? 'Collapse' : 'Expand') + ' this folder';
+            }
+        });
+    }
+
+    // One folder's descendants, however deep. Walks parents upward so
+    // a program's children are found in one pass rather than needing a
+    // separate rule per level.
+    function setFolder(path, isOpen) {
+        if (isOpen) { open[path] = true; } else { delete open[path]; }
+        rows.forEach(function (r) {
+            if (isDescendantOf(r.dataset.parent, path)) {
+                r.style.display = isOpen ? '' : 'none';
+                if (isOpen && r.classList.contains('mlf-row-student')) {
+                    r.style.display = '';
+                }
+            }
+        });
+        // Re-render from the open map rather than from the toggles just
+        // set, so a descendant that was itself closed stays closed.
+        render();
+    }
+
+    function isDescendantOf(candidateParent, ancestor) {
+        if (!candidateParent) return false;
+        return candidateParent === ancestor || candidateParent.indexOf(ancestor + '/') === 0;
+    }
+
+    table.addEventListener('click', function (e) {
+        var caret = e.target.closest('.mlf-caret');
+        if (!caret || caret.classList.contains('mlf-caret-none')) return;
+        e.preventDefault();
+        var path = caret.dataset.caret;
+        setFolder(path, !open[path]);
+    });
+
+    var expandAll = document.getElementById('mlfExpandAll');
+    if (expandAll) {
+        expandAll.addEventListener('click', function () {
+            rows.forEach(function (r) {
+                if (r.classList.contains('mlf-row-folder')) open[r.dataset.path] = true;
+            });
+            render();
+        });
+    }
+
+    var collapseAll = document.getElementById('mlfCollapseAll');
+    if (collapseAll) {
+        collapseAll.addEventListener('click', function () {
+            // Keep the programs open: collapsing everything would
+            // leave a table with nothing in it and no obvious way
+            // back, which is the one state a browser cannot get out
+            // of without reloading.
+            rows.forEach(function (r) {
+                if (r.classList.contains('mlf-row-folder') && !r.querySelector('.mlf-caret-none')
+                    && r.dataset.parent === '') {
+                    open[r.dataset.path] = true;
+                } else {
+                    delete open[r.dataset.path];
+                }
+            });
+            render();
+        });
+    }
+
+    render();
+})();</script>
 
 <style>
 /* The List / Folders view toggle. Identical rules to the ones on
@@ -2147,6 +2476,51 @@ async function sendList() {
 .mlv-btn:hover { border-color:#93c5fd; color:#1d4ed8; background:#eff6ff; }
 .mlv-btn.is-active { background:#1a3a8c; border-color:#1a3a8c; color:#fff; }
 .mlv-btn.is-active:hover { background:#1a3a8c; color:#fff; }
+
+.mlv-btn.is-active:hover { background:#1a3a8c; color:#fff; }
+
+/* The folder table: one table in which a folder is a row. The
+   indentation is the only thing carrying the nesting, and it is set
+   inline per level because there are exactly three of them. */
+.mlf-table-card { padding:0; overflow:hidden; }
+.mlf-table-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 16px; background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+.mlf-table-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.mlf-table-count { font-size:13px; color:#64748b; }
+.mlf-table-count strong { color:#0f172a; }
+
+.mlf-table { width:100%; border-collapse:collapse; font-size:13px; }
+.mlf-table thead th { background:#fbfcfe; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:.05em; text-align:left; padding:9px 14px; border-bottom:1px solid #e2e8f0; font-weight:700; white-space:nowrap; }
+.mlf-table td { padding:7px 14px; border-bottom:1px solid #f1f5f9; color:#334155; vertical-align:middle; }
+.mlf-table tbody tr:last-child td { border-bottom:none; }
+.mlf-c-num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mlf-c-tok { font-variant-numeric:tabular-nums; white-space:nowrap; }
+
+/* A folder row is heavier than a student row, so the shape of the
+   tree is legible before you read any of it. */
+.mlf-row-folder { background:#fff; }
+.mlf-row-folder:hover { background:#f8fafc; }
+.mlf-row-folder td { font-weight:600; color:#1e293b; }
+.mlf-row-student:hover { background:#f8fbff; }
+
+.mlf-caret { width:18px; height:18px; margin-right:6px; border:0; background:none; color:#64748b; cursor:pointer; padding:0; font-size:11px; transition:transform .12s; }
+.mlf-caret.is-open { transform:rotate(90deg); color:#1a3a8c; }
+.mlf-caret:hover { color:#2563eb; }
+.mlf-caret-none { display:inline-block; }
+
+.mlf-row-icon { margin-right:8px; color:#2563eb; }
+.mlf-row-icon.is-unassigned { color:#d97706; }
+.mlf-row-folder .mlf-row-name { font-weight:700; }
+.mlf-tag { font-size:10.5px; font-weight:700; color:#92400e; background:#fef3c7; border-radius:99px; padding:2px 8px; margin-left:8px; }
+
+.mlf-type { font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#64748b; background:#f1f5f9; border-radius:5px; padding:2px 7px; white-space:nowrap; }
+.mlf-type-0 { color:#1e3a8a; background:#dbeafe; }
+.mlf-type-1 { color:#065f46; background:#d1fae5; }
+.mlf-type-2 { color:#7c2d12; background:#ffedd5; }
+.mlf-type-student { color:#475569; background:transparent; }
+
+.mlf-dl { color:#64748b; text-decoration:none; font-size:13px; padding:4px 7px; border-radius:6px; }
+.mlf-dl:hover { background:#eff6ff; color:#2563eb; }
+.mlf-table-note { font-size:12.5px; color:#64748b; margin:0; padding:12px 16px; background:#fbfcfe; border-top:1px solid #eef2f7; line-height:1.6; }
 
 .bulk-bar a { text-decoration: none; }
 /* Filter dropdowns should look clickable */

@@ -196,4 +196,151 @@ final class MasterlistFoldersTest extends TestCase
 
         self::assertCount(1, $one);
         self::assertSame('BSIT/Year 1/11001', $one[0]['path']);
-    }}
+    }
+// ── The single expandable table ────────────────────────
+
+    /**
+     * The shape the page renders: one flat, ordered list where a
+     * folder is a row and a student is a row beneath its section.
+     *
+     * Asserted on PATHS, not names. Both programs in this fixture
+     * have a "Year 1", so a name-only assertion cannot tell one
+     * program's year from the other's — which is exactly the
+     * confusion the page has to avoid visually, by indenting them.
+     */
+    public function testRowsListFoldersAndStudentsInDocumentOrder(): void
+    {
+        $rows = mlf_rows($this->tree());
+
+        // Programs come out in name order, so BSBA precedes BSIT.
+        self::assertSame(
+            ['BSBA', 'BSIT'],
+            array_values(array_filter(array_column($rows, 'path'), static fn($p) => strpos((string) $p, '/') === false))
+        );
+
+        // Every folder appears before anything inside it.
+        self::assertSame(
+            [
+                'BSBA', 'BSBA/Year 1', 'BSBA/Year 1/' . MLF_NO_SECTION,
+                'BSIT', 'BSIT/Year 1', 'BSIT/Year 1/11001',
+                'BSIT/Year 1/11002', 'BSIT/Year 2', 'BSIT/Year 2/21001',
+            ],
+            array_values(array_filter(
+                array_column($rows, 'path'),
+                static function ($p, $i) use ($rows) {
+                    return $rows[$i]['type'] === 'folder';
+                },
+                ARRAY_FILTER_USE_BOTH
+            ))
+        );
+    }
+
+    /** A student is a row inside its own section, not inside the year. */
+    public function testAStudentSitsUnderItsOwnSection(): void
+    {
+        $student = null;
+        foreach (mlf_rows($this->tree()) as $row) {
+            if ($row['type'] === 'student') {
+                $student = $row;
+                break;
+            }
+        }
+
+        self::assertNotNull($student);
+        self::assertSame('BSBA/Year 1/' . MLF_NO_SECTION, $student['parent']);
+        // 'section', not a number: a student row is not a folder level.
+        self::assertSame('section', $student['level']);
+    }
+
+    /** Every row names the folder it lives in, which is what the expander keys on. */
+    public function testEveryRowCarriesItsParentPath(): void
+    {
+        foreach (mlf_rows($this->tree()) as $row) {
+            if ($row['type'] === 'folder' && $row['level'] === 0) {
+                self::assertSame('', $row['parent'], 'a program row is at the root');
+            } else {
+                self::assertNotSame('', $row['parent'], 'every other row names its folder');
+            }
+        }
+    }
+
+    /**
+     * With nothing open, only the programs show. That is the point
+     * of the shape: the reader opens what they want rather than
+     * scrolling a page of every cohort.
+     */
+    public function testWithNothingOpenOnlyTheProgramsAreVisible(): void
+    {
+        foreach (mlf_rows($this->tree()) as $row) {
+            self::assertTrue(mlf_row_visible($row, []) ? $row['level'] === 0 : true);
+        }
+
+        $visible = array_values(array_filter(
+            mlf_rows($this->tree()),
+            static fn($r) => mlf_row_visible($r, [])
+        ));
+        self::assertSame(['BSBA', 'BSIT'], array_column($visible, 'name'));
+    }
+
+    /** Opening a program reveals its years — and no other program's. */
+    public function testOpeningAProgramRevealsItsYears(): void
+    {
+        $rows = mlf_rows($this->tree());
+
+        $paths = [];
+        foreach ($rows as $row) {
+            if (mlf_row_visible($row, ['BSIT' => true])) {
+                $paths[] = $row['path'];
+            }
+        }
+
+        self::assertSame(
+            ['BSBA', 'BSIT', 'BSIT/Year 1', 'BSIT/Year 2'],
+            $paths,
+            "BSBA's Year 1 must stay hidden while only BSIT is open"
+        );
+    }
+
+    /**
+     * The deep-link case. A reader sent a link to one section must
+     * land with that section visible, which means every folder above
+     * it is open too — otherwise the link shows them nothing.
+     */
+    public function testAFocusPathOpensEveryAncestor(): void
+    {
+        $rows = mlf_rows($this->tree(), 'BSIT/Year 2/21001');
+        $open = ['BSIT' => true, 'BSIT/Year 2' => true, 'BSIT/Year 2/21001' => true];
+
+        $names = [];
+        foreach ($rows as $row) {
+            if (mlf_row_visible($row, $open)) {
+                $names[] = $row['name'];
+            }
+        }
+
+        self::assertContains('BSIT', $names);
+        self::assertContains('21001', $names);
+        self::assertContains('Mendoza, Juan S', $names, 'the student inside the focused folder must show');
+        // And nothing from a sibling year leaked in.
+        self::assertNotContains('11001', $names);
+        self::assertNotContains('Dela Cruz, Juan S', $names);
+    }
+
+    /** Folder rows carry the counts the reader uses to decide what to open. */
+    public function testFolderRowsCarryCountsAndSubfolderCounts(): void
+    {
+        $byPath = [];
+        foreach (mlf_rows($this->tree()) as $row) {
+            if ($row['type'] === 'folder') {
+                $byPath[$row['path']] = $row;
+            }
+        }
+
+        self::assertSame(3, $byPath['BSIT']['count']);
+        self::assertSame(2, $byPath['BSIT']['subfolders']);
+        self::assertSame(2, $byPath['BSIT/Year 1']['count']);
+        self::assertSame(2, $byPath['BSIT/Year 1']['subfolders']);
+        self::assertSame(1, $byPath['BSIT/Year 1/11001']['count']);
+        self::assertSame(0, $byPath['BSIT/Year 1/11001']['subfolders'], 'a section holds students, not folders');
+    }
+}

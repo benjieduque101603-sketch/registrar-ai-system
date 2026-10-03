@@ -457,6 +457,126 @@ function mlf_sections_under(array $tree, string $path): array
 }
 
 /**
+ * Flatten the tree into the ordered rows one table needs.
+ *
+ * The page renders a SINGLE table in which a folder is a row you
+ * expand, rather than a grid of tiles you navigate between. That
+ * shape needs every node in document order with its parent named,
+ * including the students sitting inside a section — so this is the
+ * one place that decision is made, and it is pure, so it is tested
+ * without a browser.
+ *
+ * Each row is:
+ *   type      'folder' | 'student'
+ *   level     0|1|2 for a program|year|section, 'section' for a student
+ *   name      the folder name, or the student's name
+ *   path      the folder path (students carry their section's path)
+ *   parent    the folder path this row sits inside ('' at the root)
+ *   count     students directly in this folder
+ *   subfolders how many child folders
+ *   unassigned whether this is one of the "Unassigned" work-queue folders
+ *   student   the row itself, for a student line
+ *
+ * $focusPath is the folder to open on arrival. Its ANCESTORS are
+ * marked open too, because a deep link to a section that renders a
+ * collapsed tree has shown the reader nothing at all — the link
+ * they were sent names a folder, so the folder must be visible.
+ *
+ * @return array<int, array<string,mixed>>
+ */
+function mlf_rows(array $tree, string $focusPath = ''): array
+{
+    $focus  = trim(str_replace('\\', '/', $focusPath), '/');
+    $open   = [];
+    if ($focus !== '') {
+        // Every ancestor of the focus, plus the focus itself.
+        $parts = explode('/', $focus);
+        $walk  = '';
+        foreach ($parts as $part) {
+            $walk = $walk === '' ? $part : $walk . '/' . $part;
+            $open[$walk] = true;
+        }
+    }
+
+    $rows   = [];
+    $isOpen = static fn(string $path): bool => isset($open[$path]);
+
+    foreach ($tree as $program => $programNode) {
+        $programPath = (string) $program;
+
+        $rows[] = [
+            'type' => 'folder', 'level' => 0, 'name' => $programPath,
+            'path' => $programPath, 'parent' => '',
+            'count' => (int) $programNode['count'],
+            'subfolders' => count($programNode['years']),
+            'unassigned' => strpos($programPath, 'Unassigned') === 0,
+        ];
+
+        foreach ($programNode['years'] as $year => $yearNode) {
+            $yearPath = $programPath . '/' . $year;
+
+            $rows[] = [
+                'type' => 'folder', 'level' => 1, 'name' => (string) $year,
+                'path' => $yearPath, 'parent' => $programPath,
+                'count' => (int) $yearNode['count'],
+                'subfolders' => count($yearNode['sections']),
+                'unassigned' => strpos((string) $year, 'Unassigned') === 0,
+            ];
+
+            foreach ($yearNode['sections'] as $section => $sectionNode) {
+                $sectionPath = $yearPath . '/' . $section;
+
+                $rows[] = [
+                    'type' => 'folder', 'level' => 2, 'name' => (string) $section,
+                    'path' => $sectionPath, 'parent' => $yearPath,
+                    'count' => (int) $sectionNode['count'],
+                    'subfolders' => 0,
+                    'unassigned' => strpos((string) $section, 'Unassigned') === 0,
+                ];
+
+                foreach ($sectionNode['students'] as $student) {
+                    $s = (array) $student;
+                    $rows[] = [
+                        'type' => 'student', 'level' => 'section',
+                        'name' => trim((string) ($s['last_name'] ?? '')) . ', '
+                               . trim((string) ($s['first_name'] ?? '')) . ' '
+                               . trim((string) ($s['middle_name'] ?? '')),
+                        'path' => $sectionPath, 'parent' => $sectionPath,
+                        'count' => 0, 'subfolders' => 0, 'unassigned' => false,
+                        'student' => $student,
+                    ];
+                }
+            }
+        }
+    }
+
+    return $rows;
+}
+
+/**
+ * Whether a row is visible given the folders currently open.
+ *
+ * A row is visible when every folder between it and the root is
+ * open. A program row (level 0) has no parent, so it is always
+ * visible; a student row needs its own section AND that section's
+ * year AND that year's program to be open.
+ *
+ * @param array $rows  Rows from mlf_rows().
+ * @param array $open  Paths of the open folders.
+ */
+function mlf_row_visible(array $row, array $open): bool
+{
+    if ($row['type'] === 'folder' && $row['level'] === 0) {
+        return true;
+    }
+    $parent = (string) $row['parent'];
+    if ($parent === '') {
+        return true;
+    }
+    return isset($open[$parent]);
+}
+
+/**
  * Every distinct program, year level and section on file — the
  * filter pickers.
  *

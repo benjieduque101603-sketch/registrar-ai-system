@@ -208,6 +208,46 @@ templates print N/A pending assignment.
 Still open: no syllabus-text column, so `DOC-CD`'s description is
 permanently N/A (owned by Curriculum #293 anyway).
 
+## Masterlist Folders — a view inside the Masterlist
+
+The masterlist reads two ways, toggled in the Masterlist header
+(`List` / `Folders`):
+
+- **List** — the flat blocks that get printed, signed and handed off.
+- **Folders** — **one table** in which a folder is a row you expand: a
+  program row, its year rows inside it, its section rows inside those,
+  and the student rows inside a section. A caret opens and closes what
+  is under a folder; `Expand all` / `Collapse all` are there for when
+  someone wants the whole tree.
+
+There is **no separate page** and **no second sidebar entry**. It is a
+view of the Masterlist module, not a module beside it.
+
+`?view=folders` is a real URL, so the view survives Back, can be linked
+to, and `?open=BSIT/Year 1/11001` lands with that section visible and
+every folder above it already expanded.
+
+Three rules, recorded here because they are the ones a later change
+could quietly undo:
+
+1. **A folder is a projection, never a copy.** The rows are derived
+   from `students` on every load (`shared/masterlist_folders.php`);
+   nothing stores a path. Assigning a student to a section is still
+   the Masterlist page's job, and the tree rebuilds itself.
+2. **The two views list DIFFERENT rows, on purpose.** The List view is
+   the signable roster and drops students with no section. The Folders
+   view is an inventory and keeps them, under `Unassigned Section`. An
+   unplaced student who vanished from the table would be precisely the
+   work the table exists to show.
+3. **Folder names are filesystem-safe.** Program names are free text,
+   and a `:` or `/` in one makes the whole archive un-extractable on
+   the receiving machine.
+
+Downloading any folder gives that folder's **whole subtree** as a `.zip`
+that unpacks to the same structure (`api/masterlist-folders.php`), so a
+department's cohort list is the same operation as filing it on a shared
+drive.
+
 ## Removed tables
 
 `exit_clearances` — the three-office (Alumni / Dean / Property) sign-off for
