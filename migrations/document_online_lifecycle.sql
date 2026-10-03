@@ -1,13 +1,21 @@
 -- Migration: Restore the online document-request lifecycle
 -- Date: 2026-10-02
 -- Description:
---   Reverses migrations/document_status_realign.sql and the online-retiring
---   half of migrations/document_walkin_only.sql. Students file online again,
---   pay online, and a request can be couriered.
+--   Reverses the online-retiring half of migrations/document_walkin_only.sql.
+--   Students file online again, pay online, and a request can be couriered.
 --
---   This is an ADDITIVE migration. The two it reverses are left untouched as
---   the historical record of when the office moved to walk-in only; a
---   rollback is re-running those files, not editing them.
+--   It ALSO used to reverse migrations/document_status_realign.sql, which
+--   narrowed document_status by dropping Awaiting_Payment and Shipped. That file
+--   has been DELETED, not applied: the live enum still carries all eight values,
+--   this file's WIDEN step restores exactly that eight, and five modules still
+--   write both retired values - api/documents.php, api/student-documents.php,
+--   api/analytics.php, api/paymongo_client.php and api/student-ai-chat.php. A
+--   migration that narrows an enum out from under five writers is not a
+--   rollback, it is data loss.
+--
+--   This is an ADDITIVE migration. The retired model it partially reverses is
+--   left untouched as the historical record of when the office moved to
+--   walk-in only; a rollback is re-running that file, not editing it.
 --
 --   Only the ENUM widths come back. Every column the retired model used was
 --   deliberately left in place rather than dropped (shipped_at, payment_ref,

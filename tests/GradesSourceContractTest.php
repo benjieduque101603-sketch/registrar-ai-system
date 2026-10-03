@@ -32,7 +32,15 @@ final class GradesSourceContractTest extends TestCase
         $v = Database::getInstance()->fetchColumn(
             'SELECT student_id FROM academic_history ORDER BY id LIMIT 1'
         );
-        return $v === null ? null : (int) $v;
+        // fetchColumn() returns FALSE on an empty result set, not null. Testing
+        // only for null meant every "skip when there is no data" guard below was
+        // dead code: on an empty academic_history the helper returned 0, the
+        // skip never fired, and the tests went on to assert against a
+        // non-existent student - testFetchTermReturnsTheRequiredKeys failed with
+        // a bare "array is not empty" on a database with nothing in it.
+        // Empty-string is in the same class of falsy-not-null return.
+        if ($v === false || $v === null || $v === '') { return null; }
+        return (int) $v;
     }
 
     public function testTheContractExists(): void

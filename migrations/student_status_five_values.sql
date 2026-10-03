@@ -112,10 +112,29 @@ SET @stmt := IF(@have = @want, 'DO 0',
 PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 4. Drop the cached masterlist, which holds a status distribution that is now
---    stale. See api/masterlist.php. Guarded the same way: on a fresh import the
---    table is empty, so there is nothing to clear and nothing to report.
-SET @rows := (SELECT COUNT(*) FROM masterlist_cache);
-SET @stmt := IF(@rows = 0, 'DO 0', 'DELETE FROM masterlist_cache');
+--    stale. See api/masterlist.php.
+--
+--    Guarded on the TABLE EXISTING, not merely on the row count. The original
+--    guard asked "are there rows?", and a SELECT against a table that is not
+--    there does not return zero rows - it aborts with 1146 "table doesn't
+--    exist" and the mysql client stops at the first error. masterlist_cache was
+--    dropped from registrar_ai.sql on 2026-10-03 as dead, so on any fresh
+--    install this step killed the whole migration.
+--
+--    Older databases still carry the table, and there the purge is still the
+--    right thing: those rows really are stale.
+--
+--    The DELETE is unconditional once the table is confirmed present. The
+--    original also counted rows first, but that cannot work: MySQL evaluates
+--    BOTH branches of IF(), so (SELECT COUNT(*) FROM masterlist_cache) is
+--    resolved even when @has = 0 and the table is absent - it still raised
+--    1146. Counting rows bought nothing anyway; a DELETE that matches nothing
+--    costs no more than the SELECT that was supposed to avoid it.
+SET @has := (
+  SELECT COUNT(*) FROM information_schema.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'masterlist_cache'
+);
+SET @stmt := IF(@has = 0, 'DO 0', 'DELETE FROM masterlist_cache');
 PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 5. VERIFY. Run this by hand after applying the migration to a real database;

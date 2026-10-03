@@ -40,6 +40,10 @@ function t(string $what, bool $pass, string $detail = ''): void {
     else       { $bad++; echo "  [FAIL] $what" . ($detail !== '' ? "  -- $detail" : '') . "\n"; }
 }
 
+// countSeededStaffRows() lives in tests/_dump_seed.php, shared with
+// hosting_import_check.php - see the note there on why it is not a literal.
+require_once __DIR__ . '/_dump_seed.php';
+
 $cli = find_bin('mysql');
 if (!$cli) { echo "  SKIP: the mysql client is not on this machine.\n"; exit(0); }
 
@@ -58,11 +62,63 @@ $out = shell_exec('"' . $cli . '" ' . $auth . ' ' . $pass . ' --default-characte
     . escapeshellarg($tmp) . ' < ' . escapeshellarg($dump) . ' 2>&1');
 t('the dump imports into an empty database', trim((string) $out) === '', trim((string) $out));
 
+// -- 1a. The dump must be RE-IMPORTABLE onto a database that already has its
+//        tables. This is the whole reason every statement is DROP-then-CREATE.
+//
+//        The case that motivates it is the real one: a hosting box holding the
+//        old tables. Importing a CREATE-only dump there stopped at the first
+//        "table already exists" and left a half-built schema, so the fix was to
+//        prefix each table with DROP TABLE IF EXISTS.
+//
+//        That fix is only trustworthy if a second import is actually clean.
+//        Asserting it rather than assuming it, because the failure mode is
+//        quiet in the worst way: the first ~40 tables import fine, the client
+//        stops at the first error, and the operator gets a partial schema plus
+//        a message they scroll past.
+//
+//        The staff INSERT is included in this deliberately. The users table has
+//        UNIQUE keys on email and username, and the seed inserts four rows with
+//        fixed ids, so if the DROP were ever dropped for one table the re-import
+//        would die on "Duplicate entry" - which is exactly the regression this
+//        catches.
 $schema = fn(string $db, string $t) => $root->query("SHOW COLUMNS FROM `$db`.`$t`")->fetchAll(PDO::FETCH_ASSOC);
 $names = fn(string $db, string $t) => array_column($schema($db, $t), 'Field');
 
 $live  = $root->query('SHOW TABLES FROM `' . DB_NAME . '`')->fetchAll(PDO::FETCH_COLUMN);
 $fresh = $root->query("SHOW TABLES FROM `$tmp`")->fetchAll(PDO::FETCH_COLUMN);
+
+// Re-import onto the schema the first import just built. This is the check
+// that makes DROP TABLE IF EXISTS trustworthy rather than hopeful - see the
+// block comment above.
+$out2 = (string) shell_exec('"' . $cli . '" ' . $auth . ' ' . $pass
+    . ' --default-character-set=utf8mb4 ' . escapeshellarg($tmp)
+    . ' < ' . escapeshellarg($dump) . ' 2>&1');
+t('the dump re-imports onto a database that already has the tables',
+    trim($out2) === '', trim($out2));
+
+// The schema must be IDENTICAL afterwards. A re-import that errors is one
+// problem; a re-import that quietly yields a different schema is worse.
+$after = $root->query("SHOW TABLES FROM `$tmp`")->fetchAll(PDO::FETCH_COLUMN);
+$sortedFresh = $fresh;
+sort($after); sort($sortedFresh);
+t('a re-import produces the same table set',
+    $after === $sortedFresh,
+    'added: ' . implode(',', array_diff($after, $sortedFresh))
+          . ' / lost: ' . implode(',', array_diff($sortedFresh, $after)));
+
+// Seeded rows must not double up either. users has UNIQUE keys on email and
+// username, so a missing DROP surfaces here as "Duplicate entry" on the staff
+// INSERT - the loudest possible signal, which is why it is asserted.
+//
+// The expected count is COUNTED FROM THE DUMP, never hardcoded. A literal 4
+// here had to be edited by hand every time an account was added or removed,
+// and the day someone changed the seed without changing the test the failure
+// message would say "want 4" and mean nothing to whoever had to read it.
+$wantStaff = countSeededStaffRows($dump);
+$staff = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.users")->fetchColumn();
+t('a re-import does not duplicate the staff accounts',
+    $staff === $wantStaff,
+    "users rows after re-import: $staff (the dump seeds $wantStaff)");
 
 // retired_student_sections is excluded, and deliberately.
 //
@@ -111,7 +167,14 @@ $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DI
 foreach ($rii as $file) {
     $p = $file->getPathname();
     if (!is_file($p) || substr($p, -4) !== '.php' && substr($p, -4) !== '.sql') continue;
-    if (preg_match('#/(vendor|node_modules|\.git|tests)/#', str_replace(chr(92), '/', $p))) continue;
+    // migrations/ is excluded for the same reason tests/ and backups/ are: this
+    // check asks what the APPLICATION reads, and a migration is not the
+    // application. A migration targets a database that already exists; it
+    // legitimately names tables a fresh install does not ship (it may purge
+    // one, or upgrade one), and demanding the dump define every table a
+    // migration happens to mention turns an upgrade note into a requirement
+    // on the fresh install.
+    if (preg_match('#/(vendor|node_modules|\.git|tests|backups|migrations)/#', str_replace(chr(92), '/', $p))) continue;
     $src = @file_get_contents($p);
     if (!$src) continue;
     // Comments and SINGLE-quoted literals are stripped; double-quoted strings
@@ -137,12 +200,18 @@ foreach (array_keys($sqlWords) as $w) {
     //   last_read_id                         - a COLUMN in an
     //       ON DUPLICATE KEY UPDATE clause, which the FROM/JOIN scan cannot
     //       tell apart from a table reference.
+    //   opens_time, cutoff_forced_at         - the same false positive, from
+    //       api/queue.php's two ON DUPLICATE KEY UPDATE clauses on
+    //       queue_day_settings. queue_day_settings itself IS in the dump;
+    //       these two are its columns, picked up for the same reason
+    //       last_read_id is.
     //   retired_student_sections             - an optional archive table that
     //       restore_student_section.sql guards with an information_schema
     //       check precisely because a fresh install never has it. Requiring it
     //       would break the guarded migration this check exists to protect.
     if (in_array($w, ['current_timestamp', 'information_schema', 'registrar_ai',
-        'exit_clearances', 'last_read_id', 'retired_student_sections'], true)) continue;
+        'exit_clearances', 'last_read_id', 'opens_time', 'cutoff_forced_at',
+        'retired_student_sections'], true)) continue;
     if (in_array($w, $fresh, true)) continue;
     $absent[] = $w . (in_array($w, $live, true) ? ' (also absent from live)' : '');
 }
@@ -194,6 +263,33 @@ $roles = $root->query("SELECT DISTINCT role FROM `$tmp`.users")->fetchAll(PDO::F
 sort($roles);
 $want = $allowed; sort($want);
 t('every seeded account is a staff role', $roles === $want, 'found: ' . implode(',', $roles));
+
+// EXACTLY ONE account per role. The distinct-role check above passes just as
+// happily with two admins, which is what the seed used to carry: a second
+// admin sharing the FIRST admin's password hash, on an address that had
+// already collided with a real student's and silently destroyed their portal
+// account. So assert the per-role count, not just the set of roles.
+//
+// This is the assertion that would have caught it, and it is cheap: a query
+// against the imported database, no new machinery.
+$perRole = $root->query(
+    "SELECT role, COUNT(*) AS n FROM `$tmp`.users GROUP BY role HAVING n > 1"
+)->fetchAll(PDO::FETCH_KEY_PAIR);
+t('exactly one seeded account per role', count($perRole) === 0,
+    'roles with duplicates: '
+    . implode(', ', array_map(fn($r, $n) => "$r x$n", array_keys($perRole), $perRole)));
+
+// And the shared-hash check, because "one per role" and "distinct passwords"
+// are different claims: a single admin is still a problem if its hash is
+// published in the repository, which is why the header tells the operator to
+// change it. Duplicated hashes across accounts are the version of this that
+// can be caught here, and cannot be fixed by anything but seeding fewer rows.
+$dupHashes = $root->query(
+    "SELECT COUNT(*) FROM (SELECT password_hash FROM `$tmp`.users
+                            GROUP BY password_hash HAVING COUNT(*) > 1) d"
+)->fetchColumn();
+t('no two seeded accounts share a password', (int) $dupHashes === 0,
+    "duplicate hash groups: $dupHashes");
 
 $students = (int) $root->query("SELECT COUNT(*) FROM `$tmp`.users WHERE role = 'student'")->fetchColumn();
 t('no student account is seeded', $students === 0, "rows: $students");
