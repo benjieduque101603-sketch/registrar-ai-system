@@ -245,6 +245,17 @@ if ($USER_ROLE === 'student') {
             <span class="sidebar-text">Masterlist</span>
         </a>
 
+        <!-- The same records as a drive: one folder per program,
+             year level and section, opened one folder at a time.
+             A separate entry rather than a tab inside Masterlist,
+             because the two have different jobs: the flat list is
+             what gets printed and signed, the tree is what gets
+             filed and handed over. -->
+        <a href="<?= $APP_ROOT ?>registrar/masterlist-folders.php" class="sidebar-item <?= $ACTIVE_NAV === 'masterlistfolders' ? 'active' : '' ?>">
+            <i class="fa-solid fa-folder-tree"></i>
+            <span class="sidebar-text">Masterlist Folders</span>
+        </a>
+
         <a href="<?= $APP_ROOT ?>registrar/file-storage.php" class="sidebar-item <?= $ACTIVE_NAV === 'filestorage' ? 'active' : '' ?>">
             <i class="fa-solid fa-folder-open"></i>
             <span class="sidebar-text">File Storage</span>

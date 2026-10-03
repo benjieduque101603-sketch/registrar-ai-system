@@ -661,6 +661,12 @@ body[data-page="masterlist"] .masterlist-table{min-width:1390px}
                 <button type="button" class="btn btn-primary" onclick="sendList()" title="Send the masterlist to the Academic Strand / Course Assignment module (CMS)">
                     <i class="fas fa-paper-plane"></i> Send List
                 </button>
+                <!-- Folders is the other way to read the same records:
+                     the drive, opened one folder at a time. -->
+                <a class="btn btn-secondary" href="masterlist-folders.php"
+                   title="Browse the masterlist as folders: program, year level, section">
+                    <i class="fas fa-folder-tree"></i> Folders
+                </a>
                 <div class="export-wrap" style="position:relative;">
                     <button class="btn btn-secondary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
                     <div class="export-menu" id="exportMenu" style="position:absolute;top:100%;right:0;z-index:50;background:white;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.1);min-width:160px;padding:4px;margin-top:4px;display:none;">
