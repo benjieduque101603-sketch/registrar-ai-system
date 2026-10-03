@@ -248,6 +248,51 @@ that unpacks to the same structure (`api/masterlist-folders.php`), so a
 department's cohort list is the same operation as filing it on a shared
 drive.
 
+## Test residue — not the same thing as seed data
+
+`migrations/seed_receive_students.sql` is the only seed in the repo that
+writes `students`, and it is **not applied** on this host: its markers
+(`address LIKE 'SEEDDATA-%'` + `email LIKE '%@seed.receive.test'`) match
+zero rows. So a green marker check there proves nothing about whether the
+database is clean.
+
+What *was* dirty was e2e residue: the scripts under `tests/` create real
+students, users, guardians and document requests, then delete them again
+in a `cleanup()` call. When a run dies before cleanup, those rows survive.
+This database had **57 students, 25 users and 49 child rows** of that
+kind, which is why the Masterlist had content nobody had entered.
+
+Removed with:
+
+```
+php tests/clear_e2e_residue.php             # dry run, deletes nothing
+php tests/clear_e2e_residue.php --execute   # after reading the dry run
+```
+
+Two things that script has to get right, both of which bit during the
+first run:
+
+1. **The child tables are discovered from `information_schema`, not
+   listed.** A hardcoded list missed `audit_logs.user_id` and the DELETE
+   was refused by the FK. Reading the schema means a table added later is
+   cleaned up without editing the script.
+2. **There are two markers, because one account has no email at all.**
+   `tests/document_pickup_email.php` inserts a desk account with
+   `username = 'pickup_staff_<hash>'` and a null email, so an
+   email-only filter leaves it behind permanently. It survived the first
+   pass and was still in the table afterwards.
+
+A backup of everything removed is written to `backups/` (gitignored)
+before the transaction commits. It was verified by replaying the dump
+through the `mysql` client into scratch copies of the tables: all 57
+students, 24 users, 12 guardians, 7 document requests and 29 audit rows
+restored cleanly.
+
+Note that `users.student_id` is `ON DELETE SET NULL`, so deleting a
+student does **not** remove the portal login that pointed at it. The
+script NULLs the link explicitly before removing the user, because a
+login with no student row is broken but still able to authenticate.
+
 ## Removed tables
 
 `exit_clearances` — the three-office (Alumni / Dean / Property) sign-off for
